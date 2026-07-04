@@ -1,0 +1,172 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Candidate {
+  id            String            @id @default(cuid())
+  name          String
+  email         String?
+  phone         String?
+  targetCompany String?
+  targetRole    String?
+  serviceStatus String            @default("ACTIVE")
+  weakTags      String            @default("[]")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  materials     MaterialAsset[]
+  tasks         TrainingTask[]
+  sessions      TrainingSession[]
+}
+
+model MaterialAsset {
+  id          String     @id @default(cuid())
+  candidateId String?
+  candidate   Candidate? @relation(fields: [candidateId], references: [id])
+  type        String
+  title       String
+  content     String
+  source      String     @default("MANUAL")
+  createdAt   DateTime   @default(now())
+
+  @@index([candidateId])
+}
+
+model CompanyTemplate {
+  id               String         @id @default(cuid())
+  name             String
+  industry         String?
+  interviewStyle   String
+  competencyModel  String
+  commonQuestions  String
+  scoringStandard  String
+  restrictedTopics String         @default("[]")
+  createdAt        DateTime       @default(now())
+  tasks            TrainingTask[]
+}
+
+model JobTemplate {
+  id              String         @id @default(cuid())
+  title           String
+  category        String
+  competencyModel String
+  commonQuestions String
+  riskQuestions   String
+  createdAt       DateTime       @default(now())
+  tasks           TrainingTask[]
+}
+
+model InterviewerTemplate {
+  id                 String         @id @default(cuid())
+  type               String         @unique
+  name               String
+  tone               String
+  followUpDepth      Int
+  interruptFrequency Int
+  challengeIntensity Int
+  languageMode       String
+  safetyBoundary     String
+  createdAt          DateTime       @default(now())
+  tasks              TrainingTask[]
+}
+
+model TrainingTask {
+  id                    String               @id @default(cuid())
+  candidateId           String
+  candidate             Candidate            @relation(fields: [candidateId], references: [id])
+  companyTemplateId     String?
+  companyTemplate       CompanyTemplate?     @relation(fields: [companyTemplateId], references: [id])
+  jobTemplateId         String?
+  jobTemplate           JobTemplate?         @relation(fields: [jobTemplateId], references: [id])
+  interviewerTemplateId String?
+  interviewerTemplate   InterviewerTemplate? @relation(fields: [interviewerTemplateId], references: [id])
+  title                 String
+  targetCompany         String
+  targetRole            String
+  stageConfig           String
+  expectedMinutes       Int
+  status                String               @default("DRAFT")
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  sessions              TrainingSession[]
+  aiCalls               AiCallLog[]
+
+  @@index([candidateId])
+  @@index([companyTemplateId])
+  @@index([jobTemplateId])
+  @@index([interviewerTemplateId])
+}
+
+model TrainingSession {
+  id           String          @id @default(cuid())
+  taskId       String
+  task         TrainingTask    @relation(fields: [taskId], references: [id])
+  candidateId  String
+  candidate    Candidate       @relation(fields: [candidateId], references: [id])
+  status       String          @default("IN_PROGRESS")
+  currentStage String?
+  startedAt    DateTime        @default(now())
+  endedAt      DateTime?
+  turns        SessionTurn[]
+  report       CoachingReport?
+  aiCalls      AiCallLog[]
+
+  @@index([taskId])
+  @@index([candidateId])
+}
+
+model SessionTurn {
+  id        String          @id @default(cuid())
+  sessionId String
+  session   TrainingSession @relation(fields: [sessionId], references: [id])
+  stage     String
+  question  String
+  answer    String
+  feedback  String?
+  createdAt DateTime        @default(now())
+
+  @@index([sessionId])
+}
+
+model CoachingReport {
+  id                    String          @id @default(cuid())
+  sessionId             String          @unique
+  session               TrainingSession @relation(fields: [sessionId], references: [id])
+  overallScore          Int
+  subScores             String
+  perQuestionFeedback   String
+  expressionAnalysis    String
+  answerQualityAnalysis String
+  strategySuggestions   String
+  weakTags              String
+  nextTrainingPlan      String
+  candidateSummary      String
+  createdAt             DateTime        @default(now())
+  aiCalls               AiCallLog[]
+}
+
+model AiCallLog {
+  id               String           @id @default(cuid())
+  taskId           String?
+  task             TrainingTask?    @relation(fields: [taskId], references: [id])
+  sessionId        String?
+  session          TrainingSession? @relation(fields: [sessionId], references: [id])
+  reportId         String?
+  report           CoachingReport?  @relation(fields: [reportId], references: [id])
+  capability       String
+  provider         String
+  latencyMs        Int
+  costEstimate     Float
+  success          Boolean
+  failureReason    String?
+  fallbackProvider String?
+  createdAt        DateTime         @default(now())
+
+  @@index([taskId])
+  @@index([sessionId])
+  @@index([reportId])
+}
