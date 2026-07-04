@@ -1,0 +1,17 @@
+node_modules
+.next
+.npm-cache
+data
+.git
+.gitignore
+.env
+.env*.local
+prisma/*.db
+prisma/*.db-journal
+test-results
+playwright-report
+coverage
+work
+outputs
+.codex
+*.log

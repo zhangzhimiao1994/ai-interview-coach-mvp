@@ -8,13 +8,33 @@
 4. 启动开发服务：`npm run dev`
 5. 打开：`http://127.0.0.1:3000`
 
+## Linux 部署
+
+优先使用 Docker Compose：
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+也支持 Linux 裸机部署：
+
+```bash
+cp .env.example .env
+chmod +x scripts/linux/*.sh
+scripts/linux/setup.sh
+scripts/linux/start.sh
+```
+
+完整说明见 `docs/linux-deployment.md`。
+
 ## 验证命令
 
 - 单元测试：`npm test`
 - 生产构建：`npm run build`
 - 端到端测试：`npm run test:e2e`
 
-`npm run test:e2e` 会启动 `next start` 并运行 Playwright。首次运行前需要安装 Playwright Chromium；本机已通过镜像源安装。
+`npm run test:e2e` 会启动 `next start` 并运行 Playwright。首次运行前需要安装 Playwright Chromium。
 
 ## MVP 已实现
 

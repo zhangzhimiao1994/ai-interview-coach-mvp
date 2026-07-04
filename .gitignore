@@ -13,6 +13,7 @@ tsconfig.tsbuildinfo
 .env*.local
 
 # local database and generated runtime data
+data/
 prisma/dev.db
 prisma/dev.db-journal
 prisma/*.db

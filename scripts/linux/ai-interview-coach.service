@@ -1,0 +1,17 @@
+[Unit]
+Description=AI Interview Coach
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/ai-interview-coach-mvp
+Environment=NODE_ENV=production
+Environment=HOSTNAME=0.0.0.0
+Environment=PORT=3000
+EnvironmentFile=/opt/ai-interview-coach-mvp/.env
+ExecStart=/bin/sh /opt/ai-interview-coach-mvp/scripts/linux/start.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
