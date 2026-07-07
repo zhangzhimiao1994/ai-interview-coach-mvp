@@ -57,22 +57,36 @@ function providerForModel(model: ConfiguredModel): AiProvider | null {
   return null;
 }
 
+async function withFallback<T>(
+  findModel: typeof findDefaultAiModel,
+  capability: "INTERVIEW_OUTLINE" | "REPORT_ANALYSIS",
+  fallbackProvider: AiProvider,
+  invoke: (provider: AiProvider) => Promise<T>
+) {
+  try {
+    const model = await findModel(capability).catch(() => null);
+    const provider = model ? providerForModel(model) : null;
+
+    return await invoke(provider ?? fallbackProvider);
+  } catch {
+    return invoke(fallbackProvider);
+  }
+}
+
 export function createDbConfiguredAiProvider({
   findModel = findDefaultAiModel,
   fallbackProvider = mockAiProvider
 }: DbConfiguredAiProviderOptions = {}): AiProvider {
   return {
     async generateTrainingOutline(request: TrainingOutlineRequest) {
-      const model = await findModel("INTERVIEW_OUTLINE").catch(() => null);
-      const provider = model ? providerForModel(model) : null;
-
-      return (provider ?? fallbackProvider).generateTrainingOutline(request);
+      return withFallback(findModel, "INTERVIEW_OUTLINE", fallbackProvider, (provider) =>
+        provider.generateTrainingOutline(request)
+      );
     },
     async generateCoachingReport(input: CoachingReportInput) {
-      const model = await findModel("REPORT_ANALYSIS").catch(() => null);
-      const provider = model ? providerForModel(model) : null;
-
-      return (provider ?? fallbackProvider).generateCoachingReport(input);
+      return withFallback(findModel, "REPORT_ANALYSIS", fallbackProvider, (provider) =>
+        provider.generateCoachingReport(input)
+      );
     }
   };
 }
