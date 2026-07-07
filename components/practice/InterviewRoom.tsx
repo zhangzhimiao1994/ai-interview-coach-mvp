@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import type { TrainingOutline, TrainingQuestion } from "@/lib/ai";
 import type { StagePlanItem } from "@/lib/domain/stages";
+import { CandidateMediaPanel } from "./CandidateMediaPanel";
 import { DigitalInterviewerVideo } from "./DigitalInterviewerVideo";
 import { StageTimeline } from "./StageTimeline";
 
@@ -276,6 +277,8 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
               prompt={currentQuestion.prompt}
               status={allAnswered ? "listening" : "speaking"}
             />
+
+            <CandidateMediaPanel onTranscript={(text) => setAnswer(text)} />
 
             <div className="rounded-lg border border-line bg-panel p-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
