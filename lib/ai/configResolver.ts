@@ -19,6 +19,9 @@ export async function findDefaultAiModel(capability: AiCapability) {
           providerType: true,
           baseUrl: true,
           apiKeyPreview: true,
+          apiKeyCiphertext: true,
+          apiKeyIv: true,
+          apiKeyTag: true,
           enabled: true
         }
       }

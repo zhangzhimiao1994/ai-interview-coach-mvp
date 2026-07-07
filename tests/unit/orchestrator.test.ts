@@ -268,7 +268,7 @@ describe("deserializeStoredCoachingReport", () => {
 });
 
 describe("createConfiguredAiOrchestrator", () => {
-  it("defaults to the mock provider", async () => {
+  it("defaults to the database provider with mock fallback", async () => {
     vi.stubEnv("AI_PROVIDER", "");
 
     const orchestrator = createConfiguredAiOrchestrator();
@@ -296,7 +296,7 @@ describe("createConfiguredAiOrchestrator", () => {
     vi.stubEnv("AI_PROVIDER", "openai");
 
     expect(() => createConfiguredAiOrchestrator()).toThrow(
-      'Unsupported AI_PROVIDER "openai". Supported values: mock.'
+      'Unsupported AI_PROVIDER "openai". Supported values: database, mock.'
     );
   });
 });
