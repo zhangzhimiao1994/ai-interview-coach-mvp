@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { aiOrchestrator } from "@/lib/ai";
+import { resolveAiProviderLabel } from "@/lib/ai/configResolver";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { buildStagePlan, parseStageConfigInput } from "@/lib/domain/stages";
@@ -13,10 +14,6 @@ const createSessionSchema = z
 
 function preferredLanguageFromTemplate(languageMode?: string | null) {
   return languageMode === "en-US" ? "en-US" : "zh-CN";
-}
-
-function providerName() {
-  return process.env.AI_PROVIDER || "mock";
 }
 
 export async function POST(request: Request) {
@@ -68,7 +65,7 @@ export async function POST(request: Request) {
         taskId: task.id,
         sessionId: session.id,
         capability: "TRAINING_OUTLINE",
-        provider: providerName(),
+        provider: await resolveAiProviderLabel("INTERVIEW_OUTLINE"),
         latencyMs: Date.now() - startedAt,
         costEstimate: 0,
         success: true
@@ -83,7 +80,7 @@ export async function POST(request: Request) {
           data: {
             taskId,
             capability: "TRAINING_OUTLINE",
-            provider: providerName(),
+            provider: await resolveAiProviderLabel("INTERVIEW_OUTLINE"),
             latencyMs: Date.now() - startedAt,
             costEstimate: 0,
             success: false,

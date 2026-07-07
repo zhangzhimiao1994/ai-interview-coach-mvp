@@ -60,6 +60,51 @@ async function main() {
     update: demoJob,
     create: demoJob
   });
+
+  await prisma.aiServiceProvider.upsert({
+    where: { id: "mock-provider" },
+    update: {
+      displayName: "Mock AI",
+      providerType: "MOCK",
+      enabled: true,
+      notes: "本地演示与开发使用的模拟 AI 服务。"
+    },
+    create: {
+      id: "mock-provider",
+      displayName: "Mock AI",
+      providerType: "MOCK",
+      enabled: true,
+      notes: "本地演示与开发使用的模拟 AI 服务。"
+    }
+  });
+
+  const mockCapabilities = [
+    ["mock-outline", "面试提纲 Mock", "mock-outline", "INTERVIEW_OUTLINE"],
+    ["mock-follow-up", "面试追问 Mock", "mock-follow-up", "INTERVIEW_FOLLOW_UP"],
+    ["mock-report", "报告分析 Mock", "mock-report", "REPORT_ANALYSIS"]
+  ] as const;
+
+  for (const [id, displayName, modelName, capability] of mockCapabilities) {
+    await prisma.aiModelConfig.upsert({
+      where: { id },
+      update: {
+        displayName,
+        modelName,
+        capability,
+        enabled: true,
+        isDefault: true
+      },
+      create: {
+        id,
+        providerId: "mock-provider",
+        displayName,
+        modelName,
+        capability,
+        enabled: true,
+        isDefault: true
+      }
+    });
+  }
 }
 
 main()

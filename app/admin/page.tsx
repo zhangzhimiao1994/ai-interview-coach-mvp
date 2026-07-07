@@ -14,20 +14,26 @@ const adminLinks = [
   {
     href: "/admin/templates",
     title: "模板库",
-    description: "查看训练任务使用的公司、岗位和面试官模板。"
+    description: "管理训练任务使用的公司、岗位和面试官模板。"
   },
   {
     href: "/admin/tasks/new",
     title: "创建训练任务",
     description: "配置训练阶段、模板、面试官风格和求职者练习链接。"
+  },
+  {
+    href: "/admin/ai-services",
+    title: "AI 配置中心",
+    description: "配置模型、服务商、API Key、能力路由和默认调用策略。"
   }
 ] as const;
 
 export default async function AdminPage() {
-  const [candidateCount, taskCount, sessionCount, recentTasks] = await Promise.all([
+  const [candidateCount, taskCount, sessionCount, providerCount, recentTasks] = await Promise.all([
     prisma.candidate.count(),
     prisma.trainingTask.count(),
     prisma.trainingSession.count(),
+    prisma.aiServiceProvider.count(),
     prisma.trainingTask.findMany({
       include: { candidate: true },
       orderBy: { createdAt: "desc" },
@@ -42,20 +48,21 @@ export default async function AdminPage() {
           <p className="text-sm font-medium text-brand">服务后台</p>
           <h1 className="mt-2 text-2xl font-semibold text-ink">服务后台</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-            在一个工作区管理求职者档案、可复用模板和面试训练任务。
+            在一个工作区管理求职者档案、可复用模板、AI 服务配置和面试训练任务。
           </p>
         </div>
       </div>
 
-      <section className="mt-6 grid gap-3 sm:grid-cols-3">
+      <section className="mt-6 grid gap-3 sm:grid-cols-4">
         <Metric label="求职者" value={candidateCount} />
         <Metric label="训练任务" value={taskCount} />
         <Metric label="训练会话" value={sessionCount} />
+        <Metric label="AI 服务商" value={providerCount} />
       </section>
 
-      <section className="mt-6 grid gap-4 md:grid-cols-3">
+      <section className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {adminLinks.map((link) => (
-          <Link key={link.href} href={link.href}>
+          <Link key={link.href} href={link.href as Route}>
             <Card className="h-full transition hover:border-brand">
               <h2 className="text-lg font-medium text-ink">{link.title}</h2>
               <p className="mt-2 text-sm leading-6 text-muted">{link.description}</p>

@@ -4,6 +4,7 @@ import {
   deserializeStoredCoachingReport,
   serializeCoachingReportForStorage
 } from "@/lib/ai";
+import { resolveAiProviderLabel } from "@/lib/ai/configResolver";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import type { TrainingStageType } from "@/lib/domain/stages";
@@ -13,10 +14,6 @@ type RouteContext = {
     sessionId: string;
   }>;
 };
-
-function providerName() {
-  return process.env.AI_PROVIDER || "mock";
-}
 
 export async function POST(_request: Request, context: RouteContext) {
   const startedAt = Date.now();
@@ -105,7 +102,7 @@ export async function POST(_request: Request, context: RouteContext) {
           sessionId: session.id,
           reportId: completion.coachingReport.id,
           capability: "COACHING_REPORT",
-          provider: providerName(),
+          provider: await resolveAiProviderLabel("REPORT_ANALYSIS"),
           latencyMs: Date.now() - startedAt,
           costEstimate: 0,
           success: true
@@ -120,7 +117,7 @@ export async function POST(_request: Request, context: RouteContext) {
         data: {
           sessionId: normalizedSessionId,
           capability: "COACHING_REPORT",
-          provider: providerName(),
+          provider: await resolveAiProviderLabel("REPORT_ANALYSIS"),
           latencyMs: Date.now() - startedAt,
           costEstimate: 0,
           success: false,
