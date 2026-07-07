@@ -14,6 +14,13 @@ type ModelDefaultState = {
   isDefault: boolean;
 };
 
+export class AiConfigSecretMissingError extends Error {
+  constructor() {
+    super("AI_CONFIG_SECRET is required in production to store provider API keys.");
+    this.name = "AiConfigSecretMissingError";
+  }
+}
+
 export function maskSecret(secret: string) {
   const trimmed = secret.trim();
 
@@ -68,7 +75,7 @@ export function readAiConfigSecret(env: Record<string, string | undefined> = pro
   }
 
   if (env.NODE_ENV === "production") {
-    throw new Error("AI_CONFIG_SECRET is required in production to store provider API keys.");
+    throw new AiConfigSecretMissingError();
   }
 
   return "development-ai-config-secret-change-me";

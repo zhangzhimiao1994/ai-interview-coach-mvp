@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { AiConfigSecretMissingError } from "@/lib/domain/aiServices";
 
 function isJsonParseError(error: unknown) {
   return error instanceof SyntaxError;
@@ -22,6 +23,17 @@ export function postErrorResponse(error: unknown) {
   if (isPrismaReferenceError(error)) {
     return NextResponse.json(
       { error: "Invalid reference", message: "One or more referenced records do not exist." },
+      { status: 400 }
+    );
+  }
+
+  if (error instanceof AiConfigSecretMissingError) {
+    return NextResponse.json(
+      {
+        error: "AI service encryption is not configured",
+        message:
+          "AI_CONFIG_SECRET is missing. Set AI_CONFIG_SECRET in .env before saving provider API keys."
+      },
       { status: 400 }
     );
   }

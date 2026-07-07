@@ -53,6 +53,39 @@ describe("AI service API routes", () => {
     expect(payload.provider.apiKeyPreview).toBe("sk-d****abcd");
   });
 
+  it("returns a clear setup error when production API key encryption is not configured", async () => {
+    vi.resetModules();
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("AI_CONFIG_SECRET", "");
+    const prisma = {
+      aiServiceProvider: {
+        create: vi.fn()
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/route");
+    const response = await route.POST(
+      new Request("http://localhost/api/ai-services/providers", {
+        method: "POST",
+        body: JSON.stringify({
+          displayName: "DeepSeek",
+          providerType: "OPENAI_COMPATIBLE",
+          baseUrl: "https://api.deepseek.com/v1",
+          apiKey: "sk-deepseek-secret-abcd",
+          enabled: true,
+          notes: ""
+        })
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error).toBe("AI service encryption is not configured");
+    expect(payload.message).toContain("AI_CONFIG_SECRET");
+    expect(prisma.aiServiceProvider.create).not.toHaveBeenCalled();
+  });
+
   it("creates a default model and clears existing defaults for the same capability", async () => {
     vi.resetModules();
     const prisma = {

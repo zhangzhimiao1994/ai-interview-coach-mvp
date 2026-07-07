@@ -46,6 +46,12 @@ type AiServiceConfigPanelProps = {
   initialModels: ModelConfig[];
 };
 
+type ApiResult<T> = T & {
+  error?: string;
+  message?: string;
+  issues?: Array<{ message?: string }>;
+};
+
 const providerTypeLabels: Record<AiProviderType, string> = {
   MOCK: "Mock 模拟服务",
   OPENAI_COMPATIBLE: "OpenAI-compatible",
@@ -68,6 +74,24 @@ const capabilityLabels: Record<AiCapability, string> = {
   TEXT_TO_SPEECH: "语音合成",
   DIGITAL_HUMAN_VIDEO: "数字人视频"
 };
+
+function apiErrorMessage(result: ApiResult<unknown> | null, fallback: string) {
+  if (!result) {
+    return fallback;
+  }
+
+  if (result.message) {
+    return result.message;
+  }
+
+  const firstIssue = result.issues?.find((issue) => issue.message)?.message;
+
+  if (firstIssue) {
+    return firstIssue;
+  }
+
+  return result.error || fallback;
+}
 
 export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServiceConfigPanelProps) {
   const [providers, setProviders] = useState(initialProviders);
@@ -100,10 +124,10 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const result = (await response.json().catch(() => null)) as { provider?: Provider; error?: string } | null;
+      const result = (await response.json().catch(() => null)) as ApiResult<{ provider?: Provider }> | null;
 
       if (!response.ok || !result?.provider) {
-        setProviderMessage(result?.error || "服务商保存失败。");
+        setProviderMessage(apiErrorMessage(result, "服务商保存失败。"));
         return;
       }
 
@@ -142,10 +166,10 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const result = (await response.json().catch(() => null)) as { model?: ModelConfig; error?: string } | null;
+      const result = (await response.json().catch(() => null)) as ApiResult<{ model?: ModelConfig }> | null;
 
       if (!response.ok || !result?.model) {
-        setModelMessage(result?.error || "模型保存失败。");
+        setModelMessage(apiErrorMessage(result, "模型保存失败。"));
         return;
       }
 
