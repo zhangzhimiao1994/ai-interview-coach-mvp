@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decryptSecret,
   encryptSecret,
+  readAiConfigSecret,
   maskSecret,
   nextDefaultFlags,
   type AiCapability
@@ -38,5 +39,14 @@ describe("AI service configuration helpers", () => {
       "model-b": true,
       "model-c": true
     });
+  });
+
+  it("rejects the production placeholder encryption secret", () => {
+    expect(() =>
+      readAiConfigSecret({
+        NODE_ENV: "production",
+        AI_CONFIG_SECRET: "change-this-before-production"
+      })
+    ).toThrow("AI_CONFIG_SECRET must be changed");
   });
 });

@@ -6,6 +6,10 @@ import process from "node:process";
 const baseUrl = "http://127.0.0.1:3000";
 const nextBin = path.join("node_modules", "next", "dist", "bin", "next");
 const playwrightCli = path.join("node_modules", "@playwright", "test", "cli.js");
+const e2eAuth = {
+  ADMIN_USERNAME: process.env.ADMIN_USERNAME || "admin",
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "e2e-admin-password"
+};
 
 function waitForServer(url, timeoutMs = 60000) {
   const startedAt = Date.now();
@@ -52,7 +56,10 @@ function run(command, args, options = {}) {
 const server = spawn(process.execPath, [nextBin, "start", "-H", "127.0.0.1", "-p", "3000"], {
   stdio: "inherit",
   shell: false,
-  env: process.env
+  env: {
+    ...process.env,
+    ...e2eAuth
+  }
 });
 
 let exitCode = 1;
@@ -62,6 +69,7 @@ try {
   const result = await run(process.execPath, [playwrightCli, "test"], {
     env: {
       ...process.env,
+      ...e2eAuth,
       PLAYWRIGHT_SKIP_WEB_SERVER: "1"
     }
   });

@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test";
 
 test("creates a candidate through the MVP service backend flow", async ({ page }) => {
+  const username = process.env.ADMIN_USERNAME || "admin";
+  const password = process.env.ADMIN_PASSWORD || "e2e-admin-password";
   const candidateName = `测试求职者-${Date.now()}`;
   const candidateEmail = `candidate-${Date.now()}@example.com`;
 
+  await page.setExtraHTTPHeaders({
+    Authorization: `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`
+  });
   await page.goto("/");
   await Promise.all([
     page.waitForURL("**/admin", { timeout: 30000 }),

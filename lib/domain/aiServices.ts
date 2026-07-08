@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import type { AiCapability } from "./aiServiceConstants";
+import { isPlaceholderSecret } from "@/lib/security/requestGuards";
 export { aiCapabilities, aiProviderTypes, type AiCapability, type AiProviderType } from "./aiServiceConstants";
 
 export type EncryptedSecret = {
@@ -71,6 +72,10 @@ export function readAiConfigSecret(env: Record<string, string | undefined> = pro
   const configured = env.AI_CONFIG_SECRET?.trim();
 
   if (configured) {
+    if (env.NODE_ENV === "production" && isPlaceholderSecret(configured)) {
+      throw new Error("AI_CONFIG_SECRET must be changed before production use.");
+    }
+
     return configured;
   }
 
