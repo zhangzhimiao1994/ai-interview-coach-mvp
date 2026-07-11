@@ -1,30 +1,47 @@
 import type { Route } from "next";
 import Link from "next/link";
+import { AdminShell } from "@/components/admin/AdminShell";
 import { Card } from "@/components/ui/Card";
 import { prisma } from "@/lib/db/prisma";
 
 export const dynamic = "force-dynamic";
 
-const adminLinks = [
+const adminSections = [
   {
+    group: "服务交付",
     href: "/admin/candidates",
     title: "求职者档案",
-    description: "创建和查看求职者资料，再为其分配面试训练任务。"
+    description: "创建候选人、维护联系方式和目标公司岗位，跟进服务状态。"
   },
   {
+    group: "知识库",
     href: "/admin/templates",
     title: "模板库",
-    description: "管理训练任务使用的公司、岗位和面试官模板。"
+    description: "沉淀公司情报、岗位能力、面试官类型和专业题库。"
   },
   {
+    group: "服务交付",
     href: "/admin/tasks/new",
     title: "创建训练任务",
-    description: "配置训练阶段、模板、面试官风格和求职者练习链接。"
+    description: "绑定候选人、目标公司、岗位模板、阶段开关和数字人面试官。"
   },
   {
+    group: "AI能力",
     href: "/admin/ai-services",
     title: "AI 配置中心",
-    description: "配置模型、服务商、API Key、能力路由和默认调用策略。"
+    description: "配置模型、服务商、API Key、能力路由、TTS、数字人和行为分析接口。"
+  },
+  {
+    group: "数字人",
+    href: "/admin/ai-services#digital-human",
+    title: "数字人面试官",
+    description: "管理数字人语音、形象、表情状态、朗读策略和视频渲染接口。"
+  },
+  {
+    group: "行为分析",
+    href: "/admin/ai-services#behavior-analysis",
+    title: "行为信号分析",
+    description: "查看摄像头/麦克风采集能力，配置视线、停顿、音量、语速等评分接口。"
   }
 ] as const;
 
@@ -42,17 +59,12 @@ export default async function AdminPage() {
   ]);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-brand">服务后台</p>
-          <h1 className="mt-2 text-2xl font-semibold text-ink">服务后台</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
-            在一个工作区管理求职者档案、可复用模板、AI 服务配置和面试训练任务。
-          </p>
-        </div>
-      </div>
-
+    <AdminShell
+      active="overview"
+      eyebrow="服务后台"
+      title="运营控制台"
+      description="集中管理候选人服务交付、专业知识库、AI 能力路由、数字人面试官和行为分析接口。"
+    >
       <section className="mt-6 grid gap-3 sm:grid-cols-4">
         <Metric label="求职者" value={candidateCount} />
         <Metric label="训练任务" value={taskCount} />
@@ -60,11 +72,12 @@ export default async function AdminPage() {
         <Metric label="AI 服务商" value={providerCount} />
       </section>
 
-      <section className="mt-6 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {adminLinks.map((link) => (
+      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {adminSections.map((link) => (
           <Link key={link.href} href={link.href as Route}>
             <Card className="h-full transition hover:border-brand">
-              <h2 className="text-lg font-medium text-ink">{link.title}</h2>
+              <p className="text-xs font-medium text-brand">{link.group}</p>
+              <h2 className="mt-1 text-lg font-medium text-ink">{link.title}</h2>
               <p className="mt-2 text-sm leading-6 text-muted">{link.description}</p>
             </Card>
           </Link>
@@ -101,7 +114,7 @@ export default async function AdminPage() {
           ) : null}
         </div>
       </section>
-    </main>
+    </AdminShell>
   );
 }
 

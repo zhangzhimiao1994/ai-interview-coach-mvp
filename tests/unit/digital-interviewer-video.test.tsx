@@ -20,6 +20,10 @@ describe("DigitalInterviewerVideo", () => {
     expect(markup).toContain("正在提问");
     expect(markup).toContain("摄像头已连接");
     expect(markup).toContain("语音字幕");
+    expect(markup).toContain("浏览器语音");
+    expect(markup).toContain("朗读问题");
+    expect(markup).toContain("暂停朗读");
+    expect(markup).toContain("重播");
     expect(markup).toContain("请你先用两分钟介绍一下自己");
     expect(markup).toContain("aria-label=\"数字人视频面试画面\"");
   });

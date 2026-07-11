@@ -1,5 +1,6 @@
 import type { Route } from "next";
 import Link from "next/link";
+import { AdminShell } from "@/components/admin/AdminShell";
 import { CandidateForm } from "@/components/admin/CandidateForm";
 import { Card } from "@/components/ui/Card";
 import { prisma } from "@/lib/db/prisma";
@@ -17,7 +18,14 @@ export default async function CandidatesPage() {
   });
 
   return (
-    <main className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[360px_1fr] lg:px-8">
+    <AdminShell
+      active="candidates"
+      eyebrow="候选人管理"
+      title="求职者档案"
+      description="创建和维护候选人资料，再为其分配公司定制化面试训练任务。"
+      backHref={"/admin"}
+    >
+    <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
       <Card className="h-fit">
         <h1 className="text-xl font-semibold text-ink">创建求职者</h1>
         <p className="mt-2 text-sm leading-6 text-muted">
@@ -69,6 +77,7 @@ export default async function CandidatesPage() {
           ) : null}
         </div>
       </section>
-    </main>
+    </div>
+    </AdminShell>
   );
 }

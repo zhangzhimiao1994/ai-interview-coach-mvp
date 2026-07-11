@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { summarizeBehaviorSignals } from "@/lib/domain/behaviorSignals";
 import type {
   AiProvider,
   CoachingReportInput,
@@ -119,7 +120,17 @@ const coachingReportSchema: z.ZodType<CoachingReportResult> = z.object({
           drill: z.string(),
           successCriterion: z.string()
         })
-      )
+      ),
+      behaviorEvidence: z
+        .array(
+          z.object({
+            questionId: z.string().optional(),
+            observations: z.array(z.string()),
+            risks: z.array(z.string()),
+            coachingTips: z.array(z.string())
+          })
+        )
+        .optional()
     })
     .optional()
 });
@@ -318,6 +329,14 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
                     drill: "daily drill",
                     successCriterion: "observable pass criterion"
                   }
+                ],
+                behaviorEvidence: [
+                  {
+                    questionId: "string optional",
+                    observations: "observable behavior signals only, such as duration, long pauses, microphone/camera state",
+                    risks: "interview impact, not psychological diagnosis",
+                    coachingTips: "specific behavior practice tips"
+                  }
                 ]
               }
             }
@@ -325,7 +344,25 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
         }
       ]);
 
-      return coachingReportSchema.parse(result);
+      const parsed = coachingReportSchema.parse(result);
+      const fallbackEvidence = input.turns
+        .filter((turn) => turn.behaviorSignals)
+        .map((turn) => ({
+          questionId: turn.questionId,
+          ...summarizeBehaviorSignals(turn.behaviorSignals!)
+        }));
+
+      return {
+        ...parsed,
+        details: parsed.details
+          ? {
+              ...parsed.details,
+              behaviorEvidence: parsed.details.behaviorEvidence?.length
+                ? parsed.details.behaviorEvidence
+                : fallbackEvidence
+            }
+          : parsed.details
+      };
     }
   };
 }

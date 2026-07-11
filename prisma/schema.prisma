@@ -128,6 +128,7 @@ model SessionTurn {
   questionId String?
   question  String
   answer    String
+  behaviorSignalsJson String?
   feedback  String?
   createdAt DateTime        @default(now())
 

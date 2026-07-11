@@ -1,5 +1,5 @@
 import React from "react";
-import { safeDeserializeStoredCoachingReport, type StoredCoachingReportRecord } from "@/lib/ai";
+import { safeDeserializeStoredCoachingReport, type CoachingReportResult, type StoredCoachingReportRecord } from "@/lib/ai";
 
 type StoredReport = StoredCoachingReportRecord & {
   id: string;
@@ -30,6 +30,7 @@ export type ReportViewSession = {
     stage: string;
     question: string;
     answer: string;
+    behaviorSignalsJson?: string | null;
     feedback: string | null;
     createdAt: Date;
   }>;
@@ -156,6 +157,15 @@ export function ReportView({ session }: ReportViewProps) {
           <ListBlock title="Gaps" items={report.answerQualityAnalysis.gaps} />
         </ReportPanel>
       </section>
+
+      {details?.behaviorEvidence?.length ? (
+        <ReportPanel title="行为信号证据">
+          <p className="text-sm leading-6 text-muted">
+            这里只呈现可观察信号，例如回答时长、长停顿、摄像头/麦克风状态和音量波动，不输出心理诊断。
+          </p>
+          <BehaviorEvidenceList evidence={details.behaviorEvidence} />
+        </ReportPanel>
+      ) : null}
 
       <Panel>
         <h2 className="font-semibold text-ink">Per-question feedback</h2>
@@ -296,6 +306,9 @@ function TranscriptSection({ turns }: { turns: ReportViewSession["turns"] }) {
             </div>
             <p className="mt-3 text-sm font-medium text-ink">{turn.question}</p>
             <p className="mt-2 text-sm leading-6 text-muted">{turn.answer}</p>
+            {turn.behaviorSignalsJson ? (
+              <p className="mt-2 text-xs leading-5 text-muted">Behavior signals: {turn.behaviorSignalsJson}</p>
+            ) : null}
             {turn.feedback ? <p className="mt-2 text-xs leading-5 text-muted">Feedback: {turn.feedback}</p> : null}
           </div>
         ))}
@@ -362,6 +375,25 @@ function TagList({ items }: { items: string[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function BehaviorEvidenceList({
+  evidence
+}: {
+  evidence: NonNullable<NonNullable<CoachingReportResult["details"]>["behaviorEvidence"]>;
+}) {
+  return (
+    <div className="mt-4 grid gap-3">
+      {evidence.map((item, index) => (
+        <div key={`${item.questionId ?? "behavior"}-${index}`} className="rounded-md border border-line bg-white p-3">
+          <p className="text-xs font-medium uppercase text-muted">{item.questionId ?? "overall"}</p>
+          <ListBlock title="Observations" items={item.observations} />
+          <ListBlock title="Interview risks" items={item.risks} />
+          <ListBlock title="Coaching tips" items={item.coachingTips} />
+        </div>
+      ))}
+    </div>
   );
 }
 

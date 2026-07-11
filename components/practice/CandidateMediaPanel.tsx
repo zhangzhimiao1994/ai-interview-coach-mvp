@@ -4,9 +4,11 @@ import { Camera, Mic, MicOff, Play, Square, Video, VideoOff } from "lucide-react
 import React from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import type { BehaviorSignals } from "@/lib/domain/behaviorSignals";
 
 type CandidateMediaPanelProps = {
   onTranscript: (text: string) => void;
+  onBehaviorSignalsChange?: (signals: BehaviorSignals) => void;
 };
 
 type MediaState = "idle" | "requesting" | "ready" | "blocked" | "unsupported";
@@ -81,21 +83,37 @@ function describeMediaError(error: unknown) {
   return "没有成功连接摄像头或麦克风。请检查浏览器权限、系统隐私设置和设备连接后重试。";
 }
 
-export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) {
+export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: CandidateMediaPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const animationRef = useRef<number | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const volumeSamplesRef = useRef<number[]>([]);
+  const peakVolumeRef = useRef(0);
+  const longPauseCountRef = useRef(0);
+  const quietStartedAtRef = useRef<number | null>(null);
+  const lastSignalEmitRef = useRef(0);
   const [mediaState, setMediaState] = useState<MediaState>("idle");
   const [speechState, setSpeechState] = useState<SpeechState>("idle");
   const [meter, setMeter] = useState(0);
+  const [speechRecognitionUsed, setSpeechRecognitionUsed] = useState(false);
   const [message, setMessage] = useState("请先开启权限，Chrome 会弹出电脑摄像头和麦克风授权。");
 
   useEffect(() => {
     return () => {
-      stopSpeech();
-      stopMedia();
+      recognitionRef.current?.stop();
+      recognitionRef.current = null;
+
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+      }
+
+      audioContextRef.current?.close().catch(() => undefined);
+      audioContextRef.current = null;
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
     };
   }, []);
 
@@ -152,6 +170,12 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+
+    volumeSamplesRef.current = [];
+    peakVolumeRef.current = 0;
+    longPauseCountRef.current = 0;
+    quietStartedAtRef.current = null;
+    emitBehaviorSignals(false);
   }
 
   function startAudioMeter(stream: MediaStream) {
@@ -167,7 +191,26 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
     const tick = () => {
       analyser.getByteFrequencyData(data);
       const average = data.reduce((sum, value) => sum + value, 0) / data.length;
-      setMeter(Math.min(100, Math.round((average / 128) * 100)));
+      const normalizedVolume = Math.min(100, Math.round((average / 128) * 100));
+
+      setMeter(normalizedVolume);
+      volumeSamplesRef.current = [...volumeSamplesRef.current.slice(-60), normalizedVolume];
+      peakVolumeRef.current = Math.max(peakVolumeRef.current, normalizedVolume);
+
+      if (normalizedVolume < 8) {
+        quietStartedAtRef.current ??= Date.now();
+      } else if (quietStartedAtRef.current) {
+        if (Date.now() - quietStartedAtRef.current >= 2000) {
+          longPauseCountRef.current += 1;
+        }
+        quietStartedAtRef.current = null;
+      }
+
+      if (Date.now() - lastSignalEmitRef.current > 500) {
+        lastSignalEmitRef.current = Date.now();
+        emitBehaviorSignals(true);
+      }
+
       animationRef.current = requestAnimationFrame(tick);
     };
 
@@ -194,7 +237,9 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
         .trim();
 
       if (text) {
+        setSpeechRecognitionUsed(true);
         onTranscript(text);
+        emitBehaviorSignals(true);
       }
     };
     recognition.onend = () => {
@@ -208,6 +253,7 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
     recognitionRef.current = recognition;
     recognition.start();
     setSpeechState("listening");
+    setSpeechRecognitionUsed(true);
     setMessage("正在听取你的回答，识别结果会同步到回答框。");
   }
 
@@ -219,6 +265,22 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
 
   const mediaReady = mediaState === "ready";
   const mediaBlocked = mediaState === "blocked" || mediaState === "unsupported";
+
+  function emitBehaviorSignals(readyOverride = mediaReady) {
+    const samples = volumeSamplesRef.current;
+    const averageVolume = samples.length
+      ? Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length)
+      : 0;
+
+    onBehaviorSignalsChange?.({
+      averageVolume,
+      peakVolume: peakVolumeRef.current,
+      longPauseCount: longPauseCountRef.current,
+      cameraEnabled: readyOverride,
+      microphoneEnabled: readyOverride,
+      speechRecognitionUsed
+    });
+  }
 
   return (
     <section className="rounded-lg border border-line bg-panel p-4 shadow-sm" aria-label="电脑摄像头与麦克风">

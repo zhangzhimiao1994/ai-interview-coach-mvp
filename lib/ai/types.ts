@@ -1,4 +1,5 @@
 import type { TrainingStageType } from "@/lib/domain/stages";
+import type { BehaviorSignals } from "@/lib/domain/behaviorSignals";
 
 export type TrainingOutlineRequest = {
   targetRole: string;
@@ -35,6 +36,7 @@ export type SessionTurnInput = {
   question: string;
   answer: string;
   durationSeconds?: number;
+  behaviorSignals?: BehaviorSignals;
 };
 
 export type FollowUpCoachingInput = {
@@ -82,6 +84,12 @@ export type CoachingReportDetails = {
     stage: TrainingStageType;
     drill: string;
     successCriterion: string;
+  }>;
+  behaviorEvidence?: Array<{
+    questionId?: string;
+    observations: string[];
+    risks: string[];
+    coachingTips: string[];
   }>;
 };
 

@@ -7,6 +7,7 @@ import {
 import { resolveAiProviderLabel } from "@/lib/ai/configResolver";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
+import { behaviorSignalsSchema } from "@/lib/domain/behaviorSignals";
 import type { TrainingStageType } from "@/lib/domain/stages";
 
 type RouteContext = {
@@ -31,8 +32,8 @@ export async function POST(_request: Request, context: RouteContext) {
         candidate: true,
         report: true,
         task: true,
-        turns: {
-          orderBy: { createdAt: "asc" }
+      turns: {
+        orderBy: { createdAt: "asc" }
         }
       }
     });
@@ -57,7 +58,8 @@ export async function POST(_request: Request, context: RouteContext) {
         questionId: turn.questionId ?? undefined,
         stage: turn.stage as TrainingStageType,
         question: turn.question,
-        answer: turn.answer
+        answer: turn.answer,
+        behaviorSignals: parseBehaviorSignals(turn.behaviorSignalsJson)
       }))
     });
     const storedReport = serializeCoachingReportForStorage(report);
@@ -128,5 +130,17 @@ export async function POST(_request: Request, context: RouteContext) {
       .catch(() => undefined);
 
     return postErrorResponse(error);
+  }
+}
+
+function parseBehaviorSignals(value: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    return behaviorSignalsSchema.parse(JSON.parse(value));
+  } catch {
+    return undefined;
   }
 }

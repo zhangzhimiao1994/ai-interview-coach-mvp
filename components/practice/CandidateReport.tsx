@@ -70,6 +70,16 @@ export function CandidateReport({
         </ReportPanel>
       </section>
 
+      {details?.behaviorEvidence?.length ? (
+        <section className="rounded-lg border border-line bg-panel p-5 shadow-sm">
+          <h2 className="font-semibold text-ink">行为信号证据</h2>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            以下只基于面试过程中的可观察信号，例如回答时长、长停顿、音量和设备状态，不作为心理或人格判断。
+          </p>
+          <BehaviorEvidenceList evidence={details.behaviorEvidence} />
+        </section>
+      ) : null}
+
       <section className="rounded-lg border border-line bg-panel p-5 shadow-sm">
         <h2 className="font-semibold text-ink">逐题反馈</h2>
         <div className="mt-4 grid gap-3">
@@ -181,4 +191,31 @@ function TagList({ items }: { items: string[] }) {
       ))}
     </ul>
   );
+}
+
+function BehaviorEvidenceList({
+  evidence
+}: {
+  evidence: NonNullable<NonNullable<CoachingReportResult["details"]>["behaviorEvidence"]>;
+}) {
+  return (
+    <div className="mt-4 grid gap-3">
+      {evidence.map((item, index) => (
+        <div key={`${item.questionId ?? "behavior"}-${index}`} className="rounded-md border border-line bg-white p-3">
+          <p className="text-xs font-medium text-muted">{item.questionId ? `题目 ${item.questionId}` : "整体行为信号"}</p>
+          <ListInline label="观察" items={item.observations} />
+          <ListInline label="影响" items={item.risks} />
+          <ListInline label="训练建议" items={item.coachingTips} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ListInline({ label, items }: { label: string; items: string[] }) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return <p className="mt-2 text-sm leading-6 text-muted">{label}：{items.join("；")}</p>;
 }

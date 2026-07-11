@@ -1,6 +1,7 @@
 import type { Route } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AdminShell } from "@/components/admin/AdminShell";
 import { Card } from "@/components/ui/Card";
 import { buildStagePlan, type StageConfigInput } from "@/lib/domain/stages";
 import { prisma } from "@/lib/db/prisma";
@@ -37,12 +38,14 @@ export default async function TrainingTaskDetailPage({ params }: PageProps) {
   const stagePlan = getStagePlan(task.stageConfig);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-      <Link className="text-sm font-medium text-brand" href={"/admin" as Route}>
-        Back to admin
-      </Link>
-
-      <div className="mt-4 grid gap-6 lg:grid-cols-[1fr_340px]">
+    <AdminShell
+      active="tasks"
+      eyebrow="训练任务"
+      title={task.title}
+      description={`${task.candidate.name} / ${task.targetCompany} / ${task.targetRole}`}
+      backHref={"/admin"}
+    >
+      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
         <div className="grid gap-6">
           <Card>
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -126,7 +129,7 @@ export default async function TrainingTaskDetailPage({ params }: PageProps) {
           </div>
         </Card>
       </div>
-    </main>
+    </AdminShell>
   );
 }
 

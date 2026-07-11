@@ -1,5 +1,4 @@
-import type { Route } from "next";
-import Link from "next/link";
+import { AdminShell } from "@/components/admin/AdminShell";
 import { TemplateManager } from "@/components/admin/TemplateManager";
 import { prisma } from "@/lib/db/prisma";
 
@@ -13,19 +12,14 @@ export default async function TemplatesPage() {
   ]);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-brand">Template library</p>
-          <h1 className="mt-2 text-2xl font-semibold text-ink">Reusable interview assets</h1>
-        </div>
-        <Link className="text-sm font-medium text-brand" href={"/admin" as Route}>
-          Back to admin
-        </Link>
-      </div>
-      <div className="mt-6">
-        <TemplateManager companies={companies} jobs={jobs} interviewers={interviewers} />
-      </div>
-    </main>
+    <AdminShell
+      active="templates"
+      eyebrow="知识库"
+      title="模板库"
+      description="管理公司模板、岗位能力模板和面试官模板，为专业化面试大纲提供上下文。"
+      backHref={"/admin"}
+    >
+      <TemplateManager companies={companies} jobs={jobs} interviewers={interviewers} />
+    </AdminShell>
   );
 }

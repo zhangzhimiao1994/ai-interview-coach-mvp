@@ -4,6 +4,7 @@ import { aiOrchestrator } from "@/lib/ai";
 import { resolveAiProviderLabel } from "@/lib/ai/configResolver";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
+import { behaviorSignalsSchema } from "@/lib/domain/behaviorSignals";
 import { trainingStageTypes } from "@/lib/domain/stages";
 import type { SessionTurnInput, TrainingOutline } from "@/lib/ai";
 
@@ -19,6 +20,7 @@ const answerSchema = z
     stage: z.enum(trainingStageTypes),
     question: z.string().trim().min(1, "Question is required"),
     answer: z.string().trim().min(1, "Answer is required"),
+    behaviorSignals: behaviorSignalsSchema.optional(),
     feedback: z
       .string()
       .trim()
@@ -103,6 +105,7 @@ export async function POST(request: Request, context: RouteContext) {
             stage: true,
             question: true,
             answer: true,
+            behaviorSignalsJson: true,
             feedback: true
           }
         }
@@ -149,14 +152,16 @@ export async function POST(request: Request, context: RouteContext) {
         questionId: input.questionId,
         stage: input.stage,
         question: input.question,
-        answer: input.answer
+        answer: input.answer,
+        behaviorSignals: input.behaviorSignals
       },
       previousTurns: session.turns.map(
         (turn): SessionTurnInput => ({
           stage: turn.stage as SessionTurnInput["stage"],
           questionId: turn.questionId ?? undefined,
           question: turn.question,
-          answer: turn.answer
+          answer: turn.answer,
+          behaviorSignals: parseBehaviorSignals(turn.behaviorSignalsJson)
         })
       )
     });
@@ -170,6 +175,7 @@ export async function POST(request: Request, context: RouteContext) {
           stage: input.stage,
           question: input.question,
           answer: input.answer,
+          behaviorSignalsJson: input.behaviorSignals ? JSON.stringify(input.behaviorSignals) : undefined,
           feedback: input.feedback ?? feedback
         }
       });
@@ -213,5 +219,17 @@ export async function POST(request: Request, context: RouteContext) {
       .catch(() => undefined);
 
     return postErrorResponse(error);
+  }
+}
+
+function parseBehaviorSignals(value: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    return behaviorSignalsSchema.parse(JSON.parse(value));
+  } catch {
+    return undefined;
   }
 }

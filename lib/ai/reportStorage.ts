@@ -64,7 +64,19 @@ const reportDetailsSchema = z
           successCriterion: z.string()
         })
         .strict()
-    )
+    ),
+    behaviorEvidence: z
+      .array(
+        z
+          .object({
+            questionId: z.string().optional(),
+            observations: stringArraySchema,
+            risks: stringArraySchema,
+            coachingTips: stringArraySchema
+          })
+          .strict()
+      )
+      .optional()
   })
   .strict();
 

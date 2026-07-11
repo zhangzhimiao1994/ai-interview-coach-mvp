@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import type { TrainingOutline, TrainingQuestion } from "@/lib/ai";
+import type { BehaviorSignals } from "@/lib/domain/behaviorSignals";
 import type { StagePlanItem } from "@/lib/domain/stages";
 import { CandidateMediaPanel } from "./CandidateMediaPanel";
 import { DigitalInterviewerVideo } from "./DigitalInterviewerVideo";
@@ -120,6 +121,8 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   const [completedQuestions, setCompletedQuestions] = useState<string[]>([]);
   const [coaching, setCoaching] = useState<FollowUpCoaching | null>(null);
   const [activeFollowUp, setActiveFollowUp] = useState<string | null>(null);
+  const [behaviorSignals, setBehaviorSignals] = useState<BehaviorSignals>({});
+  const [questionStartedAt, setQuestionStartedAt] = useState(() => Date.now());
 
   useEffect(() => {
     let raw: string | null = null;
@@ -157,6 +160,11 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   const currentQuestion: TrainingQuestion | undefined = questions[currentIndex];
   const currentStage = currentQuestion?.stage ?? stages[0]?.type;
 
+  useEffect(() => {
+    setQuestionStartedAt(Date.now());
+    setBehaviorSignals({});
+  }, [currentQuestion?.id, activeFollowUp]);
+
   async function submitAnswer() {
     if (!storedSession || !currentQuestion || !answer.trim()) {
       setMessage("Add an answer before moving on.");
@@ -179,7 +187,12 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
           questionId: submittedQuestionId,
           stage: currentQuestion.stage,
           question: submittedQuestion,
-          answer
+          answer,
+          behaviorSignals: {
+            ...behaviorSignals,
+            answerDurationSeconds: Math.max(0, Math.round((Date.now() - questionStartedAt) / 1000)),
+            transcriptLength: answer.trim().length
+          }
         })
       });
       const payload = (await response.json().catch(() => null)) as {
@@ -309,7 +322,10 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
               status={allAnswered ? "listening" : "speaking"}
             />
 
-            <CandidateMediaPanel onTranscript={(text) => setAnswer(text)} />
+            <CandidateMediaPanel
+              onTranscript={(text) => setAnswer(text)}
+              onBehaviorSignalsChange={(signals) => setBehaviorSignals(signals)}
+            />
 
             <div className="rounded-lg border border-line bg-panel p-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">

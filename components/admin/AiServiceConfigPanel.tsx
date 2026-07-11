@@ -72,7 +72,8 @@ const capabilityLabels: Record<AiCapability, string> = {
   REPORT_ANALYSIS: "报告分析",
   SPEECH_TO_TEXT: "语音识别",
   TEXT_TO_SPEECH: "语音合成",
-  DIGITAL_HUMAN_VIDEO: "数字人视频"
+  DIGITAL_HUMAN_VIDEO: "数字人视频",
+  VISION_BEHAVIOR_ANALYSIS: "神态/行为分析"
 };
 
 const providerBaseUrlPresets: Partial<Record<AiProviderType, string>> = {
@@ -268,6 +269,29 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
 
   return (
     <div className="grid gap-6">
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <CapabilityCard
+          title="实时面试"
+          items={["INTERVIEW_OUTLINE", "INTERVIEW_FOLLOW_UP", "REPORT_ANALYSIS"]}
+        />
+        <CapabilityCard
+          title="语音链路"
+          items={["SPEECH_TO_TEXT", "TEXT_TO_SPEECH"]}
+        />
+        <CapabilityCard
+          title="数字人"
+          id="digital-human"
+          items={["DIGITAL_HUMAN_VIDEO"]}
+          note="接口：POST /api/digital-human/render 与 /api/digital-human/speech"
+        />
+        <CapabilityCard
+          title="行为分析"
+          id="behavior-analysis"
+          items={["VISION_BEHAVIOR_ANALYSIS"]}
+          note="接口：POST /api/behavior-analysis"
+        />
+      </section>
+
       <section className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <form className="rounded-lg border border-line bg-panel p-5 shadow-sm" onSubmit={createProvider}>
           <div className="flex items-center gap-2">
@@ -471,5 +495,31 @@ function Status({ enabled }: { enabled: boolean }) {
     <span className={enabled ? "rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-700" : "rounded-md bg-slate-100 px-2 py-1 text-xs text-muted"}>
       {enabled ? "启用" : "停用"}
     </span>
+  );
+}
+
+function CapabilityCard({
+  title,
+  items,
+  id,
+  note
+}: {
+  title: string;
+  items: AiCapability[];
+  id?: string;
+  note?: string;
+}) {
+  return (
+    <div id={id} className="rounded-lg border border-line bg-panel p-4 shadow-sm">
+      <h2 className="font-semibold text-ink">{title}</h2>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {items.map((item) => (
+          <span key={item} className="rounded-md bg-slate-100 px-2 py-1 text-xs text-muted">
+            {capabilityLabels[item]}
+          </span>
+        ))}
+      </div>
+      {note ? <p className="mt-3 text-xs leading-5 text-muted">{note}</p> : null}
+    </div>
   );
 }

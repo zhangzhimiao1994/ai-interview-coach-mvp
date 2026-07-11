@@ -1,5 +1,4 @@
-import type { Route } from "next";
-import Link from "next/link";
+import { AdminShell } from "@/components/admin/AdminShell";
 import { TrainingTaskForm } from "@/components/admin/TrainingTaskForm";
 import { Card } from "@/components/ui/Card";
 import { prisma } from "@/lib/db/prisma";
@@ -18,19 +17,16 @@ export default async function NewTrainingTaskPage() {
   ]);
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-brand">Training setup</p>
-          <h1 className="mt-2 text-2xl font-semibold text-ink">Create training task</h1>
-        </div>
-        <Link className="text-sm font-medium text-brand" href={"/admin" as Route}>
-          Back to admin
-        </Link>
-      </div>
-      <Card className="mt-6">
+    <AdminShell
+      active="tasks"
+      eyebrow="服务交付"
+      title="创建训练任务"
+      description="绑定候选人、目标公司、岗位模板、面试官风格和训练阶段，生成候选人练习入口。"
+      backHref={"/admin"}
+    >
+      <Card>
         <TrainingTaskForm candidates={candidates} companies={companies} jobs={jobs} interviewers={interviewers} />
       </Card>
-    </main>
+    </AdminShell>
   );
 }
