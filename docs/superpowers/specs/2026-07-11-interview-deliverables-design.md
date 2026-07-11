@@ -1,90 +1,90 @@
-# Interview Deliverables Design
+# 面试训练交付物设计规格
 
-## Goal
+## 目标
 
-Turn the training outline and final report into a professional Chinese interview-coaching deliverable. The product will generate one evidence-based analysis and present it in two views: an actionable candidate view and a detailed consultant view.
+将面试提纲和最终报告升级为专业的中文面试训练交付物。系统只生成一份基于证据的分析数据，并向求职者和服务顾问分别提供侧重点不同的报告视图。
 
-## Scope
+## 范围
 
-This change covers the outline shown before practice, the report data generated at session completion, and the candidate and consultant report pages. It does not add video-based emotion scoring, resume parsing, or a new database table in this iteration.
+本次改造包括练习前展示的面试提纲、面试完成后生成的报告数据，以及求职者端和顾问端的报告页面。本次不加入视频表情评分、简历自动解析和新的数据库表。
 
-## Principles
+## 设计原则
 
-- Every score and recommendation must connect to a concrete answer, question, or observed gap.
-- The candidate view prioritizes clear next actions over internal scoring mechanics.
-- The consultant view preserves enough evidence to explain the evaluation in a follow-up service conversation.
-- AI prompts request structured Chinese output and prohibit generic recommendations without answer-specific evidence.
-- Existing stored reports remain renderable through compatibility defaults until they are regenerated.
+- 每一个评分与建议都必须关联到具体回答、面试问题或明确的能力缺口。
+- 求职者视图优先呈现可执行的下一步训练动作，而不是内部评分机制。
+- 顾问视图保留充足的证据，支持后续服务沟通与专业复盘。
+- AI 提示词要求输出结构化中文内容，禁止脱离回答证据的泛泛建议。
+- 已存储的旧报告在重新生成前仍可正常展示。
 
-## Training Outline
+## 面试提纲
 
-The outline becomes a pre-interview playbook with the following sections:
+面试提纲升级为练习前的面试作战手册，包含以下内容：
 
-1. Training overview: target company, role, estimated duration, and training objective.
-2. Role success profile: three to five core competencies tailored to the task context.
-3. Stage plan: the purpose, expected outcome, and time allocation for each enabled stage.
-4. Question cards: question, why the interviewer asks it, what a strong answer must prove, follow-up direction, evaluation criteria, difficulty, and response time limit.
-5. Preparation checklist: reusable project stories, quantitative evidence, and role-specific materials to prepare before starting.
+1. 训练概览：目标公司、目标岗位、预计时长和本次训练目标。
+2. 岗位成功画像：根据任务信息生成三至五项核心胜任力。
+3. 阶段计划：每个已启用阶段的考察目的、预期结果和时间分配。
+4. 问题卡片：题目、面试官提问意图、高质量回答需要证明的能力、追问方向、评分标准、难度和答题限时。
+5. 面试前准备清单：应准备的项目案例、量化证据和岗位相关材料。
 
-The generated question object gains `assessmentIntent`, `answerFramework`, and `scoringCriteria`. The generated outline gains `trainingObjective`, `coreCompetencies`, `stageObjectives`, and `preparationChecklist`.
+生成的问题对象增加 `assessmentIntent`、`answerFramework` 和 `scoringCriteria` 字段；面试提纲增加 `trainingObjective`、`coreCompetencies`、`stageObjectives` 和 `preparationChecklist` 字段。
 
-## Evidence-Based Report Data
+## 基于证据的报告数据
 
-The completion analysis produces a single structured report containing:
+面试完成后的分析产出一份统一的结构化报告，包含：
 
-- `readinessVerdict`: readiness level, one-sentence judgement, and the highest-priority risk.
-- `overallScore` and five sub-scores, each with a concise explanation.
-- `perQuestionFeedback`: question text, answer evidence, score rationale, strengths, gaps, a concrete improvement action, and a suggested answer rewrite.
-- `competencyAssessment`: strengths and risks mapped to the target role competencies.
-- `priorityActions`: the three highest-impact improvements, ordered by urgency.
-- `nextTrainingPlan`: a seven-day schedule with drill, success criterion, and suggested stage.
-- Existing expression, answer-quality, strategy, and weak-tag fields retained for compatibility and summary presentation.
+- `readinessVerdict`：面试准备度、结论摘要和最高优先级风险。
+- `overallScore` 与五项子评分，以及每项评分的简短说明。
+- `perQuestionFeedback`：问题原文、回答证据、评分理由、优点、缺口、具体改进动作和建议改写方式。
+- `competencyAssessment`：与目标岗位胜任力对应的优势与风险。
+- `priorityActions`：按优先级排列的三个高影响改进动作。
+- `nextTrainingPlan`：包含练习内容、达标标准和建议训练阶段的七天计划。
+- 保留现有的表达分析、回答质量、策略建议和薄弱标签字段，以兼容已有数据并服务摘要展示。
 
-Evidence is derived only from submitted answers and their linked questions. When an answer lacks enough evidence, the model states that explicitly instead of inventing achievements or quotations.
+报告只能从已提交的回答及其关联问题中提取证据。若回答不足以支撑结论，AI 必须明确标注“证据不足”，而不是虚构成果或引用。
 
-## Candidate View
+## 求职者视图
 
-The candidate report is Chinese-first and follows this reading order:
+求职者报告使用中文，并按以下顺序组织：
 
-1. Interview conclusion: readiness level, overall score, and a plain-language judgement.
-2. What to improve first: the top three actions with a concrete training target.
-3. Capability scorecard: five scores with plain explanations.
-4. Question-by-question replay: original question, performance diagnosis, cited answer evidence, what to say differently, and an example answer structure.
-5. Seven-day training plan: daily drill, time recommendation, and completion criterion.
+1. 面试结论：准备度、综合得分和通俗易懂的判断。
+2. 优先改进项：三个最重要的行动建议和明确训练目标。
+3. 能力评分卡：五项能力得分与易理解的解释。
+4. 逐题回放：原题、表现诊断、回答证据、改进说法和示范回答结构。
+5. 七天训练计划：每日练习内容、建议时长和完成标准。
 
-The candidate view intentionally omits consultant-only risk labels and internal service guidance.
+求职者视图不展示顾问专用的风险标签和内部服务建议。
 
-## Consultant View
+## 服务顾问视图
 
-The consultant report uses the same generated data but adds:
+顾问报告使用同一份分析数据，但增加以下内容：
 
-1. Candidate positioning: target role fit, readiness conclusion, and hiring-risk assessment.
-2. Evidence ledger: score rationale and the source answer for every material judgement.
-3. Competency matrix: role competency, observed evidence, risk, and suggested coaching response.
-4. Session replay: question, candidate answer, AI follow-up, score, and coaching recommendation.
-5. Service follow-up plan: the next recommended training intervention and how to explain it to the candidate.
+1. 候选人定位：岗位匹配度、面试准备度结论和录用风险评估。
+2. 证据台账：每一项重要判断的评分理由和对应回答。
+3. 胜任力矩阵：岗位能力、观察到的证据、风险和建议辅导方式。
+4. 面试过程回放：问题、候选人回答、AI 追问、评分和辅导建议。
+5. 服务跟进计划：下一步建议开展的训练服务，以及向候选人解释的沟通要点。
 
-## Generation and Compatibility
+## 生成与兼容策略
 
-The OpenAI-compatible provider prompt defines the required Chinese JSON shape and requires specific, answer-grounded output. The mock provider produces equally complete deterministic data so local demos remain persuasive without API credentials.
+OpenAI 兼容服务商的提示词会定义完整的中文 JSON 结构，并要求内容具体、可追溯且基于回答。Mock 服务商也会生成完整且稳定的演示数据，确保没有 API 凭据时本地演示仍具说服力。
 
-Storage serialization accepts missing new fields in old reports and supplies explicit empty or compatibility values. Newly generated reports always persist the enriched structure. No destructive migration is required for this iteration.
+报告存储与反序列化逻辑会接受旧报告中缺失的新字段，并提供明确的空值或兼容默认值。新生成的报告始终保存完整的扩展结构。本次不需要破坏性数据迁移。
 
-## Error Handling
+## 错误处理
 
-- Invalid AI JSON continues to fail validation before persistence.
-- If an answer is too short to support a conclusion, the report marks the related assessment as insufficient evidence and proposes a targeted re-answer drill.
-- Empty per-question feedback is rendered as an explicit incomplete-analysis state rather than generic tags.
+- AI 返回不符合 JSON 结构时，仍在入库前进行校验并拒绝保存。
+- 回答过短、无法支撑结论时，报告将标记相关评估为“证据不足”，并给出针对性的重答训练。
+- 逐题反馈为空时，页面展示“分析不完整”的明确状态，而不是显示泛化标签。
 
-## Testing
+## 测试要求
 
-- Unit tests prove enriched outline and report schemas accept valid data and reject missing required evidence fields for new reports.
-- Provider tests verify prompts request Chinese, evidence-based output and parse the enriched structure.
-- Candidate and consultant view tests verify the two audiences receive their respective sections.
-- Compatibility tests verify a legacy stored report renders without runtime failure.
+- 单元测试验证扩展后的提纲和报告结构可接受有效数据，并拒绝缺失必要证据字段的新报告。
+- 服务商测试验证提示词要求中文、基于证据的输出，并能解析扩展结构。
+- 求职者和顾问视图测试验证两个受众分别只能看到其应有的报告区块。
+- 兼容测试验证旧版已存储报告不会导致页面运行时错误。
 
-## Out of Scope
+## 不在本次范围内
 
-- Automated facial expression, eye-contact, or voice tone scoring.
-- Export to PDF or branded consultant templates.
-- Resume ingestion and job-description retrieval workflows.
+- 自动化面部表情、眼神交流或语音语调评分。
+- PDF 导出或顾问品牌化报告模板。
+- 简历上传解析和职位描述自动检索流程。
