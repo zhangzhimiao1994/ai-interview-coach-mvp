@@ -86,6 +86,7 @@ async function loadRoutes() {
     },
     sessionTurn: {
       findFirst: vi.fn(),
+      findUnique: vi.fn(),
       create: vi.fn()
     },
     coachingReport: {
@@ -163,6 +164,10 @@ describe("session API routes", () => {
         currentStage: "WARM_UP"
       }
     });
+    expect(prisma.trainingSession.update).toHaveBeenCalledWith({
+      where: { id: "session-1" },
+      data: { outlineJson: JSON.stringify(outline) }
+    });
     expect(prisma.aiCallLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -204,7 +209,7 @@ describe("session API routes", () => {
     });
 
     const response = await answerRoute.POST(
-      jsonRequest({ stage: "WARM_UP", question: "Question?", answer: "Answer." }),
+      jsonRequest({ questionId: "warm-up-1", stage: "WARM_UP", question: "Question?", answer: "Answer." }),
       {
         params: Promise.resolve({ sessionId: "session-1" })
       }
@@ -215,6 +220,39 @@ describe("session API routes", () => {
     expect(body).toEqual({ error: "Session is not accepting answers" });
     expect(prisma.sessionTurn.create).not.toHaveBeenCalled();
     expect(prisma.trainingSession.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects an answer whose question id is not part of the saved session outline", async () => {
+    const { prisma, aiOrchestrator, answerRoute } = await loadRoutes();
+    prisma.trainingSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      status: "IN_PROGRESS",
+      outlineJson: JSON.stringify(outline),
+      task: {
+        id: "task-1",
+        targetRole: "Product Manager",
+        targetCompany: "Acme"
+      },
+      turns: []
+    });
+
+    const response = await answerRoute.POST(
+      jsonRequest({
+        questionId: "unknown-question-id",
+        stage: "WARM_UP",
+        question: "Question?",
+        answer: "Answer."
+      }),
+      {
+        params: Promise.resolve({ sessionId: "session-1" })
+      }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({ error: "Unknown session question" });
+    expect(aiOrchestrator.generateFollowUpCoaching).not.toHaveBeenCalled();
+    expect(prisma.sessionTurn.create).not.toHaveBeenCalled();
   });
 
   it("generates live AI follow-up coaching when saving an answer", async () => {
@@ -234,9 +272,10 @@ describe("session API routes", () => {
         targetRole: "Product Manager",
         targetCompany: "Acme"
       },
+      outlineJson: JSON.stringify(outline),
       turns: []
     });
-    prisma.sessionTurn.findFirst.mockResolvedValue(null);
+    prisma.sessionTurn.findUnique.mockResolvedValue(null);
     aiOrchestrator.generateFollowUpCoaching.mockResolvedValue(coaching);
     prisma.sessionTurn.create.mockResolvedValue({
       id: "turn-1",
@@ -249,7 +288,7 @@ describe("session API routes", () => {
     prisma.trainingSession.update.mockResolvedValue({ id: "session-1", currentStage: "WARM_UP" });
 
     const response = await answerRoute.POST(
-      jsonRequest({ stage: "WARM_UP", question: "Question?", answer: "Answer." }),
+      jsonRequest({ questionId: "warm-up-1", stage: "WARM_UP", question: "Introduce yourself.", answer: "Answer." }),
       {
         params: Promise.resolve({ sessionId: "session-1" })
       }
@@ -262,14 +301,16 @@ describe("session API routes", () => {
       targetRole: "Product Manager",
       targetCompany: "Acme",
       currentTurn: {
+        questionId: "warm-up-1",
         stage: "WARM_UP",
-        question: "Question?",
+        question: "Introduce yourself.",
         answer: "Answer."
       },
       previousTurns: []
     });
     expect(prisma.sessionTurn.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
+        questionId: "warm-up-1",
         feedback: JSON.stringify(coaching)
       })
     });
@@ -301,6 +342,7 @@ describe("session API routes", () => {
       turns: [
         {
           id: "turn-1",
+          questionId: "warm-up-1",
           stage: "WARM_UP",
           question: "Introduce yourself.",
           answer: "I build products.",
@@ -324,6 +366,7 @@ describe("session API routes", () => {
       targetCompany: "Acme",
       turns: [
         {
+          questionId: "warm-up-1",
           stage: "WARM_UP",
           question: "Introduce yourself.",
           answer: "I build products."

@@ -60,6 +60,11 @@ export async function POST(request: Request) {
       }
     });
 
+    await prisma.trainingSession.update({
+      where: { id: session.id },
+      data: { outlineJson: JSON.stringify(outline) }
+    });
+
     await prisma.aiCallLog.create({
       data: {
         taskId: task.id,

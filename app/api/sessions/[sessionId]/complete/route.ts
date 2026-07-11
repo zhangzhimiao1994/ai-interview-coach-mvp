@@ -54,6 +54,7 @@ export async function POST(_request: Request, context: RouteContext) {
       targetRole: session.task.targetRole,
       targetCompany: session.task.targetCompany,
       turns: session.turns.map((turn) => ({
+        questionId: turn.questionId ?? undefined,
         stage: turn.stage as TrainingStageType,
         question: turn.question,
         answer: turn.answer

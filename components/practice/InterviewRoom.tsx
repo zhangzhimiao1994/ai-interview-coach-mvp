@@ -164,6 +164,9 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
     }
 
     const submittedQuestion = activeFollowUp || currentQuestion.prompt;
+    const submittedQuestionId = activeFollowUp
+      ? `${currentQuestion.id}::follow-up::1`
+      : currentQuestion.id;
 
     setState("saving");
     setMessage("");
@@ -173,6 +176,7 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          questionId: submittedQuestionId,
           stage: currentQuestion.stage,
           question: submittedQuestion,
           answer
