@@ -59,6 +59,32 @@ export type CoachingReportInput = {
   turns: SessionTurnInput[];
 };
 
+export type CoachingReportDetails = {
+  readinessVerdict: {
+    level: "READY" | "READY_WITH_RISKS" | "NEEDS_PRACTICE" | string;
+    summary: string;
+    priorityRisk: string;
+  };
+  scoreExplanations: Record<string, string>;
+  competencyAssessment: Array<{
+    competency: string;
+    evidence: string;
+    risk: string;
+    coachingAction: string;
+  }>;
+  priorityActions: Array<{
+    title: string;
+    reason: string;
+    drill: string;
+  }>;
+  weeklyPlan: Array<{
+    day: number;
+    stage: TrainingStageType;
+    drill: string;
+    successCriterion: string;
+  }>;
+};
+
 export type CoachingReportResult = {
   overallScore: number;
   subScores: {
@@ -74,6 +100,8 @@ export type CoachingReportResult = {
     score: number;
     strengths: string[];
     improvements: string[];
+    answerEvidence?: string[];
+    improvementAction?: string;
   }>;
   expressionAnalysis: {
     summary: string;
@@ -93,6 +121,7 @@ export type CoachingReportResult = {
     recommendedStages: TrainingStageType[];
   };
   candidateSummary: string;
+  details?: CoachingReportDetails;
 };
 
 export type AiProvider = {

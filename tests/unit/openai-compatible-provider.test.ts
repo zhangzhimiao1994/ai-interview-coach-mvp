@@ -93,7 +93,9 @@ describe("OpenAI-compatible provider", () => {
                       stage: "FORMAL_INTERVIEW",
                       score: 82,
                       strengths: ["clear structure"],
-                      improvements: ["add measurable outcomes"]
+                      improvements: ["add measurable outcomes"],
+                      answerEvidence: ["I led a growth project"],
+                      improvementAction: "Add baseline and uplift metrics."
                     }
                   ],
                   expressionAnalysis: {
@@ -113,7 +115,44 @@ describe("OpenAI-compatible provider", () => {
                     drills: ["Rewrite with STAR"],
                     recommendedStages: ["FORMAL_INTERVIEW"]
                   },
-                  candidateSummary: "Solid foundation."
+                  candidateSummary: "Solid foundation.",
+                  details: {
+                    readinessVerdict: {
+                      level: "READY_WITH_RISKS",
+                      summary: "Ready with evidence risk.",
+                      priorityRisk: "Missing measurable outcomes."
+                    },
+                    scoreExplanations: {
+                      expressionStructure: "Clear opening.",
+                      contentRelevance: "Relevant PM project.",
+                      confidence: "Stable.",
+                      pressureHandling: "Needs data defense.",
+                      roleFit: "Good PM fit."
+                    },
+                    competencyAssessment: [
+                      {
+                        competency: "Evidence quality",
+                        evidence: "Mentioned a growth project.",
+                        risk: "No metric.",
+                        coachingAction: "Add the metric."
+                      }
+                    ],
+                    priorityActions: [
+                      {
+                        title: "Quantify one project",
+                        reason: "The answer lacks measurable impact.",
+                        drill: "Rewrite with baseline and result."
+                      }
+                    ],
+                    weeklyPlan: [
+                      {
+                        day: 1,
+                        stage: "FORMAL_INTERVIEW",
+                        drill: "Rewrite one STAR answer.",
+                        successCriterion: "Contains one metric."
+                      }
+                    ]
+                  }
                 })
               }
             }
@@ -146,5 +185,7 @@ describe("OpenAI-compatible provider", () => {
 
     expect(report.overallScore).toBe(82);
     expect(report.strategySuggestions).toContain("Lead with the conclusion.");
+    expect(report.perQuestionFeedback[0].answerEvidence).toContain("I led a growth project");
+    expect(report.details?.readinessVerdict.priorityRisk).toBe("Missing measurable outcomes.");
   });
 });

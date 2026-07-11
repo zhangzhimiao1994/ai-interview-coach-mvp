@@ -211,7 +211,9 @@ describe("serializeCoachingReportForStorage", () => {
           stage: "WARM_UP",
           score: 84,
           strengths: ["Clear motivation"],
-          improvements: ["Add role-specific detail"]
+          improvements: ["Add role-specific detail"],
+          answerEvidence: ["I led the onboarding experiment"],
+          improvementAction: "Add the retention lift and your exact decision."
         }
       ],
       expressionAnalysis: {
@@ -231,7 +233,44 @@ describe("serializeCoachingReportForStorage", () => {
         drills: ["Add metrics to three answers"],
         recommendedStages: ["FORMAL_INTERVIEW"]
       },
-      candidateSummary: "Solid baseline readiness."
+      candidateSummary: "Solid baseline readiness.",
+      details: {
+        readinessVerdict: {
+          level: "NEEDS_PRACTICE",
+          summary: "Can enter a real interview after targeted evidence drills.",
+          priorityRisk: "Evidence is still too general for pressure follow-ups."
+        },
+        scoreExplanations: {
+          expressionStructure: "Opening is clear, but the answer does not close with a decision.",
+          contentRelevance: "Project content is relevant to the PM role.",
+          confidence: "Tone is stable.",
+          pressureHandling: "Needs stronger data defense under challenge.",
+          roleFit: "Examples map to product discovery and launch ownership."
+        },
+        competencyAssessment: [
+          {
+            competency: "Structured communication",
+            evidence: "Used a product launch example with a clear role.",
+            risk: "Conclusion is buried after context.",
+            coachingAction: "Lead every answer with conclusion, then STAR evidence."
+          }
+        ],
+        priorityActions: [
+          {
+            title: "Quantify the strongest project story",
+            reason: "The answer has context but lacks measurable impact.",
+            drill: "Rewrite it with baseline, action, result, and lesson."
+          }
+        ],
+        weeklyPlan: [
+          {
+            day: 1,
+            stage: "FORMAL_INTERVIEW",
+            drill: "Rewrite one project answer with metrics.",
+            successCriterion: "Answer includes baseline, result, and candidate contribution."
+          }
+        ]
+      }
     };
 
     expect(serializeCoachingReportForStorage(report)).toEqual({
@@ -243,7 +282,8 @@ describe("serializeCoachingReportForStorage", () => {
       strategySuggestions: JSON.stringify(report.strategySuggestions),
       weakTags: JSON.stringify(report.weakTags),
       nextTrainingPlan: JSON.stringify(report.nextTrainingPlan),
-      candidateSummary: "Solid baseline readiness."
+      candidateSummary: "Solid baseline readiness.",
+      detailsJson: JSON.stringify(report.details)
     });
   });
 });
@@ -265,7 +305,9 @@ describe("deserializeStoredCoachingReport", () => {
           stage: "WARM_UP",
           score: 84,
           strengths: ["Clear motivation"],
-          improvements: ["Add role-specific detail"]
+          improvements: ["Add role-specific detail"],
+          answerEvidence: ["I led the onboarding experiment"],
+          improvementAction: "Add the retention lift and your exact decision."
         }
       ],
       expressionAnalysis: {
@@ -285,7 +327,44 @@ describe("deserializeStoredCoachingReport", () => {
         drills: ["Add metrics to three answers"],
         recommendedStages: ["FORMAL_INTERVIEW"]
       },
-      candidateSummary: "Solid baseline readiness."
+      candidateSummary: "Solid baseline readiness.",
+      details: {
+        readinessVerdict: {
+          level: "READY_WITH_RISKS",
+          summary: "Candidate can attempt the interview but should tighten evidence first.",
+          priorityRisk: "Pressure follow-up may expose vague metrics."
+        },
+        scoreExplanations: {
+          expressionStructure: "Answer is organized enough to follow.",
+          contentRelevance: "Relevant project example.",
+          confidence: "Stable delivery.",
+          pressureHandling: "Needs a better challenge response.",
+          roleFit: "Good match to PM execution work."
+        },
+        competencyAssessment: [
+          {
+            competency: "Evidence quality",
+            evidence: "Mentioned project context.",
+            risk: "No baseline or measurable result.",
+            coachingAction: "Add numbers and trade-off decisions."
+          }
+        ],
+        priorityActions: [
+          {
+            title: "Strengthen evidence",
+            reason: "Current evidence is too broad.",
+            drill: "Add one metric to each answer."
+          }
+        ],
+        weeklyPlan: [
+          {
+            day: 1,
+            stage: "FORMAL_INTERVIEW",
+            drill: "Practice one STAR answer.",
+            successCriterion: "Answer has a measurable result."
+          }
+        ]
+      }
     };
     const storedReport = {
       id: "report-1",
@@ -295,6 +374,49 @@ describe("deserializeStoredCoachingReport", () => {
     };
 
     expect(deserializeStoredCoachingReport(storedReport)).toEqual(report);
+  });
+
+  it("keeps older stored reports readable when detailsJson is missing", () => {
+    const report: CoachingReportResult = {
+      overallScore: 70,
+      subScores: {
+        expressionStructure: 70,
+        contentRelevance: 70,
+        confidence: 70,
+        pressureHandling: 70,
+        roleFit: 70
+      },
+      perQuestionFeedback: [],
+      expressionAnalysis: {
+        summary: "Basic structure.",
+        strongPoints: [],
+        improvementPoints: []
+      },
+      answerQualityAnalysis: {
+        summary: "Basic answer.",
+        evidence: [],
+        gaps: []
+      },
+      strategySuggestions: [],
+      weakTags: [],
+      nextTrainingPlan: {
+        focus: "Practice",
+        drills: [],
+        recommendedStages: ["FORMAL_INTERVIEW"]
+      },
+      candidateSummary: "Legacy report."
+    };
+    const storedReport = {
+      ...serializeCoachingReportForStorage(report)
+    };
+
+    const result = deserializeStoredCoachingReport({
+      ...storedReport,
+      detailsJson: undefined
+    });
+
+    expect(result.details).toBeUndefined();
+    expect(result.candidateSummary).toBe("Legacy report.");
   });
 });
 

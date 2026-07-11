@@ -148,6 +148,7 @@ model CoachingReport {
   weakTags              String
   nextTrainingPlan      String
   candidateSummary      String
+  detailsJson           String          @default("{}")
   createdAt             DateTime        @default(now())
   aiCalls               AiCallLog[]
 }

@@ -12,20 +12,12 @@ export type SerializedCoachingReportForStorage = {
   weakTags: string;
   nextTrainingPlan: string;
   candidateSummary: string;
+  detailsJson?: string;
 };
 
-export type StoredCoachingReportRecord = Pick<
-  SerializedCoachingReportForStorage,
-  | "overallScore"
-  | "subScores"
-  | "perQuestionFeedback"
-  | "expressionAnalysis"
-  | "answerQualityAnalysis"
-  | "strategySuggestions"
-  | "weakTags"
-  | "nextTrainingPlan"
-  | "candidateSummary"
->;
+export type StoredCoachingReportRecord = Omit<SerializedCoachingReportForStorage, "detailsJson"> & {
+  detailsJson?: string | null;
+};
 
 export type SafeDeserializeStoredCoachingReportResult =
   | { ok: true; report: CoachingReportResult }
@@ -33,6 +25,48 @@ export type SafeDeserializeStoredCoachingReportResult =
 
 const stringArraySchema = z.array(z.string());
 const trainingStageTypeSchema = z.enum(trainingStageTypes);
+
+const reportDetailsSchema = z
+  .object({
+    readinessVerdict: z
+      .object({
+        level: z.string(),
+        summary: z.string(),
+        priorityRisk: z.string()
+      })
+      .strict(),
+    scoreExplanations: z.record(z.string()),
+    competencyAssessment: z.array(
+      z
+        .object({
+          competency: z.string(),
+          evidence: z.string(),
+          risk: z.string(),
+          coachingAction: z.string()
+        })
+        .strict()
+    ),
+    priorityActions: z.array(
+      z
+        .object({
+          title: z.string(),
+          reason: z.string(),
+          drill: z.string()
+        })
+        .strict()
+    ),
+    weeklyPlan: z.array(
+      z
+        .object({
+          day: z.number().int().positive(),
+          stage: trainingStageTypeSchema,
+          drill: z.string(),
+          successCriterion: z.string()
+        })
+        .strict()
+    )
+  })
+  .strict();
 
 const coachingReportResultSchema: z.ZodType<CoachingReportResult> = z
   .object({
@@ -53,7 +87,9 @@ const coachingReportResultSchema: z.ZodType<CoachingReportResult> = z
           stage: trainingStageTypeSchema,
           score: z.number().finite(),
           strengths: stringArraySchema,
-          improvements: stringArraySchema
+          improvements: stringArraySchema,
+          answerEvidence: stringArraySchema.optional(),
+          improvementAction: z.string().optional()
         })
         .strict()
     ),
@@ -80,14 +116,13 @@ const coachingReportResultSchema: z.ZodType<CoachingReportResult> = z
         recommendedStages: z.array(trainingStageTypeSchema)
       })
       .strict(),
-    candidateSummary: z.string()
+    candidateSummary: z.string(),
+    details: reportDetailsSchema.optional()
   })
   .strict();
 
-export function serializeCoachingReportForStorage(
-  report: CoachingReportResult
-): SerializedCoachingReportForStorage {
-  return {
+export function serializeCoachingReportForStorage(report: CoachingReportResult): SerializedCoachingReportForStorage {
+  const serialized: SerializedCoachingReportForStorage = {
     overallScore: report.overallScore,
     subScores: JSON.stringify(report.subScores),
     perQuestionFeedback: JSON.stringify(report.perQuestionFeedback),
@@ -98,6 +133,12 @@ export function serializeCoachingReportForStorage(
     nextTrainingPlan: JSON.stringify(report.nextTrainingPlan),
     candidateSummary: report.candidateSummary
   };
+
+  if (report.details) {
+    serialized.detailsJson = JSON.stringify(report.details);
+  }
+
+  return serialized;
 }
 
 function parseStoredJsonField(field: string, value: string): { ok: true; value: unknown } | { ok: false; error: string } {
@@ -140,10 +181,23 @@ export function safeDeserializeStoredCoachingReport(
     parsedFields[field as keyof typeof jsonFields] = parsed.value;
   }
 
+  let details: unknown;
+
+  if (record.detailsJson?.trim() && record.detailsJson.trim() !== "{}") {
+    const parsedDetails = parseStoredJsonField("detailsJson", record.detailsJson);
+
+    if (!parsedDetails.ok) {
+      return { ok: false, error: parsedDetails.error };
+    }
+
+    details = parsedDetails.value;
+  }
+
   const result = coachingReportResultSchema.safeParse({
     overallScore: record.overallScore,
     ...parsedFields,
-    candidateSummary: record.candidateSummary
+    candidateSummary: record.candidateSummary,
+    details
   });
 
   if (!result.success) {

@@ -85,15 +85,38 @@ function buildPerQuestionFeedback(input: CoachingReportInput): CoachingReportRes
   return input.turns.map((turn, index) => {
     const currentStageCount = stageQuestionCounts.get(turn.stage) ?? 0;
     stageQuestionCounts.set(turn.stage, currentStageCount + 1);
+    const answer = turn.answer.trim();
+    const evidence = answer ? [answer.slice(0, 80)] : ["本题没有记录到有效回答内容。"];
 
     return {
       questionId: turn.questionId ?? buildQuestionId(turn.stage, currentStageCount),
       stage: turn.stage,
       score: Math.max(68, 78 - index * 2),
-      strengths: ["能够正面回应问题", "有基本经历支撑"],
-      improvements: ["先给结论，再补充背景和例子", "增加可量化结果"]
+      strengths: ["能够正面回应问题", "具备可展开的真实经历"],
+      improvements: ["先给结论，再补充背景、行动和结果", "增加可量化成果或业务指标"],
+      answerEvidence: evidence,
+      improvementAction: "把这题改写成：一句话结论 + 关键背景 + 个人动作 + 量化结果。"
     };
   });
+}
+
+function buildWeeklyPlan(): NonNullable<CoachingReportResult["details"]>["weeklyPlan"] {
+  const drills = [
+    "重写一个正式面试项目题答案，补充结论和结果数字。",
+    "录制一次 90 秒自我介绍，删掉铺垫性表达。",
+    "准备三组可复用成果指标：增长、效率、质量。",
+    "进行一轮压力追问练习，先复述质疑再回应。",
+    "把一个项目复盘改成 STAR 结构。",
+    "进行一次英文或跨部门协作表达练习。",
+    "完成一轮完整模拟面试并复盘前三个风险点。"
+  ];
+
+  return drills.map((drill, index) => ({
+    day: index + 1,
+    stage: index === 3 ? "PRESSURE_FOLLOW_UP" : "FORMAL_INTERVIEW",
+    drill,
+    successCriterion: "回答中包含明确结论、个人贡献和可验证证据。"
+  }));
 }
 
 export const mockAiProvider: AiProvider = {
@@ -144,7 +167,7 @@ export const mockAiProvider: AiProvider = {
       perQuestionFeedback: buildPerQuestionFeedback(input),
       expressionAnalysis: {
         summary: "回答能够覆盖问题，但开头结论和层次标记还不够稳定。",
-        strongPoints: ["语气自然", "能用真实经历回答"],
+        strongPoints: ["语气自然", "能够用真实经历回答"],
         improvementPoints: ["使用 STAR 或总分总结构", "减少铺垫，先给判断"]
       },
       answerQualityAnalysis: {
@@ -156,10 +179,56 @@ export const mockAiProvider: AiProvider = {
       weakTags: ["表达结构", "结果量化", "压力追问"],
       nextTrainingPlan: {
         focus: "提升回答结构和量化表达",
-        drills: ["每天练习 2 道 STAR 题", "将项目结果改写为数字化表述", "模拟 5 分钟连续追问"],
+        drills: ["每天练习 2 道 STAR 题", "将项目结果改写为数字化表达", "模拟 5 分钟连续追问"],
         recommendedStages: ["FORMAL_INTERVIEW", "PRESSURE_FOLLOW_UP", "EXPERIENCE_DEEP_DIVE"]
       },
-      candidateSummary: `${input.targetRole ?? "Candidate"} shows solid baseline readiness and should focus on structured, evidence-led answers.`
+      candidateSummary: `${input.targetRole ?? "候选人"}具备基础面试能力，但需要增强结构化表达和量化证据。`,
+      details: {
+        readinessVerdict: {
+          level: "NEEDS_PRACTICE",
+          summary: "具备进入真实面试的基础，但建议先完成一轮证据强化训练。",
+          priorityRisk: "量化结果不足，容易在追问中失去说服力。"
+        },
+        scoreExplanations: {
+          expressionStructure: "回答能围绕问题展开，但结论位置不够靠前。",
+          contentRelevance: "经历与目标岗位相关，能支撑基础匹配。",
+          confidence: "表达较稳定，但遇到追问时需要更快组织证据。",
+          pressureHandling: "面对质疑时还需要先确认问题，再用事实回应。",
+          roleFit: "项目经历与岗位能力有连接，但需要把匹配点讲得更直接。"
+        },
+        competencyAssessment: [
+          {
+            competency: "结构化表达",
+            evidence: "能够围绕问题给出经历和行动。",
+            risk: "结论不够前置，面试官需要自行提炼重点。",
+            coachingAction: "每题开头固定使用一句话结论。"
+          },
+          {
+            competency: "证据可信度",
+            evidence: "回答中出现项目经验和协作场景。",
+            risk: "缺少基线、指标、结果数字和个人贡献边界。",
+            coachingAction: "为三个核心项目补齐背景、动作、结果、复盘。"
+          }
+        ],
+        priorityActions: [
+          {
+            title: "补全量化证据",
+            reason: "当前答案能说明经历，但还不足以证明成果强度。",
+            drill: "把一个项目答案改成：基线、动作、结果、复盘。"
+          },
+          {
+            title: "强化压力追问",
+            reason: "正式面试常会追问结果可信度和个人贡献。",
+            drill: "连续回答三轮为什么、怎么证明、如果失败怎么办。"
+          },
+          {
+            title: "压缩开场表达",
+            reason: "过多铺垫会削弱第一印象。",
+            drill: "每道题先用 15 秒讲结论，再展开细节。"
+          }
+        ],
+        weeklyPlan: buildWeeklyPlan()
+      }
     };
   }
 };

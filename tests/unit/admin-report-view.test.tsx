@@ -23,7 +23,9 @@ const report: CoachingReportResult = {
       stage: "WARM_UP",
       score: 86,
       strengths: ["Clear opening"],
-      improvements: ["Add one quantified outcome"]
+      improvements: ["Add one quantified outcome"],
+      answerEvidence: ["I build products that improve retention."],
+      improvementAction: "Add the exact retention baseline and uplift."
     }
   ],
   expressionAnalysis: {
@@ -43,7 +45,44 @@ const report: CoachingReportResult = {
     drills: ["Rewrite two STAR answers"],
     recommendedStages: ["FORMAL_INTERVIEW"]
   },
-  candidateSummary: "Strong baseline with room to sharpen evidence."
+  candidateSummary: "Strong baseline with room to sharpen evidence.",
+  details: {
+    readinessVerdict: {
+      level: "READY_WITH_RISKS",
+      summary: "候选人具备进入正式面试的基础，但证据和追问防守仍需加强。",
+      priorityRisk: "被追问业务结果时，容易因为缺少量化证据而失去说服力。"
+    },
+    scoreExplanations: {
+      expressionStructure: "结构清楚，但结尾缺少明确收束。",
+      contentRelevance: "项目经历与产品经理岗位相关。",
+      confidence: "表达稳定，没有明显慌乱。",
+      pressureHandling: "需要补强被挑战时的数据回应。",
+      roleFit: "经历能映射到增长和留存相关职责。"
+    },
+    competencyAssessment: [
+      {
+        competency: "业务结果表达",
+        evidence: "提到了留存改善相关产品经历。",
+        risk: "没有给出基线、提升幅度或个人贡献边界。",
+        coachingAction: "把每个项目故事改写成背景、动作、数字结果、复盘四段。"
+      }
+    ],
+    priorityActions: [
+      {
+        title: "补全量化证据",
+        reason: "当前回答有经历但缺少可验证结果。",
+        drill: "为两个核心项目补上基线、结果和个人贡献。"
+      }
+    ],
+    weeklyPlan: [
+      {
+        day: 1,
+        stage: "FORMAL_INTERVIEW",
+        drill: "重写一个正式面试项目题答案。",
+        successCriterion: "答案包含结论、动作、结果数字。"
+      }
+    ]
+  }
 };
 
 const sessionWithReport = {
@@ -97,6 +136,12 @@ describe("ReportView", () => {
     expect(markup).toContain("Lead with the business outcome.");
     expect(markup).toContain("metrics");
     expect(markup).toContain("Quantified product stories");
+    expect(markup).toContain("录用风险评估");
+    expect(markup).toContain("胜任力矩阵");
+    expect(markup).toContain("服务跟进建议");
+    expect(markup).toContain("被追问业务结果时");
+    expect(markup).toContain("业务结果表达");
+    expect(markup).toContain("Add the exact retention baseline and uplift.");
     expect(markup).toContain("Introduce yourself.");
     expect(markup).toContain("I build products that improve retention.");
   });

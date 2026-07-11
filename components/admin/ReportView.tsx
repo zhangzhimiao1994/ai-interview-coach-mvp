@@ -78,6 +78,7 @@ export function ReportView({ session }: ReportViewProps) {
   }
 
   const report = reportResult.report;
+  const details = report.details;
 
   return (
     <div className="grid gap-6">
@@ -104,6 +105,43 @@ export function ReportView({ session }: ReportViewProps) {
           </Panel>
         ))}
       </section>
+
+      {details ? (
+        <section className="grid gap-4 lg:grid-cols-[1fr_1.2fr_1fr]">
+          <ReportPanel title="录用风险评估">
+            <p className="text-sm font-medium text-ink">{details.readinessVerdict.summary}</p>
+            <p className="mt-2 text-sm leading-6 text-muted">
+              优先风险：{details.readinessVerdict.priorityRisk}
+            </p>
+            <p className="mt-2 text-xs font-medium text-brand">{details.readinessVerdict.level}</p>
+          </ReportPanel>
+
+          <ReportPanel title="胜任力矩阵">
+            <div className="grid gap-3">
+              {details.competencyAssessment.map((item) => (
+                <div key={item.competency} className="rounded-md border border-line bg-white p-3">
+                  <h3 className="text-sm font-semibold text-ink">{item.competency}</h3>
+                  <p className="mt-1 text-sm leading-6 text-muted">证据：{item.evidence}</p>
+                  <p className="mt-1 text-sm leading-6 text-muted">风险：{item.risk}</p>
+                  <p className="mt-1 text-sm leading-6 text-muted">动作：{item.coachingAction}</p>
+                </div>
+              ))}
+            </div>
+          </ReportPanel>
+
+          <ReportPanel title="服务跟进建议">
+            <div className="grid gap-3">
+              {details.priorityActions.map((action) => (
+                <div key={action.title} className="rounded-md border border-line bg-white p-3">
+                  <h3 className="text-sm font-semibold text-ink">{action.title}</h3>
+                  <p className="mt-1 text-sm leading-6 text-muted">{action.reason}</p>
+                  <p className="mt-2 text-xs leading-5 text-muted">训练：{action.drill}</p>
+                </div>
+              ))}
+            </div>
+          </ReportPanel>
+        </section>
+      ) : null}
 
       <section className="grid gap-4 lg:grid-cols-2">
         <ReportPanel title="Expression analysis">
@@ -141,6 +179,12 @@ export function ReportView({ session }: ReportViewProps) {
                   </div>
                   <ListBlock title="Strengths" items={feedback.strengths} />
                   <ListBlock title="Improvements" items={feedback.improvements} />
+                  <ListBlock title="Answer evidence" items={feedback.answerEvidence ?? []} />
+                  {feedback.improvementAction ? (
+                    <p className="mt-3 text-sm leading-6 text-muted">
+                      Next action: {feedback.improvementAction}
+                    </p>
+                  ) : null}
                 </div>
               );
             })
@@ -167,6 +211,22 @@ export function ReportView({ session }: ReportViewProps) {
           <ListBlock title="Recommended stages" items={report.nextTrainingPlan.recommendedStages} />
         </ReportPanel>
       </section>
+
+      {details ? (
+        <ReportPanel title="七天训练计划">
+          <div className="grid gap-3 md:grid-cols-2">
+            {details.weeklyPlan.map((item) => (
+              <div key={`${item.day}-${item.stage}`} className="rounded-md border border-line bg-white p-3">
+                <p className="text-xs font-medium uppercase text-muted">
+                  Day {item.day} / {item.stage}
+                </p>
+                <p className="mt-2 text-sm font-medium text-ink">{item.drill}</p>
+                <p className="mt-1 text-xs leading-5 text-muted">Success: {item.successCriterion}</p>
+              </div>
+            ))}
+          </div>
+        </ReportPanel>
+      ) : null}
 
       <TranscriptSection turns={session.turns} />
     </div>
