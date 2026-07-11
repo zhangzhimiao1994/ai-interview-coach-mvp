@@ -37,6 +37,14 @@ type SpeechRecognitionLike = {
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
+function isLocalSecureOrigin() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
 function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
   if (typeof window === "undefined") {
     return null;
@@ -51,6 +59,28 @@ function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null 
   return maybeWindow.SpeechRecognition ?? maybeWindow.webkitSpeechRecognition ?? null;
 }
 
+function describeMediaError(error: unknown) {
+  const name = error instanceof DOMException ? error.name : error instanceof Error ? error.name : "";
+
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Chrome 没有拿到摄像头或麦克风权限。请点地址栏左侧的站点设置，允许摄像头和麦克风后刷新页面再试。";
+  }
+
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "没有检测到可用的摄像头或麦克风。请确认电脑已连接设备，并且系统隐私设置允许浏览器访问。";
+  }
+
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "摄像头或麦克风可能正被其他软件占用。请关闭会议软件、录屏工具或系统相机后重试。";
+  }
+
+  if (name === "OverconstrainedError") {
+    return "当前摄像头不支持请求的分辨率。请换一个摄像头，或稍后使用默认画质重试。";
+  }
+
+  return "没有成功连接摄像头或麦克风。请检查浏览器权限、系统隐私设置和设备连接后重试。";
+}
+
 export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -60,7 +90,7 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
   const [mediaState, setMediaState] = useState<MediaState>("idle");
   const [speechState, setSpeechState] = useState<SpeechState>("idle");
   const [meter, setMeter] = useState(0);
-  const [message, setMessage] = useState("请先开启权限，手机浏览器会弹出摄像头和麦克风授权。");
+  const [message, setMessage] = useState("请先开启权限，Chrome 会弹出电脑摄像头和麦克风授权。");
 
   useEffect(() => {
     return () => {
@@ -70,19 +100,28 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
   }, []);
 
   async function startMedia() {
-    if (!navigator.mediaDevices?.getUserMedia) {
+    if (typeof window !== "undefined" && !window.isSecureContext && !isLocalSecureOrigin()) {
       setMediaState("unsupported");
-      setMessage("当前浏览器不支持摄像头/麦克风调用，请使用手机 Chrome、Safari 或微信外部浏览器打开 HTTPS 地址。");
+      setMessage(
+        "当前页面不是安全来源，Chrome 不会开放摄像头和麦克风权限。请使用 HTTPS 公网地址，或在电脑本机打开 http://localhost:3000 调试。"
+      );
       return;
     }
 
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMediaState("unsupported");
+      setMessage("当前浏览器不支持摄像头/麦克风调用。请使用新版 Chrome、Edge 或 Safari，并通过 HTTPS 或 localhost 打开。");
+      return;
+    }
+
+    stopMedia();
     setMediaState("requesting");
-    setMessage("正在请求摄像头和麦克风权限...");
+    setMessage("正在请求电脑摄像头和麦克风权限...");
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 960 } },
-        audio: { echoCancellation: true, noiseSuppression: true }
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
       });
 
       streamRef.current = stream;
@@ -90,11 +129,11 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
         videoRef.current.srcObject = stream;
       }
       setMediaState("ready");
-      setMessage("摄像头和麦克风已连接。你可以开始模拟回答。");
+      setMessage("摄像头和麦克风已连接。你可以开始模拟回答，手机访问时也会使用当前设备的摄像头和麦克风。");
       startAudioMeter(stream);
-    } catch {
+    } catch (error) {
       setMediaState("blocked");
-      setMessage("没有拿到摄像头或麦克风权限。请在浏览器地址栏权限设置里允许后重试。");
+      setMessage(describeMediaError(error));
     }
   }
 
@@ -163,7 +202,7 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
     };
     recognition.onerror = () => {
       setSpeechState("idle");
-      setMessage("语音识别中断了，可以重新开始语音回答，或直接手动输入。");
+      setMessage("语音识别中断了。可以重新开始语音回答，或直接手动输入。");
     };
 
     recognitionRef.current = recognition;
@@ -182,14 +221,18 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
   const mediaBlocked = mediaState === "blocked" || mediaState === "unsupported";
 
   return (
-    <section className="rounded-lg border border-line bg-panel p-4 shadow-sm" aria-label="手机摄像头和麦克风">
+    <section className="rounded-lg border border-line bg-panel p-4 shadow-sm" aria-label="电脑摄像头与麦克风">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-brand">手机摄像头和麦克风</p>
-          <h2 className="mt-1 text-lg font-semibold text-ink">自拍视频预览</h2>
+          <p className="text-sm font-medium text-brand">电脑摄像头与麦克风</p>
+          <h2 className="mt-1 text-lg font-semibold text-ink">视频预览</h2>
         </div>
         <span className="inline-flex items-center gap-2 rounded-md bg-slate-100 px-2 py-1 text-xs text-muted">
-          {mediaReady ? <Video className="h-3.5 w-3.5" aria-hidden="true" /> : <VideoOff className="h-3.5 w-3.5" aria-hidden="true" />}
+          {mediaReady ? (
+            <Video className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <VideoOff className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
           {mediaReady ? "已连接" : mediaState === "requesting" ? "请求中" : "未连接"}
         </span>
       </div>
@@ -202,11 +245,11 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
             autoPlay
             muted
             playsInline
-            aria-label="候选人自拍视频预览"
+            aria-label="候选人视频预览"
           />
           {!mediaReady ? (
             <div className="absolute inset-0 grid place-items-center px-4 text-center text-sm text-slate-200">
-              开启后这里会显示你的手机前置摄像头画面
+              开启后这里会显示当前摄像头画面
             </div>
           ) : null}
         </div>
@@ -215,7 +258,11 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
           <div className="rounded-md border border-line bg-white p-3">
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="inline-flex items-center gap-2 font-medium text-ink">
-                {mediaReady ? <Mic className="h-4 w-4 text-emerald-600" aria-hidden="true" /> : <MicOff className="h-4 w-4 text-muted" aria-hidden="true" />}
+                {mediaReady ? (
+                  <Mic className="h-4 w-4 text-emerald-600" aria-hidden="true" />
+                ) : (
+                  <MicOff className="h-4 w-4 text-muted" aria-hidden="true" />
+                )}
                 麦克风电平
               </span>
               <span className="text-xs text-muted">{meter}%</span>
@@ -230,7 +277,7 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
           <div className="flex flex-wrap gap-3">
             <Button className="gap-2" disabled={mediaState === "requesting"} onClick={startMedia}>
               <Camera className="h-4 w-4" aria-hidden="true" />
-              {mediaReady ? "重新开启设备" : "开启摄像头和麦克风"}
+              {mediaReady ? "重新检测设备" : "开启摄像头和麦克风"}
             </Button>
             <Button
               className="gap-2"
@@ -238,7 +285,11 @@ export function CandidateMediaPanel({ onTranscript }: CandidateMediaPanelProps) 
               variant="secondary"
               onClick={speechState === "listening" ? stopSpeech : startSpeech}
             >
-              {speechState === "listening" ? <Square className="h-4 w-4" aria-hidden="true" /> : <Play className="h-4 w-4" aria-hidden="true" />}
+              {speechState === "listening" ? (
+                <Square className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Play className="h-4 w-4" aria-hidden="true" />
+              )}
               {speechState === "listening" ? "停止语音回答" : "开始语音回答"}
             </Button>
           </div>
