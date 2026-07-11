@@ -149,4 +149,104 @@ describe("AI service API routes", () => {
       include: expect.any(Object)
     });
   });
+
+  it("sets an existing model as the default for its capability", async () => {
+    vi.resetModules();
+    const prisma = {
+      $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "model-2",
+          capability: "INTERVIEW_FOLLOW_UP"
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        update: vi.fn().mockResolvedValue({
+          id: "model-2",
+          providerId: "provider-1",
+          displayName: "DeepSeek Follow-up",
+          modelName: "deepseek-chat",
+          capability: "INTERVIEW_FOLLOW_UP",
+          temperature: 0.4,
+          maxTokens: 1200,
+          timeoutMs: 30000,
+          costNote: null,
+          enabled: true,
+          isDefault: true,
+          provider: {
+            id: "provider-1",
+            displayName: "DeepSeek",
+            providerType: "OPENAI_COMPATIBLE",
+            enabled: true
+          }
+        })
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/model-2", {
+        method: "PATCH",
+        body: JSON.stringify({ isDefault: true })
+      }),
+      { params: Promise.resolve({ modelId: "model-2" }) }
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(prisma.aiModelConfig.updateMany).toHaveBeenCalledWith({
+      where: { capability: "INTERVIEW_FOLLOW_UP" },
+      data: { isDefault: false }
+    });
+    expect(prisma.aiModelConfig.update).toHaveBeenCalledWith({
+      where: { id: "model-2" },
+      data: {
+        isDefault: true,
+        enabled: true
+      },
+      include: expect.any(Object)
+    });
+    expect(payload.model.isDefault).toBe(true);
+  });
+
+  it("deletes a model configuration", async () => {
+    vi.resetModules();
+    const prisma = {
+      aiModelConfig: {
+        delete: vi.fn().mockResolvedValue({
+          id: "model-3",
+          providerId: "provider-1",
+          displayName: "Old model",
+          modelName: "old-model",
+          capability: "REPORT_ANALYSIS",
+          temperature: 0.4,
+          maxTokens: 1200,
+          timeoutMs: 30000,
+          costNote: null,
+          enabled: false,
+          isDefault: false,
+          provider: {
+            id: "provider-1",
+            displayName: "DeepSeek",
+            providerType: "OPENAI_COMPATIBLE",
+            enabled: true
+          }
+        })
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.DELETE(new Request("http://localhost/api/ai-services/models/model-3"), {
+      params: Promise.resolve({ modelId: "model-3" })
+    });
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(prisma.aiModelConfig.delete).toHaveBeenCalledWith({
+      where: { id: "model-3" },
+      include: expect.any(Object)
+    });
+    expect(payload.model.id).toBe("model-3");
+  });
 });

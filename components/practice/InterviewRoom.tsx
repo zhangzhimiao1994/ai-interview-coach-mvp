@@ -28,6 +28,13 @@ type StoredSession = {
 
 type SaveState = "idle" | "saving" | "completing";
 
+type FollowUpCoaching = {
+  instantFeedback: string;
+  followUpQuestion: string;
+  suggestedAnswerStructure: string[];
+  riskTags: string[];
+};
+
 function storageKey(taskId: string) {
   return `practice:${taskId}:session`;
 }
@@ -111,6 +118,8 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   const [state, setState] = useState<SaveState>("idle");
   const [message, setMessage] = useState("");
   const [completedQuestions, setCompletedQuestions] = useState<string[]>([]);
+  const [coaching, setCoaching] = useState<FollowUpCoaching | null>(null);
+  const [activeFollowUp, setActiveFollowUp] = useState<string | null>(null);
 
   useEffect(() => {
     let raw: string | null = null;
@@ -154,6 +163,8 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
       return;
     }
 
+    const submittedQuestion = activeFollowUp || currentQuestion.prompt;
+
     setState("saving");
     setMessage("");
 
@@ -163,14 +174,27 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           stage: currentQuestion.stage,
-          question: currentQuestion.prompt,
+          question: submittedQuestion,
           answer
         })
       });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        coaching?: FollowUpCoaching;
+      } | null;
 
       if (!response.ok) {
         setMessage(payload?.error || "Could not save this answer.");
+        return;
+      }
+
+      const nextCoaching = payload?.coaching ?? null;
+
+      if (!activeFollowUp && nextCoaching?.followUpQuestion) {
+        setCoaching(nextCoaching);
+        setActiveFollowUp(nextCoaching.followUpQuestion);
+        setAnswer("");
+        setMessage("AI 已生成追问，请继续回答这一问。");
         return;
       }
 
@@ -193,6 +217,8 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
       }
 
       setCompletedQuestions(nextCompletedQuestions);
+      setCoaching(nextCoaching);
+      setActiveFollowUp(null);
       setAnswer("");
       setCurrentIndex(nextIndex);
     } catch {
@@ -245,6 +271,7 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   }
 
   const allAnswered = questions.length > 0 && completedQuestions.length >= questions.length;
+  const displayPrompt = activeFollowUp || currentQuestion?.prompt || "";
 
   return (
     <div className="grid gap-6 xl:grid-cols-[320px_1fr]">
@@ -274,7 +301,7 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
             <DigitalInterviewerVideo
               interviewerName="AI 面试官"
               stage={stageDisplayName(currentQuestion.stage)}
-              prompt={currentQuestion.prompt}
+              prompt={displayPrompt}
               status={allAnswered ? "listening" : "speaking"}
             />
 
@@ -289,9 +316,34 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
                 <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-700">录入后进入下一问</span>
               </div>
 
-              {currentQuestion.followUps.length > 0 ? (
+              {activeFollowUp || currentQuestion.followUps.length > 0 ? (
                 <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">
-                  可能追问：{currentQuestion.followUps[0]}
+                  {activeFollowUp ? "当前 AI 追问" : "可能追问"}：
+                  {activeFollowUp || currentQuestion.followUps[0]}
+                </div>
+              ) : null}
+
+              {coaching ? (
+                <div className="mt-4 grid gap-3 rounded-md border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-950">
+                  <div>
+                    <p className="font-semibold text-blue-900">AI 即时反馈</p>
+                    <p className="mt-1">{coaching.instantFeedback}</p>
+                  </div>
+                  {coaching.suggestedAnswerStructure.length > 0 ? (
+                    <div>
+                      <p className="font-semibold text-blue-900">建议回答结构</p>
+                      <p className="mt-1">{coaching.suggestedAnswerStructure.join(" → ")}</p>
+                    </div>
+                  ) : null}
+                  {coaching.riskTags.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {coaching.riskTags.map((tag) => (
+                        <span key={tag} className="rounded-md bg-white px-2 py-1 text-xs text-blue-800">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -312,7 +364,11 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
               <div className="mt-5 flex flex-wrap gap-3">
                 <Button className="gap-2" disabled={state !== "idle" || allAnswered} onClick={submitAnswer}>
                   <Send className="h-4 w-4" aria-hidden="true" />
-                  {state === "saving" ? "保存中..." : "提交回答，进入下一问"}
+                  {state === "saving"
+                    ? "保存中..."
+                    : activeFollowUp
+                      ? "提交追问回答，进入下一问"
+                      : "提交回答，等待 AI 追问"}
                 </Button>
                 <Button
                   className="gap-2"

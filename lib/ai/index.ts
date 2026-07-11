@@ -26,6 +26,8 @@ export type {
   AiProvider,
   CoachingReportInput,
   CoachingReportResult,
+  FollowUpCoachingInput,
+  FollowUpCoachingResult,
   SessionTurnInput,
   TrainingOutline,
   TrainingOutlineRequest,

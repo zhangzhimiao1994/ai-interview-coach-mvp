@@ -4,6 +4,8 @@ import type {
   AiProvider,
   CoachingReportInput,
   CoachingReportResult,
+  FollowUpCoachingInput,
+  FollowUpCoachingResult,
   TrainingOutline,
   TrainingOutlineRequest,
   TrainingQuestion
@@ -110,6 +112,22 @@ export const mockAiProvider: AiProvider = {
       stages,
       estimatedMinutes: questions.length * 2,
       questions
+    };
+  },
+
+  async generateFollowUpCoaching(input: FollowUpCoachingInput): Promise<FollowUpCoachingResult> {
+    const answerLength = input.currentTurn.answer.trim().length;
+    const followUpQuestion =
+      answerLength < 40
+        ? "你刚才的回答还比较短。能不能补充一个具体场景、你的行动和最终结果？"
+        : "如果面试官继续追问结果可信度，你会用哪个数据或事实证明这个成果？";
+
+    return {
+      instantFeedback:
+        "回答已记录。建议下一句先给结论，再用 STAR 结构补充背景、行动和结果，尽量加入可量化证据。",
+      followUpQuestion,
+      suggestedAnswerStructure: ["一句话结论", "关键背景", "你的具体行动", "量化结果或复盘"],
+      riskTags: answerLength < 40 ? ["回答偏短", "细节不足"] : ["量化证据", "岗位映射"]
     };
   },
 

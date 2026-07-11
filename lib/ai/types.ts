@@ -37,6 +37,21 @@ export type SessionTurnInput = {
   durationSeconds?: number;
 };
 
+export type FollowUpCoachingInput = {
+  sessionId?: string;
+  targetRole?: string;
+  targetCompany?: string;
+  currentTurn: SessionTurnInput;
+  previousTurns?: SessionTurnInput[];
+};
+
+export type FollowUpCoachingResult = {
+  instantFeedback: string;
+  followUpQuestion: string;
+  suggestedAnswerStructure: string[];
+  riskTags: string[];
+};
+
 export type CoachingReportInput = {
   sessionId?: string;
   targetRole?: string;
@@ -82,5 +97,6 @@ export type CoachingReportResult = {
 
 export type AiProvider = {
   generateTrainingOutline(request: TrainingOutlineRequest): Promise<TrainingOutline>;
+  generateFollowUpCoaching(input: FollowUpCoachingInput): Promise<FollowUpCoachingResult>;
   generateCoachingReport(input: CoachingReportInput): Promise<CoachingReportResult>;
 };

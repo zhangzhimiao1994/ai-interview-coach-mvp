@@ -38,5 +38,15 @@ export function postErrorResponse(error: unknown) {
     );
   }
 
+  if (error instanceof Error && error.message.includes("AI_CONFIG_SECRET must be changed")) {
+    return NextResponse.json(
+      {
+        error: "AI service encryption is not safe",
+        message: "AI_CONFIG_SECRET is still using the production placeholder. Set a unique secret before saving API keys."
+      },
+      { status: 400 }
+    );
+  }
+
   return NextResponse.json({ error: "Internal server error" }, { status: 500 });
 }

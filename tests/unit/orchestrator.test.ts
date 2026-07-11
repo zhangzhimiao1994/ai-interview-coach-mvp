@@ -24,6 +24,7 @@ describe("createAiOrchestrator", () => {
     };
     const provider: AiProvider = {
       generateTrainingOutline: vi.fn().mockResolvedValue(providerResult),
+      generateFollowUpCoaching: vi.fn(),
       generateCoachingReport: vi.fn()
     };
     const request = {
@@ -38,6 +39,35 @@ describe("createAiOrchestrator", () => {
     expect(provider.generateTrainingOutline).toHaveBeenCalledTimes(1);
     expect(provider.generateTrainingOutline).toHaveBeenCalledWith(request);
     expect(outline).toBe(providerResult);
+  });
+
+  it("delegates live follow-up coaching to the configured provider", async () => {
+    const providerResult = {
+      instantFeedback: "先给结论，再补充例子。",
+      followUpQuestion: "这个结果如何量化？",
+      suggestedAnswerStructure: ["结论", "行动", "结果"],
+      riskTags: ["量化不足"]
+    };
+    const provider: AiProvider = {
+      generateTrainingOutline: vi.fn(),
+      generateFollowUpCoaching: vi.fn().mockResolvedValue(providerResult),
+      generateCoachingReport: vi.fn()
+    };
+    const input = {
+      sessionId: "session-1",
+      currentTurn: {
+        stage: "WARM_UP" as const,
+        question: "Introduce yourself.",
+        answer: "I build growth products."
+      }
+    };
+
+    const orchestrator = createAiOrchestrator({ provider });
+    const coaching = await orchestrator.generateFollowUpCoaching(input);
+
+    expect(provider.generateFollowUpCoaching).toHaveBeenCalledTimes(1);
+    expect(provider.generateFollowUpCoaching).toHaveBeenCalledWith(input);
+    expect(coaching).toBe(providerResult);
   });
 
   it("delegates coaching report generation to the configured provider with exact input", async () => {
@@ -72,6 +102,7 @@ describe("createAiOrchestrator", () => {
     };
     const provider: AiProvider = {
       generateTrainingOutline: vi.fn(),
+      generateFollowUpCoaching: vi.fn(),
       generateCoachingReport: vi.fn().mockResolvedValue(providerResult)
     };
     const input = {

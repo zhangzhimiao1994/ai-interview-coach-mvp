@@ -3,6 +3,8 @@ import type {
   AiProvider,
   CoachingReportInput,
   CoachingReportResult,
+  FollowUpCoachingInput,
+  FollowUpCoachingResult,
   TrainingOutline,
   TrainingOutlineRequest
 } from "./types";
@@ -85,6 +87,13 @@ const coachingReportSchema: z.ZodType<CoachingReportResult> = z.object({
     recommendedStages: z.array(trainingStageSchema)
   }),
   candidateSummary: z.string()
+});
+
+const followUpCoachingSchema: z.ZodType<FollowUpCoachingResult> = z.object({
+  instantFeedback: z.string(),
+  followUpQuestion: z.string(),
+  suggestedAnswerStructure: z.array(z.string()),
+  riskTags: z.array(z.string())
 });
 
 function chatCompletionsEndpoint(baseUrl: string) {
@@ -174,6 +183,31 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
       ]);
 
       return trainingOutlineSchema.parse(result);
+    },
+    async generateFollowUpCoaching(input: FollowUpCoachingInput) {
+      const result = await requestJson(config, [
+        {
+          role: "system",
+          content:
+            "You are a live AI interviewer and interview coach. Return strict JSON only, with no Markdown. Give concise, actionable coaching and one natural follow-up question in the candidate's language."
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            task: "generateFollowUpCoaching",
+            capability: "INTERVIEW_FOLLOW_UP",
+            input,
+            requiredShape: {
+              instantFeedback: "short coaching feedback string",
+              followUpQuestion: "one next interviewer question",
+              suggestedAnswerStructure: "string[]",
+              riskTags: "string[]"
+            }
+          })
+        }
+      ]);
+
+      return followUpCoachingSchema.parse(result);
     },
     async generateCoachingReport(input: CoachingReportInput) {
       const result = await requestJson(config, [

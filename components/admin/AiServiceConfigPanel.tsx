@@ -1,6 +1,6 @@
 "use client";
 
-import { Cpu, KeyRound, Plus, Route, Server } from "lucide-react";
+import { Cpu, KeyRound, Plus, Route, Server, Star, Trash2 } from "lucide-react";
 import type React from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
@@ -75,6 +75,17 @@ const capabilityLabels: Record<AiCapability, string> = {
   DIGITAL_HUMAN_VIDEO: "数字人视频"
 };
 
+const providerBaseUrlPresets: Partial<Record<AiProviderType, string>> = {
+  OPENAI: "https://api.openai.com/v1",
+  OPENAI_COMPATIBLE: "https://api.example.com/v1",
+  DEEPSEEK: "https://api.deepseek.com",
+  TONGYI: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  VOLCANO_ARK: "https://ark.cn-beijing.volces.com/api/v3",
+  ZHIPU: "https://open.bigmodel.cn/api/paas/v4",
+  MINIMAX: "https://api.minimax.chat/v1",
+  TENCENT: "https://api.hunyuan.cloud.tencent.com/v1"
+};
+
 function apiErrorMessage(result: ApiResult<unknown> | null, fallback: string) {
   if (!result) {
     return fallback;
@@ -100,6 +111,8 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
   const [modelMessage, setModelMessage] = useState("");
   const [savingProvider, setSavingProvider] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
+  const [providerType, setProviderType] = useState<AiProviderType>("OPENAI_COMPATIBLE");
+  const [baseUrl, setBaseUrl] = useState(providerBaseUrlPresets.OPENAI_COMPATIBLE ?? "");
 
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
 
@@ -111,8 +124,8 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
     const form = new FormData(event.currentTarget);
     const payload = {
       displayName: String(form.get("displayName") || ""),
-      providerType: String(form.get("providerType") || "OPENAI_COMPATIBLE"),
-      baseUrl: String(form.get("baseUrl") || ""),
+      providerType,
+      baseUrl,
       apiKey: String(form.get("apiKey") || ""),
       enabled: form.get("enabled") === "on",
       notes: String(form.get("notes") || "")
@@ -122,6 +135,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       const response = await fetch("/api/ai-services/providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify(payload)
       });
       const result = (await response.json().catch(() => null)) as ApiResult<{ provider?: Provider }> | null;
@@ -133,6 +147,8 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
 
       setProviders((current) => [result.provider!, ...current]);
       event.currentTarget.reset();
+      setProviderType("OPENAI_COMPATIBLE");
+      setBaseUrl(providerBaseUrlPresets.OPENAI_COMPATIBLE ?? "");
       setProviderMessage("服务商已保存，密钥已加密存储。");
     } catch {
       setProviderMessage("服务不可达，请稍后重试。");
@@ -164,6 +180,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       const response = await fetch("/api/ai-services/models", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify(payload)
       });
       const result = (await response.json().catch(() => null)) as ApiResult<{ model?: ModelConfig }> | null;
@@ -191,6 +208,64 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
     }
   }
 
+  async function patchModel(modelId: string, payload: { enabled?: boolean; isDefault?: boolean }) {
+    setModelMessage("");
+
+    try {
+      const response = await fetch(`/api/ai-services/models/${modelId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(payload)
+      });
+      const result = (await response.json().catch(() => null)) as ApiResult<{ model?: ModelConfig }> | null;
+
+      if (!response.ok || !result?.model) {
+        setModelMessage(apiErrorMessage(result, "模型更新失败。"));
+        return;
+      }
+
+      setModels((current) =>
+        current.map((model) => {
+          if (result.model!.isDefault && model.capability === result.model!.capability && model.id !== result.model!.id) {
+            return { ...model, isDefault: false };
+          }
+
+          return model.id === result.model!.id ? result.model! : model;
+        })
+      );
+      setModelMessage("模型配置已更新。");
+    } catch {
+      setModelMessage("服务不可达，请稍后重试。");
+    }
+  }
+
+  async function deleteModel(model: ModelConfig) {
+    setModelMessage("");
+
+    if (!window.confirm(`确认删除模型「${model.displayName}」吗？`)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/ai-services/models/${model.id}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const result = (await response.json().catch(() => null)) as ApiResult<{ model?: ModelConfig }> | null;
+
+      if (!response.ok) {
+        setModelMessage(apiErrorMessage(result, "模型删除失败。"));
+        return;
+      }
+
+      setModels((current) => current.filter((item) => item.id !== model.id));
+      setModelMessage("模型已删除。");
+    } catch {
+      setModelMessage("服务不可达，请稍后重试。");
+    }
+  }
+
   return (
     <div className="grid gap-6">
       <section className="grid gap-4 lg:grid-cols-[1fr_1fr]">
@@ -203,7 +278,16 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
             <Field label="服务商名称" name="displayName" placeholder="DeepSeek / 通义千问 / OpenAI" required />
             <label className="grid gap-2 text-sm">
               <span className="font-medium text-ink">服务商类型</span>
-              <select name="providerType" className="rounded-md border border-line px-3 py-2">
+              <select
+                name="providerType"
+                className="rounded-md border border-line px-3 py-2"
+                value={providerType}
+                onChange={(event) => {
+                  const nextType = event.target.value as AiProviderType;
+                  setProviderType(nextType);
+                  setBaseUrl(providerBaseUrlPresets[nextType] ?? "");
+                }}
+              >
                 {aiProviderTypes.map((type) => (
                   <option key={type} value={type}>
                     {providerTypeLabels[type]}
@@ -211,7 +295,13 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                 ))}
               </select>
             </label>
-            <Field label="Base URL" name="baseUrl" placeholder="https://api.example.com/v1" />
+            <Field
+              label="Base URL"
+              name="baseUrl"
+              placeholder="https://api.example.com/v1"
+              value={baseUrl}
+              onChange={(event) => setBaseUrl(event.target.value)}
+            />
             <Field label="API Key" name="apiKey" type="password" placeholder="保存后仅显示掩码" />
             <Field label="备注" name="notes" placeholder="适合报告分析、备用模型等" />
             <label className="flex items-center gap-2 text-sm text-ink">
@@ -333,6 +423,25 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                   <span>{model.timeoutMs} ms</span>
                 </div>
                 {model.costNote ? <p className="mt-2 text-xs text-muted">{model.costNote}</p> : null}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {!model.isDefault ? (
+                    <Button className="min-h-8 gap-1 px-3 py-1 text-xs" variant="secondary" onClick={() => patchModel(model.id, { isDefault: true })}>
+                      <Star className="h-3.5 w-3.5" aria-hidden="true" />
+                      设为默认
+                    </Button>
+                  ) : null}
+                  <Button
+                    className="min-h-8 px-3 py-1 text-xs"
+                    variant="secondary"
+                    onClick={() => patchModel(model.id, { enabled: !model.enabled })}
+                  >
+                    {model.enabled ? "停用" : "启用"}
+                  </Button>
+                  <Button className="min-h-8 gap-1 px-3 py-1 text-xs" variant="ghost" onClick={() => deleteModel(model)}>
+                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    删除
+                  </Button>
+                </div>
               </div>
             ))}
             {models.length === 0 ? <p className="text-sm text-muted">还没有配置模型。</p> : null}

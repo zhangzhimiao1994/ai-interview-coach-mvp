@@ -2,7 +2,7 @@ import { decryptSecret, readAiConfigSecret, type EncryptedSecret } from "@/lib/d
 import { findDefaultAiModel } from "./configResolver";
 import { mockAiProvider } from "./mockProvider";
 import { createOpenAiCompatibleProvider } from "./openAiCompatibleProvider";
-import type { AiProvider, CoachingReportInput, TrainingOutlineRequest } from "./types";
+import type { AiProvider, CoachingReportInput, FollowUpCoachingInput, TrainingOutlineRequest } from "./types";
 
 type ConfiguredModel = NonNullable<Awaited<ReturnType<typeof findDefaultAiModel>>>;
 
@@ -59,7 +59,7 @@ function providerForModel(model: ConfiguredModel): AiProvider | null {
 
 async function withFallback<T>(
   findModel: typeof findDefaultAiModel,
-  capability: "INTERVIEW_OUTLINE" | "REPORT_ANALYSIS",
+  capability: "INTERVIEW_OUTLINE" | "INTERVIEW_FOLLOW_UP" | "REPORT_ANALYSIS",
   fallbackProvider: AiProvider,
   invoke: (provider: AiProvider) => Promise<T>
 ) {
@@ -81,6 +81,11 @@ export function createDbConfiguredAiProvider({
     async generateTrainingOutline(request: TrainingOutlineRequest) {
       return withFallback(findModel, "INTERVIEW_OUTLINE", fallbackProvider, (provider) =>
         provider.generateTrainingOutline(request)
+      );
+    },
+    async generateFollowUpCoaching(input: FollowUpCoachingInput) {
+      return withFallback(findModel, "INTERVIEW_FOLLOW_UP", fallbackProvider, (provider) =>
+        provider.generateFollowUpCoaching(input)
       );
     },
     async generateCoachingReport(input: CoachingReportInput) {

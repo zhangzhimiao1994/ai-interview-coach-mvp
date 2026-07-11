@@ -29,6 +29,7 @@ describe("DB configured AI provider", () => {
         estimatedMinutes: 2,
         questions: []
       }),
+      generateFollowUpCoaching: vi.fn(),
       generateCoachingReport: vi.fn()
     };
     const provider = createDbConfiguredAiProvider({

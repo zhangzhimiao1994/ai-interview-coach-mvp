@@ -92,12 +92,13 @@ async function loadRoutes() {
       upsert: vi.fn()
     },
     aiCallLog: {
-      create: vi.fn()
+      create: vi.fn().mockResolvedValue({})
     }
   };
 
   const aiOrchestrator = {
     generateTrainingOutline: vi.fn(),
+    generateFollowUpCoaching: vi.fn(),
     generateCoachingReport: vi.fn()
   };
 
@@ -214,6 +215,75 @@ describe("session API routes", () => {
     expect(body).toEqual({ error: "Session is not accepting answers" });
     expect(prisma.sessionTurn.create).not.toHaveBeenCalled();
     expect(prisma.trainingSession.update).not.toHaveBeenCalled();
+  });
+
+  it("generates live AI follow-up coaching when saving an answer", async () => {
+    const { prisma, aiOrchestrator, answerRoute } = await loadRoutes();
+    const coaching = {
+      instantFeedback: "回答有相关经历，但需要先给结论。",
+      followUpQuestion: "这个项目最终带来了什么可量化结果？",
+      suggestedAnswerStructure: ["结论", "行动", "结果"],
+      riskTags: ["量化不足"]
+    };
+
+    prisma.trainingSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      status: "IN_PROGRESS",
+      task: {
+        id: "task-1",
+        targetRole: "Product Manager",
+        targetCompany: "Acme"
+      },
+      turns: []
+    });
+    prisma.sessionTurn.findFirst.mockResolvedValue(null);
+    aiOrchestrator.generateFollowUpCoaching.mockResolvedValue(coaching);
+    prisma.sessionTurn.create.mockResolvedValue({
+      id: "turn-1",
+      sessionId: "session-1",
+      stage: "WARM_UP",
+      question: "Question?",
+      answer: "Answer.",
+      feedback: JSON.stringify(coaching)
+    });
+    prisma.trainingSession.update.mockResolvedValue({ id: "session-1", currentStage: "WARM_UP" });
+
+    const response = await answerRoute.POST(
+      jsonRequest({ stage: "WARM_UP", question: "Question?", answer: "Answer." }),
+      {
+        params: Promise.resolve({ sessionId: "session-1" })
+      }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(aiOrchestrator.generateFollowUpCoaching).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      targetRole: "Product Manager",
+      targetCompany: "Acme",
+      currentTurn: {
+        stage: "WARM_UP",
+        question: "Question?",
+        answer: "Answer."
+      },
+      previousTurns: []
+    });
+    expect(prisma.sessionTurn.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        feedback: JSON.stringify(coaching)
+      })
+    });
+    expect(prisma.aiCallLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          taskId: "task-1",
+          sessionId: "session-1",
+          capability: "INTERVIEW_FOLLOW_UP",
+          success: true
+        })
+      })
+    );
+    expect(body.coaching).toEqual(coaching);
   });
 
   it("generates and stores a report when completing a session", async () => {
