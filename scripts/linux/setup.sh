@@ -27,7 +27,7 @@ mkdir -p data
 
 npm ci
 npm run db:generate
-npm run db:push
+npm run db:migrate:deploy
 
 if [ "${RUN_DB_SEED:-false}" = "true" ]; then
   npm run db:seed

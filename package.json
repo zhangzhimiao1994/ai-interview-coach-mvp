@@ -12,6 +12,7 @@
     "test:e2e": "node scripts/run-e2e.mjs",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
+    "db:migrate:deploy": "prisma migrate deploy",
     "db:seed": "tsx lib/db/seed.ts",
     "linux:setup": "sh scripts/linux/setup.sh",
     "linux:migrate": "sh scripts/linux/migrate.sh",

@@ -11,7 +11,7 @@ if [ -f .env ]; then
 fi
 
 npm run db:generate
-npm run db:push
+npm run db:migrate:deploy
 
 if [ "${RUN_DB_SEED:-false}" = "true" ]; then
   npm run db:seed

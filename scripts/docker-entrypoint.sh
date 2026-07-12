@@ -3,11 +3,8 @@ set -eu
 
 mkdir -p /app/data
 
-echo "Preparing Prisma client..."
-npx prisma generate
-
-echo "Applying database schema..."
-npx prisma db push --skip-generate
+echo "Applying database migrations..."
+npm run db:migrate:deploy
 
 if [ "${RUN_DB_SEED:-false}" = "true" ]; then
   echo "Seeding database..."

@@ -10,6 +10,11 @@ import {
   type AiCapability,
   type AiProviderType
 } from "@/lib/domain/aiServiceConstants";
+import {
+  modelRecommendationGroups,
+  modelRecommendationLastUpdated,
+  type ModelRecommendation
+} from "@/lib/domain/modelRecommendations";
 
 type Provider = {
   id: string;
@@ -67,13 +72,18 @@ const providerTypeLabels: Record<AiProviderType, string> = {
 };
 
 const capabilityLabels: Record<AiCapability, string> = {
+  INTERVIEW_DIALOGUE: "实时面试对话",
   INTERVIEW_OUTLINE: "面试提纲生成",
   INTERVIEW_FOLLOW_UP: "面试追问",
   REPORT_ANALYSIS: "报告分析",
+  COMPANY_RESEARCH: "公司/岗位研究",
   SPEECH_TO_TEXT: "语音识别",
   TEXT_TO_SPEECH: "语音合成",
+  DIGITAL_HUMAN_REALTIME: "实时数字人",
   DIGITAL_HUMAN_VIDEO: "数字人视频",
-  VISION_BEHAVIOR_ANALYSIS: "神态/行为分析"
+  VISION_BEHAVIOR_ANALYSIS: "神态/行为分析",
+  EMBEDDING: "知识库向量",
+  SAFETY_REVIEW: "安全复核"
 };
 
 const providerBaseUrlPresets: Partial<Record<AiProviderType, string>> = {
@@ -85,6 +95,16 @@ const providerBaseUrlPresets: Partial<Record<AiProviderType, string>> = {
   ZHIPU: "https://open.bigmodel.cn/api/paas/v4",
   MINIMAX: "https://api.minimax.chat/v1",
   TENCENT: "https://api.hunyuan.cloud.tencent.com/v1"
+};
+
+const initialModelDraft = {
+  displayName: "",
+  modelName: "",
+  capability: "INTERVIEW_OUTLINE" as AiCapability,
+  temperature: 0.4,
+  maxTokens: 1200,
+  timeoutMs: 30000,
+  costNote: ""
 };
 
 function apiErrorMessage(result: ApiResult<unknown> | null, fallback: string) {
@@ -114,8 +134,28 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
   const [savingModel, setSavingModel] = useState(false);
   const [providerType, setProviderType] = useState<AiProviderType>("OPENAI_COMPATIBLE");
   const [baseUrl, setBaseUrl] = useState(providerBaseUrlPresets.OPENAI_COMPATIBLE ?? "");
+  const [modelDraft, setModelDraft] = useState(initialModelDraft);
 
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
+
+  function updateModelDraft<K extends keyof typeof initialModelDraft>(key: K, value: (typeof initialModelDraft)[K]) {
+    setModelDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function applyRecommendation(recommendation: ModelRecommendation) {
+    setProviderType(recommendation.providerType);
+    setBaseUrl(providerBaseUrlPresets[recommendation.providerType] ?? "");
+    setModelDraft({
+      displayName: `${recommendation.providerName} ${capabilityLabels[recommendation.capability]}`,
+      modelName: recommendation.modelName,
+      capability: recommendation.capability,
+      temperature: recommendation.suggestedTemperature,
+      maxTokens: recommendation.suggestedMaxTokens,
+      timeoutMs: recommendation.suggestedTimeoutMs,
+      costNote: recommendation.priceNote
+    });
+    setModelMessage("已填入推荐模型参数，请选择对应服务商后保存。");
+  }
 
   async function createProvider(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -201,6 +241,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
         return [result.model!, ...normalized];
       });
       event.currentTarget.reset();
+      setModelDraft(initialModelDraft);
       setModelMessage("模型配置已保存。");
     } catch {
       setModelMessage("服务不可达，请稍后重试。");
@@ -272,16 +313,16 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <CapabilityCard
           title="实时面试"
-          items={["INTERVIEW_OUTLINE", "INTERVIEW_FOLLOW_UP", "REPORT_ANALYSIS"]}
+          items={["INTERVIEW_DIALOGUE", "INTERVIEW_OUTLINE", "INTERVIEW_FOLLOW_UP", "REPORT_ANALYSIS"]}
         />
         <CapabilityCard
-          title="语音链路"
-          items={["SPEECH_TO_TEXT", "TEXT_TO_SPEECH"]}
+          title="专业资料"
+          items={["COMPANY_RESEARCH", "EMBEDDING", "SAFETY_REVIEW"]}
         />
         <CapabilityCard
-          title="数字人"
+          title="语音与数字人"
           id="digital-human"
-          items={["DIGITAL_HUMAN_VIDEO"]}
+          items={["SPEECH_TO_TEXT", "TEXT_TO_SPEECH", "DIGITAL_HUMAN_REALTIME", "DIGITAL_HUMAN_VIDEO"]}
           note="接口：POST /api/digital-human/render 与 /api/digital-human/speech"
         />
         <CapabilityCard
@@ -290,6 +331,53 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
           items={["VISION_BEHAVIOR_ANALYSIS"]}
           note="接口：POST /api/behavior-analysis"
         />
+      </section>
+
+      <section className="rounded-lg border border-line bg-panel p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-ink">模型推荐矩阵</h2>
+            <p className="mt-1 text-sm text-muted">
+              按能力配置默认模型。价格会随厂商调整，以下只作为选型参考，最终以控制台账单为准。
+            </p>
+          </div>
+          <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-muted">
+            更新日期 {modelRecommendationLastUpdated}
+          </span>
+        </div>
+        <div className="mt-5 grid gap-4 xl:grid-cols-2">
+          {modelRecommendationGroups.map((group) => (
+            <div key={group.title} className="rounded-md border border-line p-4">
+              <h3 className="font-medium text-ink">{group.title}</h3>
+              <p className="mt-1 text-xs leading-5 text-muted">{group.description}</p>
+              <div className="mt-4 grid gap-3">
+                {group.recommendations.map((recommendation) => (
+                  <div key={`${recommendation.capability}-${recommendation.providerName}-${recommendation.modelName}`} className="rounded-md bg-slate-50 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium text-ink">
+                          {capabilityLabels[recommendation.capability]} / {recommendation.providerName}
+                        </p>
+                        <p className="mt-1 break-all text-xs text-muted">{recommendation.modelName}</p>
+                      </div>
+                      <Button
+                        className="min-h-8 px-3 py-1 text-xs"
+                        type="button"
+                        variant="secondary"
+                        onClick={() => applyRecommendation(recommendation)}
+                      >
+                        添加参考
+                      </Button>
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-muted">{recommendation.fit}</p>
+                    <p className="mt-2 text-xs leading-5 text-muted">{recommendation.priceNote}</p>
+                    <p className="mt-2 text-xs leading-5 text-muted">{recommendation.howToUse}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
 
       <section className="grid gap-4 lg:grid-cols-[1fr_1fr]">
@@ -357,11 +445,30 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                 ))}
               </select>
             </label>
-            <Field label="显示名称" name="displayName" placeholder="DeepSeek Chat 报告分析" required />
-            <Field label="模型名称" name="modelName" placeholder="deepseek-chat / gpt-4.1-mini" required />
+            <Field
+              label="显示名称"
+              name="displayName"
+              placeholder="DeepSeek Chat 报告分析"
+              value={modelDraft.displayName}
+              onChange={(event) => updateModelDraft("displayName", event.target.value)}
+              required
+            />
+            <Field
+              label="模型名称"
+              name="modelName"
+              placeholder="deepseek-chat / gpt-4.1-mini"
+              value={modelDraft.modelName}
+              onChange={(event) => updateModelDraft("modelName", event.target.value)}
+              required
+            />
             <label className="grid gap-2 text-sm">
               <span className="font-medium text-ink">能力类型</span>
-              <select name="capability" className="rounded-md border border-line px-3 py-2">
+              <select
+                name="capability"
+                className="rounded-md border border-line px-3 py-2"
+                value={modelDraft.capability}
+                onChange={(event) => updateModelDraft("capability", event.target.value as AiCapability)}
+              >
                 {aiCapabilities.map((capability) => (
                   <option key={capability} value={capability}>
                     {capabilityLabels[capability]}
@@ -370,11 +477,36 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
               </select>
             </label>
             <div className="grid gap-3 sm:grid-cols-3">
-              <Field label="温度" name="temperature" type="number" step="0.1" defaultValue="0.4" />
-              <Field label="最大 token" name="maxTokens" type="number" defaultValue="1200" />
-              <Field label="超时 ms" name="timeoutMs" type="number" defaultValue="30000" />
+              <Field
+                label="温度"
+                name="temperature"
+                type="number"
+                step="0.1"
+                value={modelDraft.temperature}
+                onChange={(event) => updateModelDraft("temperature", Number(event.target.value))}
+              />
+              <Field
+                label="最大 token"
+                name="maxTokens"
+                type="number"
+                value={modelDraft.maxTokens}
+                onChange={(event) => updateModelDraft("maxTokens", Number(event.target.value))}
+              />
+              <Field
+                label="超时 ms"
+                name="timeoutMs"
+                type="number"
+                value={modelDraft.timeoutMs}
+                onChange={(event) => updateModelDraft("timeoutMs", Number(event.target.value))}
+              />
             </div>
-            <Field label="成本备注" name="costNote" placeholder="低成本 / 高质量 / 备用" />
+            <Field
+              label="成本备注"
+              name="costNote"
+              placeholder="低成本 / 高质量 / 备用"
+              value={modelDraft.costNote}
+              onChange={(event) => updateModelDraft("costNote", event.target.value)}
+            />
             <div className="flex flex-wrap gap-4 text-sm text-ink">
               <label className="flex items-center gap-2">
                 <input name="enabled" type="checkbox" defaultChecked />
