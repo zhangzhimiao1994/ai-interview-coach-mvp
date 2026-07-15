@@ -185,6 +185,11 @@ model AiServiceProvider {
   apiKeyIv          String?
   apiKeyTag         String?
   apiKeyPreview     String?
+  credentialsCiphertext  String?
+  credentialsIv     String?
+  credentialsTag    String?
+  credentialsPreviewJson String?
+  settingsJson      String          @default("{}")
   enabled           Boolean         @default(true)
   notes             String?
   createdAt         DateTime        @default(now())
@@ -206,6 +211,7 @@ model AiModelConfig {
   maxTokens       Int               @default(1200)
   timeoutMs       Int               @default(30000)
   costNote        String?
+  settingsJson    String            @default("{}")
   enabled         Boolean           @default(true)
   isDefault       Boolean           @default(false)
   createdAt       DateTime          @default(now())
