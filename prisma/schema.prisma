@@ -177,45 +177,45 @@ model AiCallLog {
 }
 
 model AiServiceProvider {
-  id                String          @id @default(cuid())
-  displayName       String
-  providerType      String
-  baseUrl           String?
-  apiKeyCiphertext  String?
-  apiKeyIv          String?
-  apiKeyTag         String?
-  apiKeyPreview     String?
+  id                     String          @id @default(cuid())
+  displayName            String
+  providerType           String
+  baseUrl                String?
+  apiKeyCiphertext       String?
+  apiKeyIv               String?
+  apiKeyTag              String?
+  apiKeyPreview          String?
   credentialsCiphertext  String?
-  credentialsIv     String?
-  credentialsTag    String?
+  credentialsIv          String?
+  credentialsTag         String?
   credentialsPreviewJson String?
-  settingsJson      String          @default("{}")
-  enabled           Boolean         @default(true)
-  notes             String?
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-  models            AiModelConfig[]
+  settingsJson           String          @default("{}")
+  enabled                Boolean         @default(true)
+  notes                  String?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  models                 AiModelConfig[]
 
   @@index([providerType])
   @@index([enabled])
 }
 
 model AiModelConfig {
-  id              String            @id @default(cuid())
-  providerId      String
-  provider        AiServiceProvider @relation(fields: [providerId], references: [id])
-  displayName     String
-  modelName       String
-  capability      String
-  temperature     Float             @default(0.4)
-  maxTokens       Int               @default(1200)
-  timeoutMs       Int               @default(30000)
-  costNote        String?
-  settingsJson    String            @default("{}")
-  enabled         Boolean           @default(true)
-  isDefault       Boolean           @default(false)
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  id           String            @id @default(cuid())
+  providerId   String
+  provider     AiServiceProvider @relation(fields: [providerId], references: [id])
+  displayName  String
+  modelName    String
+  capability   String
+  temperature  Float             @default(0.4)
+  maxTokens    Int               @default(1200)
+  timeoutMs    Int               @default(30000)
+  costNote     String?
+  settingsJson String            @default("{}")
+  enabled      Boolean           @default(true)
+  isDefault    Boolean           @default(false)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
 
   @@index([providerId])
   @@index([capability])

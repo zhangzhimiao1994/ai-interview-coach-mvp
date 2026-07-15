@@ -1,12 +1,49 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import { basename, join } from "node:path";
+import { PrismaClient } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
+const prismaDirectory = join(root, "prisma");
+const prismaCliPath = join(root, "node_modules/prisma/build/index.js");
 const migrationPath = join(
   root,
   "prisma/migrations/20260715090000_add_multimodal_config/migration.sql"
 );
+const preMigrationSql = `
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE "AiServiceProvider" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "displayName" TEXT NOT NULL,
+  "providerType" TEXT NOT NULL
+);
+
+CREATE TABLE "AiModelConfig" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "providerId" TEXT NOT NULL,
+  "displayName" TEXT NOT NULL,
+  "modelName" TEXT NOT NULL,
+  "capability" TEXT NOT NULL,
+  FOREIGN KEY ("providerId") REFERENCES "AiServiceProvider" ("id")
+);
+
+INSERT INTO "AiServiceProvider" ("id", "displayName", "providerType")
+VALUES ('existing-provider', 'Existing Provider', 'OPENAI_COMPATIBLE');
+
+INSERT INTO "AiModelConfig" (
+  "id", "providerId", "displayName", "modelName", "capability"
+) VALUES (
+  'existing-model', 'existing-provider', 'Existing Model', 'existing-model', 'CHAT'
+);
+`;
 
 function readWorkspaceFile(path: string) {
   return readFileSync(join(root, path), "utf8");
@@ -25,6 +62,124 @@ function modelFields(schema: string, modelName: string) {
 
 function migrationSql() {
   return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
+function migrationStatements() {
+  return migrationSql()
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/--.*$/gm, "")
+    .split(";")
+    .map((statement) => statement.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+}
+
+type MigrationVerification = {
+  provider: {
+    id: string;
+    displayName: string;
+    providerType: string;
+    credentialsCiphertext: string | null;
+    credentialsIv: string | null;
+    credentialsTag: string | null;
+    credentialsPreviewJson: string | null;
+    settingsJson: string;
+  };
+  model: {
+    id: string;
+    providerId: string;
+    displayName: string;
+    modelName: string;
+    capability: string;
+    settingsJson: string;
+  };
+  providerColumns: Record<string, { notNull: number; defaultValue: string | null }>;
+  modelColumns: Record<string, { notNull: number; defaultValue: string | null }>;
+};
+
+type SqliteColumn = {
+  name: string;
+  notnull: number | bigint;
+  dflt_value: string | null;
+};
+
+function executeSqlFile(file: string, databaseUrl: string) {
+  execFileSync(
+    process.execPath,
+    [prismaCliPath, "db", "execute", "--file", file, "--url", databaseUrl],
+    {
+      cwd: prismaDirectory,
+      stdio: "pipe"
+    }
+  );
+}
+
+function columnMetadata(columns: SqliteColumn[]) {
+  return Object.fromEntries(
+    columns.map((column) => [
+      column.name,
+      {
+        notNull: Number(column.notnull),
+        defaultValue: column.dflt_value
+      }
+    ])
+  );
+}
+
+async function migrateRepresentativeData(): Promise<MigrationVerification> {
+  const temporaryDirectory = mkdtempSync(
+    join(prismaDirectory, ".multimodal-config-")
+  );
+  const setupPath = join(temporaryDirectory, "setup.sql");
+  const databaseUrl = `file:./${basename(temporaryDirectory)}/migration.db`;
+  let prisma: PrismaClient | undefined;
+
+  try {
+    writeFileSync(setupPath, preMigrationSql, "utf8");
+    executeSqlFile(setupPath, databaseUrl);
+    executeSqlFile(migrationPath, databaseUrl);
+
+    prisma = new PrismaClient({ datasourceUrl: databaseUrl });
+
+    const providers = await prisma.$queryRawUnsafe<
+      MigrationVerification["provider"][]
+    >(`
+      SELECT id, displayName, providerType, credentialsCiphertext,
+             credentialsIv, credentialsTag, credentialsPreviewJson, settingsJson
+      FROM AiServiceProvider
+    `);
+    const models = await prisma.$queryRawUnsafe<MigrationVerification["model"][]>(`
+      SELECT id, providerId, displayName, modelName, capability, settingsJson
+      FROM AiModelConfig
+    `);
+    const providerColumns = await prisma.$queryRawUnsafe<SqliteColumn[]>(
+      `PRAGMA table_info("AiServiceProvider")`
+    );
+    const modelColumns = await prisma.$queryRawUnsafe<SqliteColumn[]>(
+      `PRAGMA table_info("AiModelConfig")`
+    );
+
+    if (!providers[0] || !models[0]) {
+      throw new Error("Migration removed representative configuration rows");
+    }
+
+    return {
+      provider: providers[0],
+      model: models[0],
+      providerColumns: columnMetadata(providerColumns),
+      modelColumns: columnMetadata(modelColumns)
+    };
+  } finally {
+    try {
+      await prisma?.$disconnect();
+    } finally {
+      rmSync(temporaryDirectory, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 50
+      });
+    }
+  }
 }
 
 describe("multimodal configuration columns", () => {
@@ -46,13 +201,7 @@ describe("multimodal configuration columns", () => {
   });
 
   it("contains only the required additive ALTER TABLE statements", () => {
-    const statements = migrationSql()
-      .replace(/^\s*--.*$/gm, "")
-      .split(";")
-      .map((statement) => statement.trim().replace(/\s+/g, " "))
-      .filter(Boolean);
-
-    expect(statements).toEqual([
+    expect(migrationStatements()).toEqual([
       'ALTER TABLE "AiServiceProvider" ADD COLUMN "credentialsCiphertext" TEXT',
       'ALTER TABLE "AiServiceProvider" ADD COLUMN "credentialsIv" TEXT',
       'ALTER TABLE "AiServiceProvider" ADD COLUMN "credentialsTag" TEXT',
@@ -63,6 +212,46 @@ describe("multimodal configuration columns", () => {
   });
 
   it("does not use destructive DROP statements", () => {
-    expect(migrationSql()).not.toMatch(/\bDROP\b/i);
+    expect(migrationStatements().join("; ")).not.toMatch(/\bDROP\b/i);
+  });
+
+  it("preserves existing provider and model data when the migration executes", async () => {
+    const result = await migrateRepresentativeData();
+
+    expect(result.provider).toEqual({
+      id: "existing-provider",
+      displayName: "Existing Provider",
+      providerType: "OPENAI_COMPATIBLE",
+      credentialsCiphertext: null,
+      credentialsIv: null,
+      credentialsTag: null,
+      credentialsPreviewJson: null,
+      settingsJson: "{}"
+    });
+    expect(result.model).toEqual({
+      id: "existing-model",
+      providerId: "existing-provider",
+      displayName: "Existing Model",
+      modelName: "existing-model",
+      capability: "CHAT",
+      settingsJson: "{}"
+    });
+
+    for (const column of [
+      "credentialsCiphertext",
+      "credentialsIv",
+      "credentialsTag",
+      "credentialsPreviewJson"
+    ]) {
+      expect(result.providerColumns[column]).toMatchObject({ notNull: 0 });
+    }
+    expect(result.providerColumns.settingsJson).toEqual({
+      notNull: 1,
+      defaultValue: "'{}'"
+    });
+    expect(result.modelColumns.settingsJson).toEqual({
+      notNull: 1,
+      defaultValue: "'{}'"
+    });
   });
 });
