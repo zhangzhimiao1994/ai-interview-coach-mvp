@@ -295,6 +295,13 @@ describe("structured provider credentials", () => {
     expect(serializedPreview).not.toContain(credentials.organization);
   });
 
+  it("fully masks one- and two-character credential values", () => {
+    expect(previewCredentialMap({ one: "a", two: "ab" })).toEqual({
+      one: "****",
+      two: "****"
+    });
+  });
+
   it.each([null, [], "secret", 42, true])(
     "rejects invalid decrypted credential payload %j",
     (payload) => {
@@ -305,6 +312,14 @@ describe("structured provider credentials", () => {
       );
     }
   );
+
+  it("rejects malformed decrypted credential JSON", () => {
+    const encrypted = encryptSecret("not-json", configSecret);
+
+    expect(() => decryptCredentialMap(encrypted, configSecret)).toThrowError(
+      /^Stored credentials are invalid$/
+    );
+  });
 
   it("drops non-string values from decrypted credential objects", () => {
     const encrypted = encryptSecret(

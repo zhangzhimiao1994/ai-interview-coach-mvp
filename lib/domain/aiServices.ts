@@ -31,6 +31,10 @@ export function maskSecret(secret: string) {
     return "";
   }
 
+  if (trimmed.length <= 4) {
+    return "****";
+  }
+
   if (trimmed.length <= 6) {
     return `${trimmed.slice(0, 2)}****${trimmed.slice(-2)}`;
   }
@@ -87,14 +91,14 @@ export function decryptCredentialMap(
     parsed = JSON.parse(decryptSecret(encrypted, configSecret)) as unknown;
   } catch (error) {
     if (error instanceof SyntaxError) {
-      throw new Error("Stored credentials are invalid.");
+      throw new Error("Stored credentials are invalid");
     }
 
     throw error;
   }
 
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Stored credentials are invalid.");
+    throw new Error("Stored credentials are invalid");
   }
 
   return Object.fromEntries(
