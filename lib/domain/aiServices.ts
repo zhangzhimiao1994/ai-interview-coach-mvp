@@ -9,6 +9,8 @@ export type EncryptedSecret = {
   tag: string;
 };
 
+export type CredentialMap = Record<string, string>;
+
 type ModelDefaultState = {
   id: string;
   capability: AiCapability;
@@ -66,6 +68,46 @@ export function decryptSecret(encrypted: EncryptedSecret, configSecret: string) 
   ]);
 
   return plaintext.toString("utf8");
+}
+
+export function encryptCredentialMap(
+  credentials: CredentialMap,
+  configSecret: string
+) {
+  return encryptSecret(JSON.stringify(credentials), configSecret);
+}
+
+export function decryptCredentialMap(
+  encrypted: EncryptedSecret,
+  configSecret: string
+): CredentialMap {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(decryptSecret(encrypted, configSecret)) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error("Stored credentials are invalid.");
+    }
+
+    throw error;
+  }
+
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Stored credentials are invalid.");
+  }
+
+  return Object.fromEntries(
+    Object.entries(parsed).filter((entry): entry is [string, string] =>
+      typeof entry[1] === "string"
+    )
+  );
+}
+
+export function previewCredentialMap(credentials: CredentialMap): CredentialMap {
+  return Object.fromEntries(
+    Object.entries(credentials).map(([key, value]) => [key, maskSecret(value)])
+  );
 }
 
 export function readAiConfigSecret(env: Record<string, string | undefined> = process.env) {

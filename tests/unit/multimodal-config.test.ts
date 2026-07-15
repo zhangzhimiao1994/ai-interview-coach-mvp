@@ -9,6 +9,16 @@ import {
 import { basename, join } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { describe, expect, it } from "vitest";
+import {
+  decryptCredentialMap,
+  encryptCredentialMap,
+  encryptSecret,
+  previewCredentialMap
+} from "@/lib/domain/aiServices";
+import {
+  parseAiModelConfigInput,
+  parseAiServiceProviderInput
+} from "@/lib/validators/aiServices";
 
 const root = process.cwd();
 const prismaDirectory = join(root, "prisma");
@@ -253,5 +263,146 @@ describe("multimodal configuration columns", () => {
       notNull: 1,
       defaultValue: "'{}'"
     });
+  });
+});
+
+describe("structured provider credentials", () => {
+  const configSecret = "multimodal-config-test-secret";
+
+  it("encrypts and decrypts a credential map", () => {
+    const credentials = {
+      apiKey: "sk-structured-secret",
+      organization: "org-private-value"
+    };
+
+    const encrypted = encryptCredentialMap(credentials, configSecret);
+
+    expect(encrypted.ciphertext).not.toContain(credentials.apiKey);
+    expect(decryptCredentialMap(encrypted, configSecret)).toEqual(credentials);
+  });
+
+  it("previews every credential without exposing plaintext values", () => {
+    const credentials = {
+      apiKey: "sk-structured-secret",
+      organization: "org-private-value"
+    };
+
+    const preview = previewCredentialMap(credentials);
+    const serializedPreview = JSON.stringify(preview);
+
+    expect(Object.keys(preview)).toEqual(Object.keys(credentials));
+    expect(serializedPreview).not.toContain(credentials.apiKey);
+    expect(serializedPreview).not.toContain(credentials.organization);
+  });
+
+  it.each([null, [], "secret", 42, true])(
+    "rejects invalid decrypted credential payload %j",
+    (payload) => {
+      const encrypted = encryptSecret(JSON.stringify(payload), configSecret);
+
+      expect(() => decryptCredentialMap(encrypted, configSecret)).toThrow(
+        "Stored credentials are invalid"
+      );
+    }
+  );
+
+  it("drops non-string values from decrypted credential objects", () => {
+    const encrypted = encryptSecret(
+      JSON.stringify({ apiKey: "kept", expiresAt: 123, enabled: true, note: null }),
+      configSecret
+    );
+
+    expect(decryptCredentialMap(encrypted, configSecret)).toEqual({ apiKey: "kept" });
+  });
+});
+
+describe("multimodal provider and model validation", () => {
+  const providerInput = {
+    displayName: "Alibaba Cloud",
+    providerType: "OPENAI_COMPATIBLE" as const
+  };
+  const modelInput = {
+    providerId: "provider-1",
+    displayName: "Qwen VL Max",
+    modelName: "qwen-vl-max",
+    capability: "VISION_BEHAVIOR_ANALYSIS" as const
+  };
+
+  it("accepts provider credentials, public settings, and the legacy apiKey", () => {
+    const result = parseAiServiceProviderInput({
+      ...providerInput,
+      apiKey: "legacy-api-key",
+      credentials: {
+        apiKey: "structured-api-key",
+        workspace: " workspace-id "
+      },
+      settings: {
+        region: "cn-beijing",
+        retryCount: 3,
+        useResponsesApi: true
+      }
+    });
+
+    expect(result.apiKey).toBe("legacy-api-key");
+    expect(result.credentials).toEqual({
+      apiKey: "structured-api-key",
+      workspace: "workspace-id"
+    });
+    expect(result.settings).toEqual({
+      region: "cn-beijing",
+      retryCount: 3,
+      useResponsesApi: true
+    });
+  });
+
+  it("accepts primitive model settings", () => {
+    const result = parseAiModelConfigInput({
+      ...modelInput,
+      settings: {
+        responseFormat: "json",
+        topK: 20,
+        enableThinking: false
+      }
+    });
+
+    expect(result.settings).toEqual({
+      responseFormat: "json",
+      topK: 20,
+      enableThinking: false
+    });
+  });
+
+  it.each([
+    ["provider", () => parseAiServiceProviderInput({
+      ...providerInput,
+      settings: { nested: { unsupported: true } }
+    })],
+    ["model", () => parseAiModelConfigInput({
+      ...modelInput,
+      settings: { nested: ["unsupported"] }
+    })]
+  ])("rejects nested non-primitive %s settings", (_kind, parse) => {
+    expect(parse).toThrow();
+  });
+
+  it.each([
+    ["provider", () => parseAiServiceProviderInput({
+      ...providerInput,
+      unexpected: "field"
+    })],
+    ["model", () => parseAiModelConfigInput({
+      ...modelInput,
+      unexpected: "field"
+    })]
+  ])("keeps %s validation strict at the top level", (_kind, parse) => {
+    expect(parse).toThrow();
+  });
+
+  it("defaults omitted credential and settings maps to empty objects", () => {
+    expect(parseAiServiceProviderInput(providerInput)).toMatchObject({
+      credentials: {},
+      settings: {}
+    });
+    expect(parseAiModelConfigInput(modelInput)).toMatchObject({ settings: {} });
   });
 });
