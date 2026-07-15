@@ -6,9 +6,11 @@
 
 本阶段采用插件式能力适配器，不把供应商逻辑写死在页面或 API 路由中。首批优先使用阿里云能力：
 
-- `qwen3-tts-flash`：真实中文语音合成。
+- `qwen3-asr-flash-realtime`：候选人实时语音识别。
+- `qwen3-tts-instruct-flash-realtime`：可控制语气的实时中文语音合成。
+- `qwen3-tts-flash`：非实时语音合成备用线路。
 - `avatar-dialog`：实时 2D 数字人，取得邀测权限并完成 RTC 配置后启用。
-- `qwen3-vl-flash`：候选人抽帧行为分析。
+- `qwen3.6-flash`：候选人抽帧行为分析。
 - Tavus CVI：保留第二实时数字人适配器和正式配置契约，取得账号后联调。
 - Gemini：保留第二视觉分析适配器和正式配置契约，取得 API Key 后联调。
 
@@ -22,6 +24,8 @@
 4. 行为分析只描述可观察信号，不做心理、人格、健康、年龄、种族或测谎判断。
 5. 原始摄像头抽帧默认不落库，分析完成后丢弃。
 6. 页面关闭、刷新、超时或异常断线时都必须释放实时数字人会话。
+7. 浏览器调用阿里实时 ASR 时只使用服务端签发的短期临时 API Key，永久 API Key 不下发到客户端。
+8. 文档中的模型名称是首批默认值，不是写死在业务代码中的常量；运行时以后台启用的默认模型配置为准。
 
 ## 3. 运行模式
 
@@ -32,7 +36,7 @@
 当 `DIGITAL_HUMAN_REALTIME` 的默认模型为阿里 `avatar-dialog`，且百炼权限与 RTC 配置检查通过时：
 
 1. 服务端创建 `avatar-dialog` WebSocket 会话和 RTC 会话。
-2. 面试官问题通过阿里 TTS 生成单声道 PCM 音频。
+2. 面试官问题通过 `qwen3-tts-instruct-flash-realtime` 生成 24 kHz 单声道 PCM 音频。
 3. PCM 音频发送给 `avatar-dialog` 驱动数字人。
 4. 前端通过 RTC 接收数字人画面和声音。
 5. 前端不再单独播放 TTS 音频，避免重复声音。
@@ -63,9 +67,22 @@
 
 ## 4. 适配器边界
 
-新增三个独立能力接口。
+新增四个独立能力接口。
 
-### 4.1 语音合成
+### 4.1 语音识别
+
+```ts
+interface SpeechToTextProvider {
+  createClientSession(input: SpeechRecognitionSessionInput): Promise<SpeechRecognitionSessionResult>;
+  checkConnection(): Promise<CapabilityCheckResult>;
+}
+```
+
+阿里实时 ASR 在浏览器中直接使用 WebSocket，以降低延迟并避免在 Next.js 应用中转发持续音频流。服务端使用专用的低权限永久 API Key 生成短期临时 API Key，客户端只获得临时凭据、模型名称、Workspace WebSocket 地址和过期时间。
+
+客户端使用 Web Audio API 生成 16 kHz 单声道 PCM 音频，以 VAD 模式发送给 `qwen3-asr-flash-realtime`。收到临时和最终转写事件后更新回答框。临时凭据最长不超过当前面试剩余时间，且不超过阿里允许的 1,800 秒。
+
+### 4.2 语音合成
 
 ```ts
 interface TextToSpeechProvider {
@@ -86,7 +103,7 @@ interface TextToSpeechProvider {
 - `fallbackUsed`
 - `traceId`
 
-### 4.2 实时数字人
+### 4.3 实时数字人
 
 ```ts
 interface RealtimeDigitalHumanProvider {
@@ -106,7 +123,7 @@ interface RealtimeDigitalHumanProvider {
 - 会话过期时间
 - 当前运行模式
 
-### 4.3 行为分析
+### 4.4 行为分析
 
 ```ts
 interface BehaviorAnalysisProvider {
@@ -117,15 +134,23 @@ interface BehaviorAnalysisProvider {
 
 适配器由能力路由器根据后台默认模型选择。新增火山、腾讯、HeyGen、D-ID 或 AKOOL 时，只新增适配器并注册，不修改面试主流程。
 
+适配器只约束供应商协议和所需能力，不限制单一模型名称。例如阿里实时 TTS 适配器可以读取后台配置的当前模型别名或版本快照；模型升级时管理员修改配置即可，无需重新发布代码。模型名称只在初始化种子数据和推荐矩阵中提供默认值。
+
 ## 5. API 设计
 
-### 5.1 创建数字人会话
+### 5.1 创建实时语音识别凭据
+
+`POST /api/speech-recognition/token`
+
+服务端验证训练会话和候选人权限后，使用专用阿里 ASR API Key 生成短期临时 API Key。响应只返回临时 Key、过期时间、Workspace WebSocket 地址、模型名和音频参数。该接口必须限流，且不得返回永久 Key。
+
+### 5.2 创建数字人会话
 
 `POST /api/digital-human/sessions`
 
 请求包含训练会话 ID、数字人角色、语言和当前面试上下文。响应返回统一数字人会话对象。创建操作支持幂等键，避免重复点击产生多个计费会话。
 
-### 5.2 播报问题
+### 5.3 播报问题
 
 `POST /api/digital-human/sessions/:id/speak`
 
@@ -141,19 +166,19 @@ interface BehaviorAnalysisProvider {
 
 阿里适配器把 TTS PCM 发送给 `avatar-dialog`；Tavus 适配器使用其会话能力；本地模式返回可直接播放的 TTS 结果。
 
-### 5.3 停止数字人会话
+### 5.4 停止数字人会话
 
 `DELETE /api/digital-human/sessions/:id`
 
 停止操作必须幂等。即使供应商返回“会话已结束”，本地状态也应标记为已释放。
 
-### 5.4 独立语音合成
+### 5.5 独立语音合成
 
 `POST /api/digital-human/speech`
 
 保留现有接口路径，改为调用 `TextToSpeechProvider`。请求支持文本、声音、语言、语速和表达指令。
 
-### 5.5 行为分析
+### 5.6 行为分析
 
 `POST /api/behavior-analysis`
 
@@ -180,6 +205,7 @@ interface BehaviorAnalysisProvider {
 阿里服务商凭据：
 
 - 百炼 API Key
+- 专用实时 ASR API Key，用于签发浏览器临时凭据
 - RTC AppKey
 
 阿里公开设置：
@@ -204,20 +230,31 @@ Gemini 凭据和设置：
 
 每个模型继续绑定单一能力，并新增供应商特有的非敏感 `settingsJson`：
 
+- ASR：语言、VAD 模式、采样率、临时凭据 TTL。
 - TTS：声音、语言、语速、采样率、输出格式。
 - 数字人：头像 ID、会话最长时长、空闲超时。
 - 行为分析：抽帧间隔、最多帧数、图片质量、超时、最低置信度。
+
+首批初始化默认值：
+
+- `SPEECH_TO_TEXT`：`qwen3-asr-flash-realtime`
+- `TEXT_TO_SPEECH`：`qwen3-tts-instruct-flash-realtime`
+- `DIGITAL_HUMAN_REALTIME`：`avatar-dialog`
+- `VISION_BEHAVIOR_ANALYSIS`：`qwen3.6-flash`
+
+管理员可以新增模型、启用或停用模型，并在同一能力下切换唯一默认模型。API 路由每次调用都通过能力路由器解析当前默认配置，不引用上述默认名称。版本快照和模型别名都作为普通 `modelName` 保存。
 
 ### 6.3 连接检测
 
 后台提供逐能力检测，而不是只检查服务商地址是否可达：
 
 1. 验证百炼 API Key。
-2. 合成一条短测试语音。
-3. 检查 `avatar-dialog` 邀测权限。
-4. 检查 RTC App ID 和 AppKey。
-5. 使用无敏感内容的测试图片检查视觉模型结构化输出。
-6. Tavus 使用 `test_mode` 验证会话创建而不产生正式视频会话费用。
+2. 验证专用 ASR Key 可以生成临时 API Key，并建立测试 WebSocket。
+3. 合成一条短测试语音。
+4. 检查 `avatar-dialog` 邀测权限。
+5. 检查 RTC App ID 和 AppKey。
+6. 使用无敏感内容的测试图片检查视觉模型结构化输出。
+7. Tavus 使用 `test_mode` 验证会话创建而不产生正式视频会话费用。
 
 检测结果显示成功项、失败项、错误码、修复建议和检测时间。
 
@@ -292,7 +329,7 @@ Gemini 凭据和设置：
 - 连接失败
 - 已结束
 
-页面固定显示当前运行模式，例如“阿里实时数字人”“本地数字人 + 阿里语音”“浏览器语音降级”。候选人可以关闭视觉分析，但关闭摄像头不会阻止使用麦克风回答。
+页面固定显示当前运行模式，例如“阿里实时数字人”“本地数字人 + 阿里语音”“浏览器语音降级”。语音识别状态显示“阿里实时识别”或“浏览器识别降级”。候选人可以关闭视觉分析，但关闭摄像头不会阻止使用麦克风回答。
 
 浏览器自动播放受限时，第一次播放由“开始面试”用户操作解锁。后续问题可以自动播放。桌面和手机都使用当前设备的摄像头与麦克风。
 
@@ -325,9 +362,10 @@ Gemini 凭据和设置：
 2. 用户拒绝视觉分析时，系统只保留本地音频行为信号。
 3. 摄像头、麦克风和 RTC 仅允许在 HTTPS 或 localhost 下运行。
 4. 密钥采用现有加密机制保存，生产环境拒绝占位加密密钥。
-5. 行为分析请求限制图片数量、尺寸和总请求体大小。
-6. 服务端验证会话归属和问题 ID，不能把任意图片注入其他候选人的会话。
-7. 管理员可以全局关闭视觉分析或某个供应商。
+5. 实时 ASR 使用单独、最小权限的永久 Key 签发短期临时 Key；临时 Key 过期后不可续用。
+6. 行为分析请求限制图片数量、尺寸和总请求体大小。
+7. 服务端验证会话归属和问题 ID，不能把任意图片注入其他候选人的会话。
+8. 管理员可以全局关闭视觉分析或某个供应商。
 
 ## 12. 测试与验收
 
@@ -335,6 +373,8 @@ Gemini 凭据和设置：
 
 - 适配器契约测试。
 - 后台默认模型路由测试。
+- 修改后台默认模型后无需改代码即可切换实际请求模型的测试。
+- 阿里临时 API Key、实时 ASR 事件解析和永久 Key 不泄露测试。
 - 阿里 TTS 请求和响应解析测试。
 - 阿里、Tavus 数字人会话创建、播报和释放测试。
 - 视觉模型结构化输出和禁止字段测试。
@@ -347,31 +387,35 @@ CI 使用模拟供应商响应，不依赖真实 API Key，也不产生供应商
 
 ### 12.2 人工验收
 
-1. 桌面 Chrome 通过 HTTPS 播放真实阿里 TTS。
-2. 手机 Chrome 通过 HTTPS 播放真实阿里 TTS，并使用手机摄像头和麦克风。
-3. `qwen3-vl-flash` 对一组明确同意的测试抽帧返回合规结构化分析。
-4. 未取得 `avatar-dialog` 权限时，后台明确显示邀测或 RTC 配置缺失。
-5. 取得权限后，阿里 RTC 数字人能够播报问题并在提问后进入等待回答状态。
-6. 任一供应商故障时面试可以继续，页面明确显示实际降级模式。
-7. 面试退出后确认供应商会话已停止，不再继续计费。
+1. 桌面 Chrome 通过 HTTPS 使用 `qwen3-asr-flash-realtime` 实时转写回答。
+2. 桌面 Chrome 通过 HTTPS 播放真实阿里 TTS。
+3. 手机 Chrome 通过 HTTPS 使用阿里实时 ASR 和 TTS，并使用手机摄像头和麦克风。
+4. `qwen3.6-flash` 对一组明确同意的测试抽帧返回合规结构化分析。
+5. 未取得 `avatar-dialog` 权限时，后台明确显示邀测或 RTC 配置缺失。
+6. 取得权限后，阿里 RTC 数字人能够播报问题并在提问后进入等待回答状态。
+7. 任一供应商故障时面试可以继续，页面明确显示实际降级模式。
+8. 面试退出后确认供应商会话已停止，不再继续计费。
 
 ## 13. 实施顺序
 
 1. 扩展数据库配置与会话记录。
-2. 建立三类适配器接口、能力路由和标准错误。
-3. 接入真实阿里 TTS，并改造前端音频播放。
-4. 接入 `qwen3-vl-flash` 抽帧分析和报告存储。
-5. 实现阿里 `avatar-dialog` 与 RTC 适配器、配置检查和会话释放。
-6. 实现 Tavus 与 Gemini 适配器及测试模式。
-7. 完善后台配置、连接检测、日志和使用说明。
-8. 完成自动测试、桌面验收和 HTTPS 手机验收。
+2. 建立四类适配器接口、能力路由和标准错误。
+3. 接入阿里临时 API Key 和 `qwen3-asr-flash-realtime`。
+4. 接入真实阿里 TTS，并改造前端音频播放。
+5. 接入 `qwen3.6-flash` 抽帧分析和报告存储。
+6. 实现阿里 `avatar-dialog` 与 RTC 适配器、配置检查和会话释放。
+7. 实现 Tavus 与 Gemini 适配器及测试模式。
+8. 完善后台配置、连接检测、日志和使用说明。
+9. 完成自动测试、桌面验收和 HTTPS 手机验收。
 
 ## 14. 首批交付边界
 
 必须真实联调：
 
+- 阿里 `qwen3-asr-flash-realtime`
+- 阿里 `qwen3-tts-instruct-flash-realtime`
 - 阿里 `qwen3-tts-flash`
-- 阿里 `qwen3-vl-flash`
+- 阿里 `qwen3.6-flash`
 
 具备权限和 RTC 参数后真实联调：
 
