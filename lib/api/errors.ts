@@ -7,8 +7,10 @@ function isJsonParseError(error: unknown) {
   return error instanceof SyntaxError;
 }
 
-function isPrismaReferenceError(error: unknown) {
-  return error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2003" || error.code === "P2025");
+function prismaErrorCode(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+    ? error.code
+    : null;
 }
 
 export function postErrorResponse(error: unknown) {
@@ -20,10 +22,26 @@ export function postErrorResponse(error: unknown) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  if (isPrismaReferenceError(error)) {
+  const prismaCode = prismaErrorCode(error);
+
+  if (prismaCode === "P2002") {
+    return NextResponse.json(
+      { error: "Conflict", message: "A conflicting record already exists." },
+      { status: 409 }
+    );
+  }
+
+  if (prismaCode === "P2003") {
     return NextResponse.json(
       { error: "Invalid reference", message: "One or more referenced records do not exist." },
       { status: 400 }
+    );
+  }
+
+  if (prismaCode === "P2025") {
+    return NextResponse.json(
+      { error: "Not found", message: "The requested record does not exist." },
+      { status: 404 }
     );
   }
 

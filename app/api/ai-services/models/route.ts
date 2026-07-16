@@ -40,6 +40,7 @@ export async function POST(request: Request) {
       return tx.aiModelConfig.create({
         data: {
           ...modelInput,
+          enabled: input.isDefault ? true : modelInput.enabled,
           settingsJson: JSON.stringify(settings)
         },
         include: modelInclude

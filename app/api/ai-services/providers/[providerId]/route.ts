@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { postErrorResponse } from "@/lib/api/errors";
 import {
   decryptCredentialMap,
@@ -18,7 +19,21 @@ type RouteContext = {
   }>;
 };
 
-const updateProviderSchema = aiServiceProviderInputSchema.partial().strict();
+const clearableNullableText = z.preprocess(
+  (value) => typeof value === "string"
+    ? (value.trim() ? value.trim() : null)
+    : value,
+  z.string().nullable()
+);
+
+const updateProviderSchema = aiServiceProviderInputSchema
+  .omit({ baseUrl: true, notes: true })
+  .partial()
+  .extend({
+    baseUrl: clearableNullableText.optional(),
+    notes: clearableNullableText.optional()
+  })
+  .strict();
 
 function normalizeBlankCredentials(input: unknown) {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
@@ -148,6 +163,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
       if (settings !== undefined) {
         data.settingsJson = JSON.stringify(settings);
+      }
+
+      if (Object.keys(data).length === 0) {
+        return existing;
       }
 
       return tx.aiServiceProvider.update({

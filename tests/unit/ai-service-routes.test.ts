@@ -59,6 +59,10 @@ function modelRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function transactionMock<T>(tx: T) {
+  return vi.fn(async (callback: (delegate: T) => unknown) => callback(tx));
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -177,6 +181,53 @@ describe("AI service API routes", () => {
     expect(payload.error).toBe("AI service encryption is not configured");
     expect(payload.message).toContain("AI_CONFIG_SECRET");
     expect(prisma.aiServiceProvider.create).not.toHaveBeenCalled();
+  });
+
+  it("creates a credential-free provider without reading a production config secret", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("AI_CONFIG_SECRET", "");
+    const prisma = {
+      aiServiceProvider: {
+        create: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
+          ...data,
+          apiKeyCiphertext: null,
+          apiKeyIv: null,
+          apiKeyTag: null,
+          apiKeyPreview: null,
+          credentialsCiphertext: null,
+          credentialsIv: null,
+          credentialsTag: null,
+          credentialsPreviewJson: null
+        })))
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/route");
+    const response = await route.POST(
+      new Request("http://localhost/api/ai-services/providers", {
+        method: "POST",
+        body: JSON.stringify({
+          displayName: "Credential-free provider",
+          providerType: "OPENAI_COMPATIBLE",
+          settings: { region: "local" }
+        })
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(201);
+    expect(prisma.aiServiceProvider.create).toHaveBeenCalledTimes(1);
+    const data = prisma.aiServiceProvider.create.mock.calls[0][0].data;
+    expect(data.apiKeyCiphertext).toBeUndefined();
+    expect(data.apiKeyIv).toBeUndefined();
+    expect(data.apiKeyTag).toBeUndefined();
+    expect(data.credentialsCiphertext).toBeUndefined();
+    expect(data.credentialsIv).toBeUndefined();
+    expect(data.credentialsTag).toBeUndefined();
+    expect(data.credentialsPreviewJson).toBeUndefined();
+    expect(payload.provider.credentialsPreview).toEqual({});
+    expect(payload.provider.settings).toEqual({ region: "local" });
   });
 
   it("safely parses provider and included model settings on GET", async () => {
@@ -330,8 +381,7 @@ describe("AI service API routes", () => {
       apiKeyIv: "stored-legacy-iv",
       apiKeyTag: "stored-legacy-tag"
     });
-    const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+    const tx = {
       aiServiceProvider: {
         findUnique: vi.fn().mockResolvedValue(existing),
         update: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
@@ -339,6 +389,10 @@ describe("AI service API routes", () => {
           ...data
         })))
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -355,7 +409,7 @@ describe("AI service API routes", () => {
       { params: Promise.resolve({ providerId: "provider-1" }) }
     );
     const payload = await response.json();
-    const updateData = prisma.aiServiceProvider.update.mock.calls[0][0].data;
+    const updateData = tx.aiServiceProvider.update.mock.calls[0][0].data;
 
     expect(response.status).toBe(200);
     expect(updateData).not.toHaveProperty("apiKeyCiphertext");
@@ -378,6 +432,8 @@ describe("AI service API routes", () => {
     expect(payload.provider.settings).toEqual({ region: "cn-beijing", retries: 2 });
     expect(JSON.stringify(payload)).not.toContain("new-structured-key");
     expect(JSON.stringify(payload)).not.toContain(updateData.credentialsCiphertext);
+    expect(prisma.aiServiceProvider.findUnique).not.toHaveBeenCalled();
+    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
   });
 
   it("replaces the legacy API key only when a nonblank value is supplied", async () => {
@@ -388,8 +444,7 @@ describe("AI service API routes", () => {
       apiKeyTag: "stored-legacy-tag",
       apiKeyPreview: "stor****-key"
     });
-    const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+    const tx = {
       aiServiceProvider: {
         findUnique: vi.fn().mockResolvedValue(existing),
         update: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
@@ -397,6 +452,10 @@ describe("AI service API routes", () => {
           ...data
         })))
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -409,7 +468,7 @@ describe("AI service API routes", () => {
       { params: Promise.resolve({ providerId: "provider-1" }) }
     );
     const payload = await response.json();
-    const updateData = prisma.aiServiceProvider.update.mock.calls[0][0].data;
+    const updateData = tx.aiServiceProvider.update.mock.calls[0][0].data;
 
     expect(response.status).toBe(200);
     expect(updateData).toEqual(expect.objectContaining({
@@ -427,12 +486,12 @@ describe("AI service API routes", () => {
     expect(payload.provider.apiKeyPreview).toBe("new-****-key");
     expect(JSON.stringify(payload)).not.toContain("new-legacy-api-key");
     expect(JSON.stringify(payload)).not.toContain(updateData.apiKeyCiphertext);
+    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
   });
 
   it("replaces provider settings only when settings are supplied", async () => {
     const existing = providerRow({ settingsJson: JSON.stringify({ region: "cn-beijing" }) });
-    const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+    const tx = {
       aiServiceProvider: {
         findUnique: vi.fn().mockResolvedValue(existing),
         update: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
@@ -440,6 +499,10 @@ describe("AI service API routes", () => {
           ...data
         })))
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -454,20 +517,179 @@ describe("AI service API routes", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(prisma.aiServiceProvider.update).toHaveBeenCalledWith({
+    expect(tx.aiServiceProvider.update).toHaveBeenCalledWith({
       where: { id: "provider-1" },
       data: { settingsJson: JSON.stringify({ region: "us-west", retries: 4 }) }
     });
     expect(payload.provider.settings).toEqual({ region: "us-west", retries: 4 });
+    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
+  it("clears nullable provider text fields while preserving omitted fields", async () => {
+    const existing = providerRow({
+      baseUrl: "https://old.example/v1",
+      notes: "old notes"
+    });
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
+          ...existing,
+          ...data
+        })))
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ baseUrl: "   ", notes: null })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(tx.aiServiceProvider.update).toHaveBeenCalledWith({
+      where: { id: "provider-1" },
+      data: { baseUrl: null, notes: null }
+    });
+    expect(payload.provider.baseUrl).toBeNull();
+    expect(payload.provider.notes).toBeNull();
+    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
+  it("returns an unchanged provider for an empty patch without issuing an update", async () => {
+    const existing = providerRow();
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn()
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({})
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.provider.id).toBe("provider-1");
+    expect(tx.aiServiceProvider.update).not.toHaveBeenCalled();
+    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
+  it("adds structured credentials when the stored envelope is entirely null", async () => {
+    vi.stubEnv("AI_CONFIG_SECRET", "route-test-config-secret");
+    const existing = providerRow({
+      credentialsCiphertext: null,
+      credentialsIv: null,
+      credentialsTag: null,
+      credentialsPreviewJson: null
+    });
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
+          ...existing,
+          ...data
+        })))
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ credentials: { apiKey: "first-structured-key" } })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+    const data = tx.aiServiceProvider.update.mock.calls[0][0].data;
+
+    expect(response.status).toBe(200);
+    expect(decryptCredentialMap({
+      ciphertext: data.credentialsCiphertext,
+      iv: data.credentialsIv,
+      tag: data.credentialsTag
+    }, "route-test-config-secret")).toEqual({ apiKey: "first-structured-key" });
+    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
+  it("updates public fields without decrypting credentials under a different config key", async () => {
+    const envelope = encryptCredentialMap(
+      { apiKey: "stored-structured-key" },
+      "original-config-secret"
+    );
+    vi.stubEnv("AI_CONFIG_SECRET", "different-config-secret");
+    const existing = providerRow({
+      credentialsCiphertext: envelope.ciphertext,
+      credentialsIv: envelope.iv,
+      credentialsTag: envelope.tag
+    });
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
+          ...existing,
+          ...data
+        })))
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: false })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(tx.aiServiceProvider.update).toHaveBeenCalledWith({
+      where: { id: "provider-1" },
+      data: { enabled: false }
+    });
+    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
   });
 
   it("returns 404 when updating a missing provider", async () => {
-    const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+    const tx = {
       aiServiceProvider: {
         findUnique: vi.fn().mockResolvedValue(null),
         update: vi.fn()
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -481,12 +703,12 @@ describe("AI service API routes", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
+    expect(tx.aiServiceProvider.update).not.toHaveBeenCalled();
+    expect(prisma.aiServiceProvider.findUnique).not.toHaveBeenCalled();
   });
 
   it("rejects an incomplete stored credential envelope without erasing it", async () => {
-    const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+    const tx = {
       aiServiceProvider: {
         findUnique: vi.fn().mockResolvedValue(providerRow({
           credentialsCiphertext: "stored-ciphertext",
@@ -495,6 +717,10 @@ describe("AI service API routes", () => {
         })),
         update: vi.fn()
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -509,6 +735,7 @@ describe("AI service API routes", () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "Internal server error" });
+    expect(tx.aiServiceProvider.update).not.toHaveBeenCalled();
     expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
   });
 
@@ -524,12 +751,15 @@ describe("AI service API routes", () => {
       credentialsTag: "stored-tag"
     }]
   ])("rejects a stored credential envelope containing %s", async (_case, envelope) => {
-    const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+    const tx = {
       aiServiceProvider: {
         findUnique: vi.fn().mockResolvedValue(providerRow(envelope)),
         update: vi.fn()
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -544,6 +774,7 @@ describe("AI service API routes", () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "Internal server error" });
+    expect(tx.aiServiceProvider.update).not.toHaveBeenCalled();
     expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
   });
 
@@ -572,12 +803,15 @@ describe("AI service API routes", () => {
   });
 
   it("creates a default model with settings in one transaction", async () => {
-    const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+    const tx = {
       aiModelConfig: {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         create: vi.fn().mockResolvedValue(modelRow())
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { updateMany: vi.fn(), create: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -599,11 +833,11 @@ describe("AI service API routes", () => {
 
     expect(response.status).toBe(201);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(prisma.aiModelConfig.updateMany).toHaveBeenCalledWith({
+    expect(tx.aiModelConfig.updateMany).toHaveBeenCalledWith({
       where: { capability: "VISION_BEHAVIOR_ANALYSIS" },
       data: { isDefault: false }
     });
-    expect(prisma.aiModelConfig.create).toHaveBeenCalledWith({
+    expect(tx.aiModelConfig.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         modelName: "qwen-vl-max",
         capability: "VISION_BEHAVIOR_ANALYSIS",
@@ -612,18 +846,139 @@ describe("AI service API routes", () => {
       }),
       include: expect.any(Object)
     });
-    expect(prisma.aiModelConfig.create.mock.calls[0][0].data).not.toHaveProperty("settings");
+    expect(tx.aiModelConfig.create.mock.calls[0][0].data).not.toHaveProperty("settings");
+    expect(prisma.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(prisma.aiModelConfig.create).not.toHaveBeenCalled();
     expect(payload.model.settings).toEqual({ enableThinking: false });
     expect(payload.model).not.toHaveProperty("settingsJson");
   });
 
-  it("edits model settings and clears defaults in the target capability", async () => {
+  it("forces a newly created default model enabled", async () => {
+    const tx = {
+      aiModelConfig: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        create: vi.fn().mockResolvedValue(modelRow({ enabled: true, isDefault: true }))
+      }
+    };
     const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+      $transaction: transactionMock(tx),
+      aiModelConfig: { updateMany: vi.fn(), create: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/route");
+    const response = await route.POST(
+      new Request("http://localhost/api/ai-services/models", {
+        method: "POST",
+        body: JSON.stringify({
+          providerId: "provider-1",
+          displayName: "Default model",
+          modelName: "default-model",
+          capability: "REPORT_ANALYSIS",
+          enabled: false,
+          isDefault: true
+        })
+      })
+    );
+
+    expect(response.status).toBe(201);
+    expect(tx.aiModelConfig.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ enabled: true, isDefault: true }),
+      include: expect.any(Object)
+    });
+    expect(prisma.aiModelConfig.create).not.toHaveBeenCalled();
+  });
+
+  it("clears model cost notes while preserving an omitted cost note", async () => {
+    const existing = {
+      id: "model-1",
+      capability: "REPORT_ANALYSIS",
+      enabled: true,
+      isDefault: false
+    };
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        updateMany: vi.fn(),
+        update: vi.fn()
+          .mockResolvedValueOnce(modelRow({ costNote: null }))
+          .mockResolvedValueOnce(modelRow({ displayName: "Renamed", costNote: "preserved" }))
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const clearResponse = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/model-1", {
+        method: "PATCH",
+        body: JSON.stringify({ costNote: "   " })
+      }),
+      { params: Promise.resolve({ modelId: "model-1" }) }
+    );
+    const omitResponse = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/model-1", {
+        method: "PATCH",
+        body: JSON.stringify({ displayName: "Renamed" })
+      }),
+      { params: Promise.resolve({ modelId: "model-1" }) }
+    );
+
+    expect(clearResponse.status).toBe(200);
+    expect(omitResponse.status).toBe(200);
+    expect(tx.aiModelConfig.update.mock.calls[0][0].data).toEqual({ costNote: null });
+    expect(tx.aiModelConfig.update.mock.calls[1][0].data).toEqual({ displayName: "Renamed" });
+    expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
+  });
+
+  it("disabling a current default also clears its default state", async () => {
+    const tx = {
       aiModelConfig: {
         findUnique: vi.fn().mockResolvedValue({
           id: "model-1",
           capability: "REPORT_ANALYSIS",
+          enabled: true,
+          isDefault: true
+        }),
+        updateMany: vi.fn(),
+        update: vi.fn().mockResolvedValue(modelRow({ enabled: false, isDefault: false }))
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/model-1", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: false })
+      }),
+      { params: Promise.resolve({ modelId: "model-1" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
+      where: { id: "model-1" },
+      data: { enabled: false, isDefault: false },
+      include: expect.any(Object)
+    });
+    expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
+  });
+
+  it("edits model settings and clears defaults in the target capability", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "model-1",
+          capability: "REPORT_ANALYSIS",
+          enabled: true,
           isDefault: true
         }),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -632,6 +987,10 @@ describe("AI service API routes", () => {
           settingsJson: JSON.stringify({ topK: 40 })
         }))
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -650,14 +1009,14 @@ describe("AI service API routes", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(prisma.aiModelConfig.updateMany).toHaveBeenCalledWith({
+    expect(tx.aiModelConfig.updateMany).toHaveBeenCalledWith({
       where: {
         capability: "VISION_BEHAVIOR_ANALYSIS",
         id: { not: "model-1" }
       },
       data: { isDefault: false }
     });
-    expect(prisma.aiModelConfig.update).toHaveBeenCalledWith({
+    expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
       where: { id: "model-1" },
       data: {
         modelName: "qwen-vl-plus",
@@ -668,15 +1027,18 @@ describe("AI service API routes", () => {
     });
     expect(payload.model.settings).toEqual({ topK: 40 });
     expect(payload.model).not.toHaveProperty("settingsJson");
+    expect(prisma.aiModelConfig.findUnique).not.toHaveBeenCalled();
+    expect(prisma.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
   it("patches every editable model field and enforces target default uniqueness", async () => {
-    const prisma = {
-      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+    const tx = {
       aiModelConfig: {
         findUnique: vi.fn().mockResolvedValue({
           id: "model-2",
           capability: "INTERVIEW_FOLLOW_UP",
+          enabled: false,
           isDefault: false
         }),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -686,6 +1048,10 @@ describe("AI service API routes", () => {
           isDefault: true
         }))
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -709,14 +1075,14 @@ describe("AI service API routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(prisma.aiModelConfig.updateMany).toHaveBeenCalledWith({
+    expect(tx.aiModelConfig.updateMany).toHaveBeenCalledWith({
       where: {
         capability: "VISION_BEHAVIOR_ANALYSIS",
         id: { not: "model-2" }
       },
       data: { isDefault: false }
     });
-    expect(prisma.aiModelConfig.update).toHaveBeenCalledWith({
+    expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
       where: { id: "model-2" },
       data: {
         displayName: "Qwen Follow-up Updated",
@@ -731,7 +1097,10 @@ describe("AI service API routes", () => {
       },
       include: expect.any(Object)
     });
-    expect(prisma.aiModelConfig.update.mock.calls[0][0].data).not.toHaveProperty("settingsJson");
+    expect(tx.aiModelConfig.update.mock.calls[0][0].data).not.toHaveProperty("settingsJson");
+    expect(prisma.aiModelConfig.findUnique).not.toHaveBeenCalled();
+    expect(prisma.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
   it("deletes a model configuration with safe settings serialization", async () => {

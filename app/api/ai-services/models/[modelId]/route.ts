@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { aiModelConfigInputSchema } from "@/lib/validators/aiServices";
@@ -21,9 +22,17 @@ const modelInclude = {
   }
 } as const;
 
+const clearableNullableText = z.preprocess(
+  (value) => typeof value === "string"
+    ? (value.trim() ? value.trim() : null)
+    : value,
+  z.string().nullable()
+);
+
 const updateModelSchema = aiModelConfigInputSchema
-  .omit({ providerId: true })
+  .omit({ providerId: true, costNote: true })
   .partial()
+  .extend({ costNote: clearableNullableText.optional() })
   .strict();
 
 export async function PATCH(request: Request, context: RouteContext) {
@@ -40,7 +49,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     const model = await prisma.$transaction(async (tx) => {
       const existing = await tx.aiModelConfig.findUnique({
         where: { id: normalizedModelId },
-        select: { id: true, capability: true, isDefault: true }
+        select: { id: true, capability: true, enabled: true, isDefault: true }
       });
 
       if (!existing) {
@@ -48,7 +57,14 @@ export async function PATCH(request: Request, context: RouteContext) {
       }
 
       const targetCapability = input.capability ?? existing.capability;
-      const targetIsDefault = input.isDefault ?? existing.isDefault;
+      let targetEnabled = input.enabled ?? existing.enabled;
+      let targetIsDefault = input.isDefault ?? existing.isDefault;
+
+      if (input.isDefault === true) {
+        targetEnabled = true;
+      } else if (input.enabled === false) {
+        targetIsDefault = false;
+      }
 
       if (targetIsDefault) {
         await tx.aiModelConfig.updateMany({
@@ -60,15 +76,37 @@ export async function PATCH(request: Request, context: RouteContext) {
         });
       }
 
-      const { settings, ...updateInput } = input;
+      const data: Record<string, unknown> = {};
+
+      for (const field of [
+        "displayName",
+        "modelName",
+        "capability",
+        "temperature",
+        "maxTokens",
+        "timeoutMs",
+        "costNote"
+      ] as const) {
+        if (input[field] !== undefined) {
+          data[field] = input[field];
+        }
+      }
+
+      if (input.settings !== undefined) {
+        data.settingsJson = JSON.stringify(input.settings);
+      }
+
+      if (input.enabled !== undefined || targetEnabled !== existing.enabled) {
+        data.enabled = targetEnabled;
+      }
+
+      if (input.isDefault !== undefined || targetIsDefault !== existing.isDefault) {
+        data.isDefault = targetIsDefault;
+      }
 
       return tx.aiModelConfig.update({
         where: { id: normalizedModelId },
-        data: {
-          ...updateInput,
-          ...(settings === undefined ? {} : { settingsJson: JSON.stringify(settings) }),
-          ...(input.isDefault === true ? { enabled: true } : {})
-        },
+        data,
         include: modelInclude
       });
     });
