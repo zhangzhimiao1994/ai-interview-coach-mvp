@@ -1,5 +1,7 @@
 import { AdminShell } from "@/components/admin/AdminShell";
+import { AiDiagnosticsPanel } from "@/components/admin/AiDiagnosticsPanel";
 import { AiServiceConfigPanel } from "@/components/admin/AiServiceConfigPanel";
+import { getAllAiDiagnostics } from "@/lib/ai/diagnostics";
 import { prisma } from "@/lib/db/prisma";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +18,7 @@ const modelInclude = {
 } as const;
 
 export default async function AiServicesPage() {
-  const [providers, models] = await Promise.all([
+  const [providers, models, diagnostics] = await Promise.all([
     prisma.aiServiceProvider.findMany({
       orderBy: { createdAt: "desc" },
       select: {
@@ -32,7 +34,8 @@ export default async function AiServicesPage() {
     prisma.aiModelConfig.findMany({
       orderBy: [{ capability: "asc" }, { createdAt: "desc" }],
       include: modelInclude
-    })
+    }),
+    getAllAiDiagnostics()
   ]);
 
   return (
@@ -44,7 +47,10 @@ export default async function AiServicesPage() {
       backHref={"/admin"}
       backLabel="返回后台"
     >
-      <AiServiceConfigPanel initialProviders={providers} initialModels={models} />
+      <div className="grid gap-6">
+        <AiDiagnosticsPanel initialDiagnostics={diagnostics} />
+        <AiServiceConfigPanel initialProviders={providers} initialModels={models} />
+      </div>
     </AdminShell>
   );
 }
