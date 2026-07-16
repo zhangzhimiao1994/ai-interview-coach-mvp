@@ -61,6 +61,31 @@ export async function findSelectedAiModel(capability: AiCapability) {
   });
 }
 
+export async function findAiModelById(modelId: string) {
+  return prisma.aiModelConfig.findUnique({
+    where: { id: modelId },
+    include: {
+      provider: {
+        select: {
+          id: true,
+          displayName: true,
+          providerType: true,
+          baseUrl: true,
+          apiKeyPreview: true,
+          apiKeyCiphertext: true,
+          apiKeyIv: true,
+          apiKeyTag: true,
+          credentialsCiphertext: true,
+          credentialsIv: true,
+          credentialsTag: true,
+          settingsJson: true,
+          enabled: true
+        }
+      }
+    }
+  });
+}
+
 export async function resolveAiProviderLabel(capability: AiCapability) {
   const configuredModel = await findSelectedAiModel(capability).catch(() => null);
 

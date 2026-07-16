@@ -177,6 +177,10 @@ describe("AI configuration diagnostics", () => {
       capability: "SPEECH_TO_TEXT",
       apiKey: null,
       credentials: { asrApiKey: "asr-secret-sentinel" },
+      providerSettings: {
+        workspaceId: "ws-main",
+        region: "cn-beijing"
+      },
       modelSettings: {
         language: "zh-CN",
         sampleRate: 16000,
@@ -191,11 +195,80 @@ describe("AI configuration diagnostics", () => {
     });
 
     expect(result).toMatchObject({
+      status: "CONFIG_VALID",
+      code: "LIVE_CHECK_REQUIRES_AUDIO"
+    });
+    expect(deps.probeTextModel).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("asr-secret-sentinel");
+  });
+
+  it("requires the Alibaba workspace endpoint before enabling realtime ASR", async () => {
+    const model = selectedModel({
+      capability: "SPEECH_TO_TEXT",
+      apiKey: "main-asr-secret",
+      providerSettings: { region: "cn-beijing" },
+      modelSettings: {
+        language: "zh-CN",
+        sampleRate: 16000,
+        encoding: "pcm"
+      }
+    });
+
+    const result = await diagnoseAiCapability("SPEECH_TO_TEXT", {
+      liveCheck: false,
+      dependencies: dependencies(model)
+    });
+
+    expect(result).toMatchObject({
+      status: "MISCONFIGURED",
+      code: "MISSING_REQUIRED_CONFIGURATION"
+    });
+    expect(result.message).toContain("Workspace ID");
+  });
+
+  it("does not require an unused HTTP Base URL for Alibaba realtime ASR", async () => {
+    const model = selectedModel({
+      capability: "SPEECH_TO_TEXT",
+      credentials: { asrApiKey: "asr-secret" },
+      providerSettings: {
+        workspaceId: "ws-main",
+        region: "cn-beijing"
+      },
+      modelSettings: {
+        language: "zh-CN",
+        sampleRate: 16000,
+        encoding: "pcm"
+      },
+      providerOverrides: { baseUrl: null }
+    });
+
+    const result = await diagnoseAiCapability("SPEECH_TO_TEXT", {
+      liveCheck: false,
+      dependencies: dependencies(model)
+    });
+
+    expect(result).toMatchObject({
+      status: "CONFIG_VALID",
+      code: "ADAPTER_AVAILABLE"
+    });
+  });
+
+  it("does not report a non-Alibaba speech model as an available realtime adapter", async () => {
+    const deps = dependencies(selectedModel({
+      capability: "SPEECH_TO_TEXT",
+      providerOverrides: { providerType: "OPENAI_COMPATIBLE" }
+    }));
+
+    const result = await diagnoseAiCapability("SPEECH_TO_TEXT", {
+      liveCheck: true,
+      dependencies: deps
+    });
+
+    expect(result).toMatchObject({
       status: "CONFIGURED_NOT_ADAPTED",
       code: "ADAPTER_NOT_IMPLEMENTED"
     });
     expect(deps.probeTextModel).not.toHaveBeenCalled();
-    expect(JSON.stringify(result)).not.toContain("asr-secret-sentinel");
   });
 
   it("requires every Alibaba TTS setting", async () => {

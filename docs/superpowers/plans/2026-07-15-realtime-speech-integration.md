@@ -42,7 +42,7 @@
 - Create: `lib/realtime/upgradeRouter.ts`
 - Test: `tests/unit/realtime-tickets.test.ts`
 
-- [ ] **Step 1: Write one-time ticket tests**
+- [x] **Step 1: Write one-time ticket tests**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -58,13 +58,13 @@ it("consumes an ASR ticket once and rejects it after expiry", () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `npm test -- tests/unit/realtime-tickets.test.ts`
 
 Expected: FAIL because the ticket store does not exist.
 
-- [ ] **Step 3: Install WebSocket dependencies**
+- [x] **Step 3: Install WebSocket dependencies**
 
 Run: `npm install ws`
 
@@ -74,7 +74,7 @@ Move the existing `tsx` package to production dependencies because both source a
 
 Expected: `package.json` and lockfile include both packages.
 
-- [ ] **Step 4: Implement the ticket store**
+- [x] **Step 4: Implement the ticket store**
 
 ```ts
 import { randomBytes } from "node:crypto";
@@ -100,7 +100,7 @@ export function createRealtimeTicketStore(now = Date.now) {
 export const realtimeTicketStore = createRealtimeTicketStore();
 ```
 
-- [ ] **Step 5: Create `server.ts`**
+- [x] **Step 5: Create `server.ts`**
 
 Use `next`, `node:http`, and `WebSocketServer({ noServer: true })`. Route normal requests to `app.getRequestHandler()`. Route `/ws/asr` to the same-process WebSocket server and delegate every other upgrade to `app.getUpgradeHandler()` so development HMR keeps working. Until Task 2 wires the ASR gateway, close accepted ASR sockets with retryable code `1013`. Use `--dev` to select development mode.
 
@@ -113,13 +113,13 @@ Update scripts:
 }
 ```
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run: `npm test -- tests/unit/realtime-tickets.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add .gitattributes package.json package-lock.json server.ts lib/realtime/tickets.ts lib/realtime/upgradeRouter.ts tests/unit/realtime-tickets.test.ts tests/unit/realtime-upgrade-router.test.ts tests/unit/linux-deployment-package.test.ts
@@ -131,11 +131,15 @@ git commit -m "add same-process realtime websocket server"
 **Files:**
 - Create: `lib/media/providers/alibabaCredentials.ts`
 - Create: `lib/media/providers/alibabaAsr.ts`
+- Create: `lib/media/speechRecognitionSession.ts`
 - Create: `lib/realtime/asrGateway.ts`
 - Create: `app/api/speech-recognition/sessions/route.ts`
+- Modify: `server.ts`
 - Test: `tests/unit/alibaba-asr.test.ts`
+- Test: `tests/unit/asr-gateway.test.ts`
+- Test: `tests/unit/speech-recognition-session-route.test.ts`
 
-- [ ] **Step 1: Write failing ASR contract tests**
+- [x] **Step 1: Write failing ASR contract tests**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -156,17 +160,17 @@ it("returns only transcript and error events", () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `npm test -- tests/unit/alibaba-asr.test.ts`
 
 Expected: FAIL because Alibaba ASR modules do not exist.
 
-- [ ] **Step 3: Implement credential resolution**
+- [x] **Step 3: Implement credential resolution**
 
 `resolveAlibabaCredentials(model)` decrypts `credentialsCiphertext/credentialsIv/credentialsTag`, selects `asrApiKey || apiKey`, parses `workspaceId` and `region`, and throws `MediaConfigurationError` when required values are absent. No caller receives the decrypted map in a JSON response.
 
-- [ ] **Step 4: Implement strict event mapping**
+- [x] **Step 4: Implement strict event mapping**
 
 Use Zod discriminated unions for Alibaba server events and map them to:
 
@@ -180,7 +184,7 @@ type ClientAsrEvent =
 
 Allow client messages only for `session.update`, `input_audio_buffer.append`, `input_audio_buffer.commit`, and `session.finish`. Reject messages larger than 96 KiB and close sessions after the configured maximum duration.
 
-- [ ] **Step 5: Implement the ticket route**
+- [x] **Step 5: Implement the ticket route**
 
 Validate `{ sessionId }`, confirm an `IN_PROGRESS` training session exists, resolve `SPEECH_TO_TEXT`, issue a 60-second ticket, and return:
 
@@ -196,7 +200,7 @@ Validate `{ sessionId }`, confirm an `IN_PROGRESS` training session exists, reso
 
 Rate limit to 10 tickets per session per minute using `consumeRateLimit`.
 
-- [ ] **Step 6: Implement `handleAsrUpgrade`**
+- [x] **Step 6: Implement `handleAsrConnection`**
 
 Consume the ticket, resolve the model by ticket model ID, open upstream `ws` with headers:
 
@@ -209,13 +213,13 @@ Consume the ticket, resolve the model by ticket model ID, open upstream `ws` wit
 
 Forward only validated events, close both sockets together, and log upstream failures without credentials or audio payloads.
 
-- [ ] **Step 7: Run tests**
+- [x] **Step 7: Run tests**
 
 Run: `npm test -- tests/unit/alibaba-asr.test.ts tests/unit/realtime-tickets.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add lib/media/providers/alibabaCredentials.ts lib/media/providers/alibabaAsr.ts lib/realtime/asrGateway.ts app/api/speech-recognition/sessions/route.ts tests/unit/alibaba-asr.test.ts

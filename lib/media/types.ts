@@ -17,7 +17,7 @@ export type CapabilityCheckResult = MediaExecutionMetadata & {
 export type SpeechRecognitionSessionInput = {
   sessionId: string;
   language: string;
-  encoding: "pcm16" | "opus";
+  encoding: "pcm" | "opus";
   sampleRate: number;
   channels: number;
 };
@@ -25,7 +25,7 @@ export type SpeechRecognitionSessionInput = {
 export type SpeechRecognitionSessionResult = MediaExecutionMetadata & {
   connectionUrl: string;
   ticketExpiresAt: string;
-  encoding: "pcm16" | "opus";
+  encoding: "pcm" | "opus";
   sampleRate: number;
   channels: number;
 };

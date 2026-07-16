@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { findSelectedAiModel } from "@/lib/ai/configResolver";
-import { resolveMediaModel } from "@/lib/media/config";
+import {
+  resolveMediaModel,
+  resolveMediaModelById
+} from "@/lib/media/config";
 import {
   MediaConfigurationError,
   MediaProviderError
@@ -14,7 +17,8 @@ import type {
 } from "@/lib/media/types";
 
 vi.mock("@/lib/ai/configResolver", () => ({
-  findSelectedAiModel: vi.fn()
+  findSelectedAiModel: vi.fn(),
+  findAiModelById: vi.fn()
 }));
 
 const selectedModel = {
@@ -247,5 +251,38 @@ describe("resolveMediaModel", () => {
     expect(error.message).not.toContain(sentinel);
     expect(JSON.stringify(error)).not.toContain("encrypted-api-key");
     expect(JSON.stringify(error)).not.toContain("encrypted-credential-map");
+  });
+});
+
+describe("resolveMediaModelById", () => {
+  it("pins an already-issued realtime ticket to its enabled model", async () => {
+    const findModel = vi.fn().mockResolvedValue({
+      ...selectedModel,
+      isSelected: false
+    });
+
+    const result = await resolveMediaModelById(
+      "model-1",
+      "VISION_BEHAVIOR_ANALYSIS",
+      findModel
+    );
+
+    expect(findModel).toHaveBeenCalledWith("model-1");
+    expect(result.modelId).toBe("model-1");
+  });
+
+  it("rejects a ticket model that was disabled before connection", async () => {
+    const findModel = vi.fn().mockResolvedValue({
+      ...selectedModel,
+      enabled: false
+    });
+
+    await expect(
+      resolveMediaModelById(
+        "model-1",
+        "VISION_BEHAVIOR_ANALYSIS",
+        findModel
+      )
+    ).rejects.toMatchObject({ code: "MEDIA_MODEL_UNAVAILABLE" });
   });
 });

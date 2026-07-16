@@ -7,7 +7,7 @@ export function AlibabaProviderFields() {
       <h3 className="text-sm font-medium text-ink">阿里百炼与 Avatar 参数</h3>
       <div className="grid gap-3 sm:grid-cols-2">
         <ConfigField label="地域" name="region" defaultValue="cn-beijing" />
-        <ConfigField label="Workspace ID" name="workspaceId" placeholder="可选" />
+        <ConfigField label="Workspace ID" name="workspaceId" placeholder="实时语音识别必填" />
         <ConfigField label="RTC App ID" name="rtcAppId" placeholder="实时数字人使用" />
         <ConfigField label="ASR API Key" name="asrApiKey" type="password" placeholder="留空则使用主 API Key" />
         <ConfigField label="RTC App Key" name="rtcAppKey" type="password" placeholder="加密保存" />

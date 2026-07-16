@@ -1,4 +1,7 @@
-import { findSelectedAiModel } from "@/lib/ai/configResolver";
+import {
+  findAiModelById,
+  findSelectedAiModel
+} from "@/lib/ai/configResolver";
 import type { AiCapability } from "@/lib/domain/aiServiceConstants";
 import { MediaConfigurationError } from "@/lib/media/errors";
 
@@ -40,6 +43,10 @@ type SelectedMediaModel = {
 
 export type FindSelectedMediaModel = (
   capability: AiCapability
+) => Promise<SelectedMediaModel | null>;
+
+export type FindMediaModelById = (
+  modelId: string
 ) => Promise<SelectedMediaModel | null>;
 
 export type ResolvedMediaModel = {
@@ -134,6 +141,13 @@ export async function resolveMediaModel(
     );
   }
 
+  return resolvedMediaModel(selected, capability);
+}
+
+function resolvedMediaModel(
+  selected: SelectedMediaModel,
+  capability: AiCapability
+): ResolvedMediaModel {
   const providerSettings = parseSettings(
     selected.provider.settingsJson,
     "provider",
@@ -172,4 +186,35 @@ export async function resolveMediaModel(
       )
     }
   };
+}
+
+export async function resolveMediaModelById(
+  modelId: string,
+  capability: AiCapability,
+  findModel: FindMediaModelById = findAiModelById
+): Promise<ResolvedMediaModel> {
+  let model: SelectedMediaModel | null;
+
+  try {
+    model = await findModel(modelId);
+  } catch {
+    throw new MediaConfigurationError("Unable to load the realtime media model", {
+      code: "MEDIA_CONFIGURATION_UNAVAILABLE",
+      retryable: true
+    });
+  }
+
+  if (
+    !model ||
+    !model.enabled ||
+    !model.provider.enabled ||
+    model.capability !== capability
+  ) {
+    throw new MediaConfigurationError(
+      "The realtime media model is no longer available",
+      { code: "MEDIA_MODEL_UNAVAILABLE" }
+    );
+  }
+
+  return resolvedMediaModel(model, capability);
 }

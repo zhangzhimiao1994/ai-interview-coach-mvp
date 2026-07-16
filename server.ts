@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import next from "next";
 import { WebSocketServer } from "ws";
+import { handleAsrConnection } from "@/lib/realtime/asrGateway";
 import { createRealtimeUpgradeHandler } from "@/lib/realtime/upgradeRouter";
 
 function readPort(value: string | undefined) {
@@ -42,8 +43,8 @@ async function main() {
   const upgradeHandler = createRealtimeUpgradeHandler({
     nextUpgradeHandler,
     webSocketServer,
-    onAsrConnection(client) {
-      client.close(1013, "Realtime ASR is not configured yet");
+    onAsrConnection(client, request) {
+      void handleAsrConnection(client, request);
     }
   });
 

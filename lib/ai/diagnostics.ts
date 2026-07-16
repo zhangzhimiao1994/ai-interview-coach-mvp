@@ -218,14 +218,21 @@ function requiredConfiguration(
 ) {
   const missing: string[] = [];
   const isMock = model.provider.providerType === "MOCK";
+  const usesAlibabaRealtimeEndpoint =
+    capability === "SPEECH_TO_TEXT" &&
+    model.provider.providerType === "TONGYI";
 
   if (!hasText(model.modelName)) {
     missing.push("模型名称");
   }
 
-  if (!isMock && !model.provider.baseUrl) {
+  if (!isMock && !usesAlibabaRealtimeEndpoint && !model.provider.baseUrl) {
     missing.push("Base URL");
-  } else if (!isMock && !isHttpUrl(model.provider.baseUrl)) {
+  } else if (
+    !isMock &&
+    !usesAlibabaRealtimeEndpoint &&
+    !isHttpUrl(model.provider.baseUrl)
+  ) {
     throw new DiagnosticConfigurationError(
       "INVALID_BASE_URL",
       "Base URL 必须使用有效的 HTTP 或 HTTPS 地址。"
@@ -244,6 +251,15 @@ function requiredConfiguration(
       case "SPEECH_TO_TEXT":
         if (!hasText(apiKey) && !hasText(credentials.asrApiKey)) {
           missing.push("主 API Key 或 ASR API Key");
+        }
+        if (!hasText(providerSettings.workspaceId)) {
+          missing.push("Workspace ID");
+        }
+        if (
+          !hasText(providerSettings.region) ||
+          !["cn-beijing", "ap-southeast-1"].includes(providerSettings.region)
+        ) {
+          missing.push("实时服务地域");
         }
         if (!hasText(modelSettings.language)) missing.push("识别语言");
         if (!isPositiveInteger(modelSettings.sampleRate)) missing.push("采样率");
@@ -390,6 +406,30 @@ export async function diagnoseAiCapability(
       apiKey,
       credentials
     );
+
+    if (capability === "SPEECH_TO_TEXT") {
+      if (model.provider.providerType !== "TONGYI") {
+        return result(
+          context,
+          "CONFIGURED_NOT_ADAPTED",
+          "ADAPTER_NOT_IMPLEMENTED",
+          "配置完整，当前实时语音适配器仅支持阿里百炼。",
+          deps.now
+        );
+      }
+
+      return result(
+        context,
+        "CONFIG_VALID",
+        options.liveCheck
+          ? "LIVE_CHECK_REQUIRES_AUDIO"
+          : "ADAPTER_AVAILABLE",
+        options.liveCheck
+          ? "实时语音连通需要麦克风音频，将在面试间内按需验证。"
+          : "配置检查通过，实时语音连接将在面试间内按需建立。",
+        deps.now
+      );
+    }
 
     if (!isTextDiagnosticCapability(capability)) {
       return result(
