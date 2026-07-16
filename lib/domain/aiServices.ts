@@ -24,6 +24,30 @@ export class AiConfigSecretMissingError extends Error {
   }
 }
 
+export class AiConfigDecryptionError extends Error {
+  constructor(cause: unknown) {
+    super("Stored secret could not be decrypted", { cause });
+    this.name = "AiConfigDecryptionError";
+  }
+}
+
+const canonicalBase64Pattern =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function decodeCanonicalBase64(value: string) {
+  if (typeof value !== "string" || !canonicalBase64Pattern.test(value)) {
+    throw new Error("Encrypted secret field is not canonical base64");
+  }
+
+  const decoded = Buffer.from(value, "base64");
+
+  if (decoded.toString("base64") !== value) {
+    throw new Error("Encrypted secret field is not canonical base64");
+  }
+
+  return decoded;
+}
+
 export function maskSecret(secret: string) {
   const trimmed = secret.trim();
 
@@ -60,18 +84,31 @@ export function encryptSecret(secret: string, configSecret: string): EncryptedSe
 }
 
 export function decryptSecret(encrypted: EncryptedSecret, configSecret: string) {
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    encryptionKey(configSecret),
-    Buffer.from(encrypted.iv, "base64")
-  );
-  decipher.setAuthTag(Buffer.from(encrypted.tag, "base64"));
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(encrypted.ciphertext, "base64")),
-    decipher.final()
-  ]);
+  try {
+    const ciphertext = decodeCanonicalBase64(encrypted.ciphertext);
+    const iv = decodeCanonicalBase64(encrypted.iv);
+    const tag = decodeCanonicalBase64(encrypted.tag);
 
-  return plaintext.toString("utf8");
+    if (iv.length !== 12 || tag.length !== 16) {
+      throw new Error("Encrypted secret envelope has invalid field lengths");
+    }
+
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      encryptionKey(configSecret),
+      iv,
+      { authTagLength: 16 }
+    );
+    decipher.setAuthTag(tag);
+    const plaintext = Buffer.concat([
+      decipher.update(ciphertext),
+      decipher.final()
+    ]);
+
+    return plaintext.toString("utf8");
+  } catch (error) {
+    throw new AiConfigDecryptionError(error);
+  }
 }
 
 export function encryptCredentialMap(
@@ -85,27 +122,21 @@ export function decryptCredentialMap(
   encrypted: EncryptedSecret,
   configSecret: string
 ): CredentialMap {
-  let parsed: unknown;
-
   try {
-    parsed = JSON.parse(decryptSecret(encrypted, configSecret)) as unknown;
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new Error("Stored credentials are invalid");
+    const parsed = JSON.parse(decryptSecret(encrypted, configSecret)) as unknown;
+
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Decrypted credential payload is not an object");
     }
 
-    throw error;
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, string] =>
+        typeof entry[1] === "string"
+      )
+    );
+  } catch (error) {
+    throw new Error("Stored credentials are invalid", { cause: error });
   }
-
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Stored credentials are invalid");
-  }
-
-  return Object.fromEntries(
-    Object.entries(parsed).filter((entry): entry is [string, string] =>
-      typeof entry[1] === "string"
-    )
-  );
 }
 
 export function previewCredentialMap(credentials: CredentialMap): CredentialMap {

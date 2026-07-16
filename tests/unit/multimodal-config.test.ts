@@ -295,12 +295,12 @@ describe("structured provider credentials", () => {
     expect(serializedPreview).not.toContain(credentials.organization);
   });
 
-  it("fully masks one- and two-character credential values", () => {
-    expect(previewCredentialMap({ one: "a", two: "ab" })).toEqual({
-      one: "****",
-      two: "****"
-    });
-  });
+  it.each([[1, "a"], [2, "ab"], [3, "abc"], [4, "abcd"]])(
+    "fully masks a %i-character credential value",
+    (_length, secret) => {
+      expect(previewCredentialMap({ secret })).toEqual({ secret: "****" });
+    }
+  );
 
   it.each([null, [], "secret", 42, true])(
     "rejects invalid decrypted credential payload %j",
@@ -319,6 +319,27 @@ describe("structured provider credentials", () => {
     expect(() => decryptCredentialMap(encrypted, configSecret)).toThrowError(
       /^Stored credentials are invalid$/
     );
+  });
+
+  it.each([
+    [
+      "envelope validation",
+      () =>
+        decryptCredentialMap(
+          { ...encryptCredentialMap({ apiKey: "secret" }, configSecret), iv: "YQ" },
+          configSecret
+        )
+    ],
+    [
+      "decryption",
+      () =>
+        decryptCredentialMap(
+          encryptCredentialMap({ apiKey: "secret" }, configSecret),
+          "wrong-config-secret"
+        )
+    ]
+  ])("normalizes %s failures", (_case, decrypt) => {
+    expect(decrypt).toThrowError(/^Stored credentials are invalid$/);
   });
 
   it("drops non-string values from decrypted credential objects", () => {
@@ -386,6 +407,66 @@ describe("multimodal provider and model validation", () => {
       enableThinking: false
     });
   });
+
+  it.each([Infinity, -Infinity, NaN])(
+    "rejects non-finite provider setting %s",
+    (value) => {
+      expect(() =>
+        parseAiServiceProviderInput({
+          ...providerInput,
+          settings: { retryCount: value }
+        })
+      ).toThrow();
+    }
+  );
+
+  it.each([Infinity, -Infinity, NaN])(
+    "rejects non-finite model setting %s",
+    (value) => {
+      expect(() =>
+        parseAiModelConfigInput({
+          ...modelInput,
+          settings: { topK: value }
+        })
+      ).toThrow();
+    }
+  );
+
+  it.each(["", "   ", "__proto__", "prototype", "constructor"])(
+    "rejects unsafe provider credential key %j",
+    (key) => {
+      expect(() =>
+        parseAiServiceProviderInput({
+          ...providerInput,
+          credentials: Object.fromEntries([[key, "secret"]])
+        })
+      ).toThrow();
+    }
+  );
+
+  it.each(["", "   ", "__proto__", "prototype", "constructor"])(
+    "rejects unsafe provider setting key %j",
+    (key) => {
+      expect(() =>
+        parseAiServiceProviderInput({
+          ...providerInput,
+          settings: Object.fromEntries([[key, true]])
+        })
+      ).toThrow();
+    }
+  );
+
+  it.each(["", "   ", "__proto__", "prototype", "constructor"])(
+    "rejects unsafe model setting key %j",
+    (key) => {
+      expect(() =>
+        parseAiModelConfigInput({
+          ...modelInput,
+          settings: Object.fromEntries([[key, true]])
+        })
+      ).toThrow();
+    }
+  );
 
   it.each([
     ["provider", () => parseAiServiceProviderInput({

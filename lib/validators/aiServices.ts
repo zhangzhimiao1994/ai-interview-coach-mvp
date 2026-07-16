@@ -5,7 +5,12 @@ const optionalText = z.preprocess(
   (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
   z.string().trim().optional()
 );
-const primitiveSetting = z.union([z.string(), z.number(), z.boolean()]);
+const unsafeRecordKeys = new Set(["__proto__", "prototype", "constructor"]);
+const recordKey = z.string().refine((key) => {
+  const normalized = key.trim();
+  return normalized.length > 0 && !unsafeRecordKeys.has(normalized);
+}, "Invalid record key");
+const primitiveSetting = z.union([z.string(), z.number().finite(), z.boolean()]);
 
 export const aiServiceProviderInputSchema = z
   .object({
@@ -13,8 +18,8 @@ export const aiServiceProviderInputSchema = z
     providerType: z.enum(aiProviderTypes),
     baseUrl: optionalText,
     apiKey: optionalText,
-    credentials: z.record(z.string().trim().min(1).max(500)).default({}),
-    settings: z.record(primitiveSetting).default({}),
+    credentials: z.record(recordKey, z.string().trim().min(1).max(500)).default({}),
+    settings: z.record(recordKey, primitiveSetting).default({}),
     enabled: z.boolean().default(true),
     notes: optionalText
   })
@@ -29,7 +34,7 @@ export const aiModelConfigInputSchema = z
     temperature: z.number().finite().min(0).max(2).default(0.4),
     maxTokens: z.number().finite().int().positive().max(200000).default(1200),
     timeoutMs: z.number().finite().int().min(1000).max(300000).default(30000),
-    settings: z.record(primitiveSetting).default({}),
+    settings: z.record(recordKey, primitiveSetting).default({}),
     costNote: optionalText,
     enabled: z.boolean().default(true),
     isDefault: z.boolean().default(false)
