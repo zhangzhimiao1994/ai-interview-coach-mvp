@@ -972,6 +972,51 @@ describe("AI service API routes", () => {
     expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
+  it("repairs a legacy disabled default during an unrelated patch", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "model-legacy",
+          capability: "REPORT_ANALYSIS",
+          enabled: false,
+          isDefault: true
+        }),
+        updateMany: vi.fn(),
+        update: vi.fn().mockResolvedValue(modelRow({
+          id: "model-legacy",
+          displayName: "Legacy renamed",
+          enabled: false,
+          isDefault: false
+        }))
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/model-legacy", {
+        method: "PATCH",
+        body: JSON.stringify({ displayName: "Legacy renamed" })
+      }),
+      { params: Promise.resolve({ modelId: "model-legacy" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
+      where: { id: "model-legacy" },
+      data: { displayName: "Legacy renamed", isDefault: false },
+      include: expect.any(Object)
+    });
+    expect(prisma.aiModelConfig.findUnique).not.toHaveBeenCalled();
+    expect(prisma.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
+  });
+
   it("edits model settings and clears defaults in the target capability", async () => {
     const tx = {
       aiModelConfig: {

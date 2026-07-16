@@ -66,6 +66,10 @@ export async function PATCH(request: Request, context: RouteContext) {
         targetIsDefault = false;
       }
 
+      if (!targetEnabled) {
+        targetIsDefault = false;
+      }
+
       if (targetIsDefault) {
         await tx.aiModelConfig.updateMany({
           where: {

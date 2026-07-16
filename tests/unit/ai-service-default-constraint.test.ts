@@ -39,10 +39,11 @@ INSERT INTO "AiModelConfig" (
   "id", "providerId", "displayName", "modelName", "capability",
   "enabled", "isDefault", "createdAt", "updatedAt"
 ) VALUES
-  ('report-a', 'provider-1', 'Report A', 'report-a', 'REPORT_ANALYSIS', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+  ('report-a', 'provider-1', 'Report A', 'report-a', 'REPORT_ANALYSIS', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
   ('report-b', 'provider-1', 'Report B', 'report-b', 'REPORT_ANALYSIS', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
   ('report-c', 'provider-1', 'Report C', 'report-c', 'REPORT_ANALYSIS', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-  ('follow-up-a', 'provider-1', 'Follow-up A', 'follow-up-a', 'INTERVIEW_FOLLOW_UP', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+  ('follow-up-a', 'provider-1', 'Follow-up A', 'follow-up-a', 'INTERVIEW_FOLLOW_UP', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+  ('chat-disabled', 'provider-1', 'Chat Disabled', 'chat-disabled', 'CHAT', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 `;
 
 function executeSqlFile(file: string, databaseUrl: string) {
@@ -106,7 +107,18 @@ describe("AI model default uniqueness migration", () => {
 
       expect(defaults).toEqual([
         { id: "follow-up-a", capability: "INTERVIEW_FOLLOW_UP" },
-        { id: "report-a", capability: "REPORT_ANALYSIS" }
+        { id: "report-b", capability: "REPORT_ANALYSIS" }
+      ]);
+
+      const repairedDisabledDefaults = await prisma.aiModelConfig.findMany({
+        where: { id: { in: ["chat-disabled", "report-a"] } },
+        orderBy: { id: "asc" },
+        select: { id: true, enabled: true, isDefault: true }
+      });
+
+      expect(repairedDisabledDefaults).toEqual([
+        { id: "chat-disabled", enabled: false, isDefault: false },
+        { id: "report-a", enabled: false, isDefault: false }
       ]);
 
       await expect(prisma.aiModelConfig.create({
