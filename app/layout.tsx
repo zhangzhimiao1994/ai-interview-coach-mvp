@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI 面试训练辅导平台",
+  title: "开发面试数字人",
   description: "服务交付型 AI 数字人面试训练 MVP"
 };
 
