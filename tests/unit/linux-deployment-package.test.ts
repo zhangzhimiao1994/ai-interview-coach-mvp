@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -55,5 +55,28 @@ describe("linux deployment package", () => {
 
   it("uses the dedicated readiness endpoint for Docker health checks", () => {
     expect(readWorkspaceFile("docker-compose.yml")).toContain("http://127.0.0.1:3000/api/health");
+  });
+
+  it("packages the diagnostics API and admin assets in the Docker build context", () => {
+    expect(existsSync(join(root, "app/api/ai-services/diagnostics/route.ts"))).toBe(true);
+    expect(existsSync(join(root, "components/admin/AiDiagnosticsPanel.tsx"))).toBe(true);
+    expect(readWorkspaceFile("Dockerfile")).toContain("COPY . .");
+
+    const dockerIgnore = readWorkspaceFile(".dockerignore");
+    expect(dockerIgnore).not.toMatch(/^app(?:\/|$)/m);
+    expect(dockerIgnore).not.toMatch(/^components(?:\/|$)/m);
+    expect(dockerIgnore).not.toMatch(/^lib(?:\/|$)/m);
+  });
+
+  it("documents authenticated diagnostics after source and Docker updates", () => {
+    const docs = readWorkspaceFile("docs/linux-deployment.md");
+
+    expect(docs).toContain("git switch feature/alibaba-multimodal-integration");
+    expect(docs).toContain("git pull");
+    expect(docs).toContain("docker compose up -d --build");
+    expect(docs).toContain("docker compose ps");
+    expect(docs).toContain("curl -u");
+    expect(docs).toContain("/api/ai-services/diagnostics");
+    expect(docs).toContain("真实连通测试不会自动执行");
   });
 });

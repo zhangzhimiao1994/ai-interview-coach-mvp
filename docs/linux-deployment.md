@@ -191,34 +191,72 @@ server {
 
 ## 更新服务
 
-Docker：
+Docker 镜像和源码版本必须来自同一个工作区、同一个分支。更新 Docker 服务时执行：
 
 ```bash
+git switch feature/alibaba-multimodal-integration
 git pull
 docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 interview-coach
 ```
 
-原生 Linux：
+`docker compose up -d --build` 会使用当前工作区重新构建诊断 API 和后台静态资源。SQLite 继续挂载在命名卷 `app-data` 中。不要执行 `docker compose down -v`，否则会删除数据库卷。
+
+原生 Linux 使用 PM2 时执行：
 
 ```bash
+git switch feature/alibaba-multimodal-integration
 git pull
-scripts/linux/setup.sh
+npm ci
+npm run db:generate
+npm run db:migrate:deploy
+npm run build
 pm2 restart ai-interview-coach
 ```
 
-systemd：
+原生 Linux 使用 systemd 时执行相同的依赖、迁移和构建命令，然后重启服务：
 
 ```bash
+git switch feature/alibaba-multimodal-integration
 git pull
-scripts/linux/setup.sh
+npm ci
+npm run db:generate
+npm run db:migrate:deploy
+npm run build
 sudo systemctl restart ai-interview-coach
 ```
 
-数据库结构更新使用 Prisma migration：
+生产数据库结构只使用 Prisma migration，不使用 `prisma db push`：
 
 ```bash
 npm run db:migrate:deploy
 ```
+
+### 更新后验证配置诊断
+
+`/api/health` 仍然是无需认证的容器和数据库就绪检查。`/api/ai-services/diagnostics` 包含服务商与模型配置状态，受管理员 Basic Auth 保护，不能替代公开健康检查。
+
+先把 `.env` 中的管理员账号加载到当前 shell，再读取无付费调用的配置摘要：
+
+```bash
+set -a
+. ./.env
+set +a
+curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
+  "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
+```
+
+GET 摘要和后台首屏只检查本地配置。真实连通测试不会自动执行，只有管理员主动点击后台按钮或明确发送以下 POST 请求时，文本能力才会产生一个极低 token 的真实厂商调用：
+
+```bash
+curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
+  -H "Content-Type: application/json" \
+  -d '{"capability":"INTERVIEW_DIALOGUE","liveCheck":true}' \
+  "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
+```
+
+语音、数字人和行为分析适配器落地前，主动检查只返回配置状态和“等待适配器”，不会把配置完整误报为真实服务可用。
 
 ## 备份 SQLite 数据
 
