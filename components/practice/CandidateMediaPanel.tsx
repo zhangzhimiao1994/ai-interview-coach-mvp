@@ -4,15 +4,28 @@ import { Camera, Mic, MicOff, Play, Square, Video, VideoOff } from "lucide-react
 import React from "react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import {
+  ALIBABA_REALTIME_ASR,
+  createAlibabaAsrClient,
+  type AlibabaAsrClient
+} from "@/lib/client/alibabaAsrClient";
 import type { BehaviorSignals } from "@/lib/domain/behaviorSignals";
 
 type CandidateMediaPanelProps = {
+  sessionId: string;
   onTranscript: (text: string) => void;
   onBehaviorSignalsChange?: (signals: BehaviorSignals) => void;
+  onSpeechActivityChange?: (activity: CandidateSpeechActivity) => void;
 };
 
 type MediaState = "idle" | "requesting" | "ready" | "blocked" | "unsupported";
-type SpeechState = "idle" | "listening" | "unsupported";
+export type CandidateSpeechActivity =
+  | "idle"
+  | "connecting"
+  | "listening"
+  | "stopping";
+type SpeechState = CandidateSpeechActivity | "unsupported";
+type SpeechProvider = "none" | "alibaba" | "browser";
 
 type SpeechRecognitionEventLike = Event & {
   results: {
@@ -83,12 +96,20 @@ function describeMediaError(error: unknown) {
   return "没有成功连接摄像头或麦克风。请检查浏览器权限、系统隐私设置和设备连接后重试。";
 }
 
-export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: CandidateMediaPanelProps) {
+export function CandidateMediaPanel({
+  sessionId,
+  onTranscript,
+  onBehaviorSignalsChange,
+  onSpeechActivityChange
+}: CandidateMediaPanelProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const animationRef = useRef<number | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const alibabaClientRef = useRef<AlibabaAsrClient | null>(null);
+  const stoppingClientRef = useRef<AlibabaAsrClient | null>(null);
+  const speechRecognitionUsedRef = useRef(false);
   const volumeSamplesRef = useRef<number[]>([]);
   const peakVolumeRef = useRef(0);
   const longPauseCountRef = useRef(0);
@@ -96,12 +117,14 @@ export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: C
   const lastSignalEmitRef = useRef(0);
   const [mediaState, setMediaState] = useState<MediaState>("idle");
   const [speechState, setSpeechState] = useState<SpeechState>("idle");
+  const [speechProvider, setSpeechProvider] = useState<SpeechProvider>("none");
   const [meter, setMeter] = useState(0);
-  const [speechRecognitionUsed, setSpeechRecognitionUsed] = useState(false);
   const [message, setMessage] = useState("请先开启权限，Chrome 会弹出电脑摄像头和麦克风授权。");
 
   useEffect(() => {
     return () => {
+      void alibabaClientRef.current?.stop();
+      alibabaClientRef.current = null;
       recognitionRef.current?.stop();
       recognitionRef.current = null;
 
@@ -116,6 +139,12 @@ export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: C
       streamRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    onSpeechActivityChange?.(
+      speechState === "unsupported" ? "idle" : speechState
+    );
+  }, [onSpeechActivityChange, speechState]);
 
   async function startMedia() {
     if (typeof window !== "undefined" && !window.isSecureContext && !isLocalSecureOrigin()) {
@@ -132,7 +161,7 @@ export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: C
       return;
     }
 
-    stopMedia();
+    await stopMedia();
     setMediaState("requesting");
     setMessage("正在请求电脑摄像头和麦克风权限...");
 
@@ -155,7 +184,9 @@ export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: C
     }
   }
 
-  function stopMedia() {
+  async function stopMedia() {
+    await stopSpeech();
+
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
@@ -217,12 +248,15 @@ export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: C
     tick();
   }
 
-  function startSpeech() {
+  function startBrowserSpeech() {
     const Recognition = getSpeechRecognitionConstructor();
 
     if (!Recognition) {
       setSpeechState("unsupported");
-      setMessage("当前浏览器不支持实时语音转文字。你仍然可以打开麦克风练习，并手动输入回答。");
+      setSpeechProvider("none");
+      setMessage(
+        "阿里实时识别暂不可用，当前浏览器也不支持浏览器识别降级。你仍可手动输入回答。"
+      );
       return;
     }
 
@@ -231,36 +265,150 @@ export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: C
     recognition.interimResults = true;
     recognition.continuous = true;
     recognition.onresult = (event) => {
+      if (recognitionRef.current !== recognition) {
+        return;
+      }
+
       const text = Array.from({ length: event.results.length })
         .map((_, index) => event.results[index]?.[0]?.transcript ?? "")
         .join("")
         .trim();
 
       if (text) {
-        setSpeechRecognitionUsed(true);
+        speechRecognitionUsedRef.current = true;
         onTranscript(text);
         emitBehaviorSignals(true);
       }
     };
     recognition.onend = () => {
+      if (recognitionRef.current !== recognition) {
+        return;
+      }
+      recognitionRef.current = null;
       setSpeechState("idle");
+      setSpeechProvider("none");
     };
     recognition.onerror = () => {
+      if (recognitionRef.current !== recognition) {
+        return;
+      }
+      recognitionRef.current = null;
       setSpeechState("idle");
-      setMessage("语音识别中断了。可以重新开始语音回答，或直接手动输入。");
+      setSpeechProvider("none");
+      setMessage("浏览器识别降级中断了。可以重新开始语音回答，或直接手动输入。");
     };
 
     recognitionRef.current = recognition;
     recognition.start();
     setSpeechState("listening");
-    setSpeechRecognitionUsed(true);
-    setMessage("正在听取你的回答，识别结果会同步到回答框。");
+    setSpeechProvider("browser");
+    speechRecognitionUsedRef.current = true;
+    setMessage("阿里实时识别暂不可用，已切换为浏览器识别降级，结果会同步到回答框。");
   }
 
-  function stopSpeech() {
-    recognitionRef.current?.stop();
+  async function startSpeech() {
+    const stream = streamRef.current;
+    if (!stream) {
+      setMessage("请先开启摄像头和麦克风，再开始语音回答。");
+      return;
+    }
+
+    setSpeechState("connecting");
+    setSpeechProvider("none");
+    setMessage("正在连接阿里实时识别服务...");
+
+    const client = createAlibabaAsrClient({
+      sessionId,
+      stream,
+      onPartial(text) {
+        if (alibabaClientRef.current === client && text.trim()) {
+          speechRecognitionUsedRef.current = true;
+          onTranscript(text.trim());
+        }
+      },
+      onFinal(text) {
+        if (alibabaClientRef.current === client && text.trim()) {
+          speechRecognitionUsedRef.current = true;
+          onTranscript(text.trim());
+          emitBehaviorSignals(true);
+        }
+      },
+      onState(state) {
+        if (alibabaClientRef.current !== client) {
+          return;
+        }
+        if (state === "connecting") {
+          setSpeechState("connecting");
+        } else if (state === "listening") {
+          setSpeechState("listening");
+        } else {
+          if (stoppingClientRef.current === client) {
+            return;
+          }
+          alibabaClientRef.current = null;
+          if (streamRef.current === stream) {
+            startBrowserSpeech();
+          }
+        }
+      },
+      onError(errorMessage) {
+        if (alibabaClientRef.current === client) {
+          setMessage(errorMessage);
+        }
+      }
+    });
+    alibabaClientRef.current = client;
+
+    try {
+      await client.start();
+      if (alibabaClientRef.current !== client) {
+        await client.stop();
+        return;
+      }
+
+      setSpeechState("listening");
+      setSpeechProvider("alibaba");
+      speechRecognitionUsedRef.current = true;
+      setMessage("阿里实时识别已连接，转写结果会同步到回答框。");
+    } catch {
+      if (alibabaClientRef.current !== client) {
+        return;
+      }
+
+      alibabaClientRef.current = null;
+      await client.stop();
+      startBrowserSpeech();
+    }
+  }
+
+  async function stopSpeech() {
+    const alibabaClient = alibabaClientRef.current;
+    const recognition = recognitionRef.current;
     recognitionRef.current = null;
+    recognition?.stop();
+
+    if (alibabaClient) {
+      stoppingClientRef.current = alibabaClient;
+      setSpeechState("stopping");
+      setMessage("正在完成最后一段转写，请稍候...");
+      try {
+        await alibabaClient.stop();
+      } finally {
+        if (stoppingClientRef.current === alibabaClient) {
+          stoppingClientRef.current = null;
+        }
+        if (alibabaClientRef.current === alibabaClient) {
+          alibabaClientRef.current = null;
+        }
+        setSpeechState("idle");
+        setSpeechProvider("none");
+        setMessage("语音回答已停止，最终转写已同步。");
+      }
+      return;
+    }
+
     setSpeechState("idle");
+    setSpeechProvider("none");
   }
 
   const mediaReady = mediaState === "ready";
@@ -278,7 +426,7 @@ export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: C
       longPauseCount: longPauseCountRef.current,
       cameraEnabled: readyOverride,
       microphoneEnabled: readyOverride,
-      speechRecognitionUsed
+      speechRecognitionUsed: speechRecognitionUsedRef.current
     });
   }
 
@@ -336,23 +484,51 @@ export function CandidateMediaPanel({ onTranscript, onBehaviorSignalsChange }: C
 
           <p className={mediaBlocked ? "text-sm leading-6 text-red-600" : "text-sm leading-6 text-muted"}>{message}</p>
 
+          <div
+            className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-900"
+            data-asr-mode={ALIBABA_REALTIME_ASR}
+          >
+            阿里实时识别优先；连接失败时会自动使用浏览器识别降级。
+            {speechProvider === "alibaba"
+              ? " 当前：阿里实时识别。"
+              : speechProvider === "browser"
+                ? " 当前：浏览器识别降级。"
+                : ""}
+          </div>
+
           <div className="flex flex-wrap gap-3">
-            <Button className="gap-2" disabled={mediaState === "requesting"} onClick={startMedia}>
+            <Button
+              className="gap-2"
+              disabled={mediaState === "requesting" || speechState === "stopping"}
+              onClick={startMedia}
+            >
               <Camera className="h-4 w-4" aria-hidden="true" />
               {mediaReady ? "重新检测设备" : "开启摄像头和麦克风"}
             </Button>
             <Button
               className="gap-2"
-              disabled={!mediaReady || speechState === "unsupported"}
+              disabled={!mediaReady || speechState === "stopping"}
               variant="secondary"
-              onClick={speechState === "listening" ? stopSpeech : startSpeech}
+              onClick={
+                speechState === "listening" || speechState === "connecting"
+                  ? () => void stopSpeech()
+                  : startSpeech
+              }
             >
-              {speechState === "listening" ? (
+              {speechState === "listening" ||
+              speechState === "connecting" ||
+              speechState === "stopping" ? (
                 <Square className="h-4 w-4" aria-hidden="true" />
               ) : (
                 <Play className="h-4 w-4" aria-hidden="true" />
               )}
-              {speechState === "listening" ? "停止语音回答" : "开始语音回答"}
+              {speechState === "stopping"
+                ? "正在完成转写..."
+                : speechState === "connecting"
+                ? "取消识别连接"
+                : speechState === "listening"
+                  ? "停止语音回答"
+                  : "开始语音回答"}
             </Button>
           </div>
         </div>

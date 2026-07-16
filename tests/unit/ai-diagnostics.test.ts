@@ -202,6 +202,33 @@ describe("AI configuration diagnostics", () => {
     expect(JSON.stringify(result)).not.toContain("asr-secret-sentinel");
   });
 
+  it("rejects Opus while realtime browser capture only produces PCM", async () => {
+    const model = selectedModel({
+      capability: "SPEECH_TO_TEXT",
+      apiKey: "main-asr-secret",
+      providerSettings: {
+        workspaceId: "ws-main",
+        region: "cn-beijing"
+      },
+      modelSettings: {
+        language: "zh-CN",
+        sampleRate: 16000,
+        encoding: "opus"
+      }
+    });
+
+    const result = await diagnoseAiCapability("SPEECH_TO_TEXT", {
+      liveCheck: false,
+      dependencies: dependencies(model)
+    });
+
+    expect(result).toMatchObject({
+      status: "MISCONFIGURED",
+      code: "MISSING_REQUIRED_CONFIGURATION"
+    });
+    expect(result.message).toContain("PCM");
+  });
+
   it("requires the Alibaba workspace endpoint before enabling realtime ASR", async () => {
     const model = selectedModel({
       capability: "SPEECH_TO_TEXT",

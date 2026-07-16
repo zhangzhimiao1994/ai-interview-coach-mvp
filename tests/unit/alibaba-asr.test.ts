@@ -169,6 +169,15 @@ describe("Alibaba Qwen realtime ASR protocol", () => {
       language: "zh"
     });
   });
+
+  it("rejects Opus until the browser capture path implements Opus encoding", () => {
+    const model = resolvedAsrModel();
+    model.modelSettings.encoding = "opus";
+
+    expect(() => resolveAlibabaAsrAudioConfig(model)).toThrow(
+      expect.objectContaining({ code: "ALIBABA_ASR_ENCODING_INVALID" })
+    );
+  });
 });
 
 describe("Alibaba ASR credential resolution", () => {

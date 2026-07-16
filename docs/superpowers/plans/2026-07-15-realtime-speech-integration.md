@@ -232,39 +232,47 @@ git commit -m "add configurable Alibaba realtime ASR gateway"
 - Create: `public/audio/pcm16-worklet.js`
 - Create: `lib/client/alibabaAsrClient.ts`
 - Modify: `components/practice/CandidateMediaPanel.tsx`
+- Modify: `components/practice/InterviewRoom.tsx`
+- Modify: `components/admin/AiMultimodalConfigFields.tsx`
+- Modify: `lib/media/providers/alibabaAsr.ts`
+- Modify: `lib/ai/diagnostics.ts`
+- Test: `tests/unit/alibaba-asr-client.test.ts`
+- Test: `tests/unit/pcm16-worklet.test.ts`
+- Test: `tests/unit/alibaba-asr.test.ts`
+- Test: `tests/unit/ai-diagnostics.test.ts`
 - Test: `tests/unit/candidate-media-panel.test.tsx`
 
-- [ ] **Step 1: Add failing UI source assertions**
+- [x] **Step 1: Add failing UI source assertions**
 
 Assert the panel contains `createAlibabaAsrClient`, `/api/speech-recognition/sessions`, `ALIBABA_REALTIME_ASR`, and visible fallback text.
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `npm test -- tests/unit/candidate-media-panel.test.tsx`
 
 Expected: FAIL because only browser recognition exists.
 
-- [ ] **Step 3: Implement the AudioWorklet**
+- [x] **Step 3: Implement the AudioWorklet**
 
 The processor receives float input, downsamples from the browser sample rate to 16 kHz, clamps to `[-1, 1]`, writes signed little-endian PCM16, and posts transferable `ArrayBuffer` chunks. Register it as `pcm16-worklet`.
 
-- [ ] **Step 4: Implement the browser ASR client**
+- [x] **Step 4: Implement the browser ASR client**
 
 `createAlibabaAsrClient` accepts `sessionId`, `MediaStream`, `onPartial`, `onFinal`, `onState`, and `onError`. It requests a ticket, connects to the returned same-origin WebSocket, sends `session.update` with PCM16/VAD configuration, base64-encodes worklet chunks into `input_audio_buffer.append`, and sends `session.finish` on stop.
 
 The client never accepts or stores a supplier API key.
 
-- [ ] **Step 5: Integrate with `CandidateMediaPanel`**
+- [x] **Step 5: Integrate with `CandidateMediaPanel`**
 
 Add `sessionId` prop. “开始语音回答” first tries Alibaba ASR. On configuration or connection failure, use the existing `SpeechRecognition` implementation and display `浏览器识别降级`. Add `speechRecognitionProvider: "alibaba" | "browser" | "none"` to emitted behavior signals in the later behavior migration; until then keep `speechRecognitionUsed` compatible.
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run: `npm test -- tests/unit/candidate-media-panel.test.tsx tests/unit/alibaba-asr.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add public/audio/pcm16-worklet.js lib/client/alibabaAsrClient.ts components/practice/CandidateMediaPanel.tsx tests/unit/candidate-media-panel.test.tsx

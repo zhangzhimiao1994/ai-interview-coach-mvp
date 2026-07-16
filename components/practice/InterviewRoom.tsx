@@ -9,7 +9,10 @@ import { Button } from "@/components/ui/Button";
 import type { TrainingOutline, TrainingQuestion } from "@/lib/ai";
 import type { BehaviorSignals } from "@/lib/domain/behaviorSignals";
 import type { StagePlanItem } from "@/lib/domain/stages";
-import { CandidateMediaPanel } from "./CandidateMediaPanel";
+import {
+  CandidateMediaPanel,
+  type CandidateSpeechActivity
+} from "./CandidateMediaPanel";
 import { DigitalInterviewerVideo } from "./DigitalInterviewerVideo";
 import { StageTimeline } from "./StageTimeline";
 
@@ -122,6 +125,8 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   const [coaching, setCoaching] = useState<FollowUpCoaching | null>(null);
   const [activeFollowUp, setActiveFollowUp] = useState<string | null>(null);
   const [behaviorSignals, setBehaviorSignals] = useState<BehaviorSignals>({});
+  const [speechActivity, setSpeechActivity] =
+    useState<CandidateSpeechActivity>("idle");
   const [questionStartedAt, setQuestionStartedAt] = useState(() => Date.now());
 
   useEffect(() => {
@@ -166,6 +171,11 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   }, [currentQuestion?.id, activeFollowUp]);
 
   async function submitAnswer() {
+    if (speechActivity !== "idle") {
+      setMessage("请先停止语音回答，等待最终转写完成后再提交。");
+      return;
+    }
+
     if (!storedSession || !currentQuestion || !answer.trim()) {
       setMessage("Add an answer before moving on.");
       return;
@@ -246,6 +256,11 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   }
 
   async function completeSession() {
+    if (speechActivity !== "idle") {
+      setMessage("请先停止语音回答，等待最终转写完成后再生成报告。");
+      return;
+    }
+
     if (!storedSession) {
       setMessage("No active session found.");
       return;
@@ -323,8 +338,10 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
             />
 
             <CandidateMediaPanel
+              sessionId={storedSession.sessionId}
               onTranscript={(text) => setAnswer(text)}
               onBehaviorSignalsChange={(signals) => setBehaviorSignals(signals)}
+              onSpeechActivityChange={setSpeechActivity}
             />
 
             <div className="rounded-lg border border-line bg-panel p-5 shadow-sm">
@@ -382,7 +399,15 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
               )}
               {message ? <p className="mt-3 text-sm text-red-600">{message}</p> : null}
               <div className="mt-5 flex flex-wrap gap-3">
-                <Button className="gap-2" disabled={state !== "idle" || allAnswered} onClick={submitAnswer}>
+                <Button
+                  className="gap-2"
+                  disabled={
+                    state !== "idle" ||
+                    speechActivity !== "idle" ||
+                    allAnswered
+                  }
+                  onClick={submitAnswer}
+                >
                   <Send className="h-4 w-4" aria-hidden="true" />
                   {state === "saving"
                     ? "保存中..."
@@ -392,7 +417,11 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
                 </Button>
                 <Button
                   className="gap-2"
-                  disabled={state !== "idle" || (!allAnswered && completedQuestions.length === 0)}
+                  disabled={
+                    state !== "idle" ||
+                    speechActivity !== "idle" ||
+                    (!allAnswered && completedQuestions.length === 0)
+                  }
                   variant="secondary"
                   onClick={completeSession}
                 >

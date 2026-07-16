@@ -263,7 +263,9 @@ function requiredConfiguration(
         }
         if (!hasText(modelSettings.language)) missing.push("识别语言");
         if (!isPositiveInteger(modelSettings.sampleRate)) missing.push("采样率");
-        if (!hasText(modelSettings.encoding)) missing.push("音频编码");
+        if (modelSettings.encoding !== "pcm") {
+          missing.push("音频编码（当前仅支持 PCM）");
+        }
         break;
       case "TEXT_TO_SPEECH":
         if (!hasText(modelSettings.voice)) missing.push("音色");

@@ -22,7 +22,7 @@ export function CapabilitySettings({ capability }: { capability: AiCapability })
       <SettingsGrid>
         <ConfigField label="识别语言" name="language" defaultValue="zh-CN" />
         <ConfigField label="采样率" name="sampleRate" type="number" defaultValue={16000} />
-        <ConfigField label="音频编码" name="encoding" defaultValue="pcm" />
+        <ConfigField label="音频编码（当前仅支持 PCM）" name="encoding" defaultValue="pcm" readOnly />
       </SettingsGrid>
     );
   }

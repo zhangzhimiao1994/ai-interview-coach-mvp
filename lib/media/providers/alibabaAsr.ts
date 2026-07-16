@@ -154,7 +154,7 @@ type AlibabaAsrUrlInput = {
 };
 
 export type AlibabaAsrAudioConfig = {
-  encoding: "pcm" | "opus";
+  encoding: "pcm";
   sampleRate: 8000 | 16000;
   channels: 1;
   language: z.infer<typeof languageSchema>;
@@ -216,7 +216,7 @@ export function resolveAlibabaAsrAudioConfig(
   model: ResolvedMediaModel
 ): AlibabaAsrAudioConfig {
   const encodingResult = z
-    .enum(["pcm", "opus"])
+    .literal("pcm")
     .safeParse(model.modelSettings.encoding);
   const sampleRateResult = z
     .union([z.literal(8000), z.literal(16000)])
