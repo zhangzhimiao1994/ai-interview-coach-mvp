@@ -1,5 +1,6 @@
 import { defaultInterviewerTemplates } from "../domain/interviewerTemplates";
 import { prisma } from "./prisma";
+import { seedMockAiModels } from "./seedAiModels";
 
 const demoCompany = {
   id: "demo-company",
@@ -78,33 +79,7 @@ async function main() {
     }
   });
 
-  const mockCapabilities = [
-    ["mock-outline", "面试提纲 Mock", "mock-outline", "INTERVIEW_OUTLINE"],
-    ["mock-follow-up", "面试追问 Mock", "mock-follow-up", "INTERVIEW_FOLLOW_UP"],
-    ["mock-report", "报告分析 Mock", "mock-report", "REPORT_ANALYSIS"]
-  ] as const;
-
-  for (const [id, displayName, modelName, capability] of mockCapabilities) {
-    await prisma.aiModelConfig.upsert({
-      where: { id },
-      update: {
-        displayName,
-        modelName,
-        capability,
-        enabled: true,
-        isDefault: true
-      },
-      create: {
-        id,
-        providerId: "mock-provider",
-        displayName,
-        modelName,
-        capability,
-        enabled: true,
-        isDefault: true
-      }
-    });
-  }
+  await seedMockAiModels(prisma);
 }
 
 main()

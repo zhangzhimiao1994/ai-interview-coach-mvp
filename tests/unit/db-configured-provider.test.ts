@@ -46,6 +46,7 @@ describe("DB configured AI provider", () => {
         costNote: null,
         enabled: true,
         isDefault: true,
+        isSelected: true,
         createdAt: new Date(),
         updatedAt: new Date(),
         provider: {

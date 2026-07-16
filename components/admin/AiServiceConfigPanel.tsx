@@ -1,7 +1,7 @@
 "use client";
 
 import { Cpu, KeyRound, Plus, Route, Server, Star, Trash2 } from "lucide-react";
-import type React from "react";
+import React from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import {
@@ -38,6 +38,7 @@ type ModelConfig = {
   costNote: string | null;
   enabled: boolean;
   isDefault: boolean;
+  isSelected: boolean;
   provider: {
     id: string;
     displayName: string;
@@ -214,7 +215,8 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       timeoutMs: Number(form.get("timeoutMs") || 30000),
       costNote: String(form.get("costNote") || ""),
       enabled: form.get("enabled") === "on",
-      isDefault: form.get("isDefault") === "on"
+      isDefault: form.get("isDefault") === "on",
+      isSelected: form.get("isSelected") === "on"
     };
 
     try {
@@ -232,9 +234,14 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       }
 
       setModels((current) => {
-        const normalized = result.model!.isDefault
+        const normalized = result.model!.isSelected
           ? current.map((model) =>
-              model.capability === result.model!.capability ? { ...model, isDefault: false } : model
+              model.capability === result.model!.capability
+                ? {
+                    ...model,
+                    isSelected: false
+                  }
+                : model
             )
           : current;
 
@@ -250,7 +257,10 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
     }
   }
 
-  async function patchModel(modelId: string, payload: { enabled?: boolean; isDefault?: boolean }) {
+  async function patchModel(
+    modelId: string,
+    payload: { enabled?: boolean; isDefault?: boolean; isSelected?: boolean }
+  ) {
     setModelMessage("");
 
     try {
@@ -269,8 +279,8 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
 
       setModels((current) =>
         current.map((model) => {
-          if (result.model!.isDefault && model.capability === result.model!.capability && model.id !== result.model!.id) {
-            return { ...model, isDefault: false };
+          if (result.model!.isSelected && model.capability === result.model!.capability && model.id !== result.model!.id) {
+            return { ...model, isSelected: false };
           }
 
           return model.id === result.model!.id ? result.model! : model;
@@ -338,7 +348,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
           <div>
             <h2 className="font-semibold text-ink">模型推荐矩阵</h2>
             <p className="mt-1 text-sm text-muted">
-              按能力配置默认模型。价格会随厂商调整，以下只作为选型参考，最终以控制台账单为准。
+              按能力选择当前使用模型；推荐默认仅供选型参考。价格会随厂商调整，最终以控制台账单为准。
             </p>
           </div>
           <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-muted">
@@ -514,7 +524,11 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
               </label>
               <label className="flex items-center gap-2">
                 <input name="isDefault" type="checkbox" />
-                设为该能力默认模型
+                标记为推荐默认（仅供参考）
+              </label>
+              <label className="flex items-center gap-2">
+                <input name="isSelected" type="checkbox" />
+                设为该能力当前使用模型
               </label>
             </div>
           </div>
@@ -567,7 +581,10 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                   </div>
                   <div className="flex gap-2">
                     {model.isDefault ? (
-                      <span className="rounded-md bg-blue-50 px-2 py-1 text-xs text-brand">默认</span>
+                      <span className="rounded-md bg-blue-50 px-2 py-1 text-xs text-brand">推荐</span>
+                    ) : null}
+                    {model.isSelected ? (
+                      <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-700">当前使用</span>
                     ) : null}
                     <Status enabled={model.enabled} />
                   </div>
@@ -580,20 +597,34 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                 </div>
                 {model.costNote ? <p className="mt-2 text-xs text-muted">{model.costNote}</p> : null}
                 <div className="mt-3 flex flex-wrap gap-2">
+                  {!model.isSelected ? (
+                    <Button className="min-h-8 gap-1 px-3 py-1 text-xs" variant="secondary" onClick={() => patchModel(model.id, { isSelected: true })}>
+                      <Route className="h-3.5 w-3.5" aria-hidden="true" />
+                      设为当前使用
+                    </Button>
+                  ) : null}
                   {!model.isDefault ? (
                     <Button className="min-h-8 gap-1 px-3 py-1 text-xs" variant="secondary" onClick={() => patchModel(model.id, { isDefault: true })}>
                       <Star className="h-3.5 w-3.5" aria-hidden="true" />
-                      设为默认
+                      设为推荐
                     </Button>
                   ) : null}
                   <Button
                     className="min-h-8 px-3 py-1 text-xs"
+                    disabled={model.isSelected}
+                    title={model.isSelected ? "请先选择同能力下的其他模型" : undefined}
                     variant="secondary"
                     onClick={() => patchModel(model.id, { enabled: !model.enabled })}
                   >
                     {model.enabled ? "停用" : "启用"}
                   </Button>
-                  <Button className="min-h-8 gap-1 px-3 py-1 text-xs" variant="ghost" onClick={() => deleteModel(model)}>
+                  <Button
+                    className="min-h-8 gap-1 px-3 py-1 text-xs"
+                    disabled={model.isSelected}
+                    title={model.isSelected ? "请先选择同能力下的其他模型" : undefined}
+                    variant="ghost"
+                    onClick={() => deleteModel(model)}
+                  >
                     <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
                     删除
                   </Button>

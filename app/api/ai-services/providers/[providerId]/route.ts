@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { postErrorResponse } from "@/lib/api/errors";
+import { ApiConflictError, postErrorResponse } from "@/lib/api/errors";
 import {
   decryptCredentialMap,
   encryptCredentialMap,
@@ -117,6 +117,16 @@ export async function PATCH(request: Request, context: RouteContext) {
 
       if (!existing) {
         return null;
+      }
+
+      if (input.enabled === false && existing.enabled) {
+        const selectedModelCount = await tx.aiModelConfig.count({
+          where: { providerId: normalizedProviderId, isSelected: true }
+        });
+
+        if (selectedModelCount > 0) {
+          throw new ApiConflictError("Select replacement models before disabling this provider.");
+        }
       }
 
       const { apiKey, settings } = input;

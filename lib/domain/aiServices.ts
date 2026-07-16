@@ -11,12 +11,6 @@ export type EncryptedSecret = {
 
 export type CredentialMap = Record<string, string>;
 
-type ModelDefaultState = {
-  id: string;
-  capability: AiCapability;
-  isDefault: boolean;
-};
-
 export class AiConfigSecretMissingError extends Error {
   constructor() {
     super("AI_CONFIG_SECRET is required in production to store provider API keys.");
@@ -161,17 +155,4 @@ export function readAiConfigSecret(env: Record<string, string | undefined> = pro
   }
 
   return "development-ai-config-secret-change-me";
-}
-
-export function nextDefaultFlags(
-  models: ModelDefaultState[],
-  selectedModelId: string,
-  selectedCapability: AiCapability
-) {
-  return Object.fromEntries(
-    models.map((model) => [
-      model.id,
-      model.capability === selectedCapability ? model.id === selectedModelId : model.isDefault
-    ])
-  ) as Record<string, boolean>;
 }

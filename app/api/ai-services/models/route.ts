@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { postErrorResponse } from "@/lib/api/errors";
+import { ApiConflictError, postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { parseAiModelConfigInput } from "@/lib/validators/aiServices";
 import { serializeModel } from "../serialization";
@@ -30,17 +30,26 @@ export async function POST(request: Request) {
     const { settings, ...modelInput } = input;
 
     const model = await prisma.$transaction(async (tx) => {
-      if (input.isDefault) {
+      if (input.isSelected) {
+        const provider = await tx.aiServiceProvider.findUnique({
+          where: { id: input.providerId },
+          select: { enabled: true }
+        });
+
+        if (!provider?.enabled) {
+          throw new ApiConflictError("Enable the provider before selecting this model for runtime use.");
+        }
+
         await tx.aiModelConfig.updateMany({
           where: { capability: input.capability },
-          data: { isDefault: false }
+          data: { isSelected: false }
         });
       }
 
       return tx.aiModelConfig.create({
         data: {
           ...modelInput,
-          enabled: input.isDefault ? true : modelInput.enabled,
+          enabled: input.isSelected ? true : modelInput.enabled,
           settingsJson: JSON.stringify(settings)
         },
         include: modelInclude

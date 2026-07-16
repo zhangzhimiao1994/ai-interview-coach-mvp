@@ -47,6 +47,7 @@ function modelRow(overrides: Record<string, unknown> = {}) {
     settingsJson: JSON.stringify({ enableThinking: false }),
     enabled: true,
     isDefault: true,
+    isSelected: true,
     createdAt: timestamp,
     updatedAt: timestamp,
     provider: {
@@ -451,7 +452,8 @@ describe("AI service API routes", () => {
           ...existing,
           ...data
         })))
-      }
+      },
+      aiModelConfig: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = {
       $transaction: transactionMock(tx),
@@ -655,7 +657,8 @@ describe("AI service API routes", () => {
           ...existing,
           ...data
         })))
-      }
+      },
+      aiModelConfig: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = {
       $transaction: transactionMock(tx),
@@ -678,6 +681,38 @@ describe("AI service API routes", () => {
       data: { enabled: false }
     });
     expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects disabling a provider that still owns a selected model", async () => {
+    const existing = providerRow({ enabled: true });
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn()
+      },
+      aiModelConfig: { count: vi.fn().mockResolvedValue(1) }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ enabled: false })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "Conflict" });
+    expect(tx.aiModelConfig.count).toHaveBeenCalledWith({
+      where: { providerId: "provider-1", isSelected: true }
+    });
+    expect(tx.aiServiceProvider.update).not.toHaveBeenCalled();
   });
 
   it("returns 404 when updating a missing provider", async () => {
@@ -802,7 +837,7 @@ describe("AI service API routes", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it("creates a default model with settings in one transaction", async () => {
+  it("creates a recommended model without changing other recommendations", async () => {
     const tx = {
       aiModelConfig: {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -833,10 +868,7 @@ describe("AI service API routes", () => {
 
     expect(response.status).toBe(201);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(tx.aiModelConfig.updateMany).toHaveBeenCalledWith({
-      where: { capability: "VISION_BEHAVIOR_ANALYSIS" },
-      data: { isDefault: false }
-    });
+    expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
     expect(tx.aiModelConfig.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         modelName: "qwen-vl-max",
@@ -853,11 +885,11 @@ describe("AI service API routes", () => {
     expect(payload.model).not.toHaveProperty("settingsJson");
   });
 
-  it("forces a newly created default model enabled", async () => {
+  it("keeps recommendation metadata independent from model enablement", async () => {
     const tx = {
       aiModelConfig: {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-        create: vi.fn().mockResolvedValue(modelRow({ enabled: true, isDefault: true }))
+        create: vi.fn().mockResolvedValue(modelRow({ enabled: false, isDefault: true, isSelected: false }))
       }
     };
     const prisma = {
@@ -883,7 +915,7 @@ describe("AI service API routes", () => {
 
     expect(response.status).toBe(201);
     expect(tx.aiModelConfig.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ enabled: true, isDefault: true }),
+      data: expect.objectContaining({ enabled: false, isDefault: true, isSelected: false }),
       include: expect.any(Object)
     });
     expect(prisma.aiModelConfig.create).not.toHaveBeenCalled();
@@ -894,7 +926,8 @@ describe("AI service API routes", () => {
       id: "model-1",
       capability: "REPORT_ANALYSIS",
       enabled: true,
-      isDefault: false
+      isDefault: false,
+      isSelected: false
     };
     const tx = {
       aiModelConfig: {
@@ -934,17 +967,18 @@ describe("AI service API routes", () => {
     expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
-  it("disabling a current default also clears its default state", async () => {
+  it("rejects disabling the currently selected model", async () => {
     const tx = {
       aiModelConfig: {
         findUnique: vi.fn().mockResolvedValue({
           id: "model-1",
           capability: "REPORT_ANALYSIS",
           enabled: true,
-          isDefault: true
+          isDefault: true,
+          isSelected: true
         }),
         updateMany: vi.fn(),
-        update: vi.fn().mockResolvedValue(modelRow({ enabled: false, isDefault: false }))
+        update: vi.fn()
       }
     };
     const prisma = {
@@ -962,31 +996,30 @@ describe("AI service API routes", () => {
       { params: Promise.resolve({ modelId: "model-1" }) }
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "Conflict" });
     expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
-    expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
-      where: { id: "model-1" },
-      data: { enabled: false, isDefault: false },
-      include: expect.any(Object)
-    });
+    expect(tx.aiModelConfig.update).not.toHaveBeenCalled();
     expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
-  it("repairs a legacy disabled default during an unrelated patch", async () => {
+  it("preserves recommendation metadata when editing a disabled model", async () => {
     const tx = {
       aiModelConfig: {
         findUnique: vi.fn().mockResolvedValue({
           id: "model-legacy",
           capability: "REPORT_ANALYSIS",
           enabled: false,
-          isDefault: true
+          isDefault: true,
+          isSelected: false
         }),
         updateMany: vi.fn(),
         update: vi.fn().mockResolvedValue(modelRow({
           id: "model-legacy",
           displayName: "Legacy renamed",
           enabled: false,
-          isDefault: false
+          isDefault: true,
+          isSelected: false
         }))
       }
     };
@@ -1009,7 +1042,7 @@ describe("AI service API routes", () => {
     expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
     expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
       where: { id: "model-legacy" },
-      data: { displayName: "Legacy renamed", isDefault: false },
+      data: { displayName: "Legacy renamed" },
       include: expect.any(Object)
     });
     expect(prisma.aiModelConfig.findUnique).not.toHaveBeenCalled();
@@ -1017,14 +1050,148 @@ describe("AI service API routes", () => {
     expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
-  it("edits model settings and clears defaults in the target capability", async () => {
+  it("selects the runtime model without changing its recommendation state", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "model-2",
+          providerId: "provider-1",
+          capability: "REPORT_ANALYSIS",
+          enabled: false,
+          isDefault: false,
+          isSelected: false
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        update: vi.fn().mockResolvedValue(modelRow({
+          id: "model-2",
+          capability: "REPORT_ANALYSIS",
+          enabled: true,
+          isDefault: false,
+          isSelected: true
+        }))
+      },
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({ enabled: true })
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/model-2", {
+        method: "PATCH",
+        body: JSON.stringify({ isSelected: true })
+      }),
+      { params: Promise.resolve({ modelId: "model-2" }) }
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(tx.aiModelConfig.updateMany).toHaveBeenCalledWith({
+      where: {
+        capability: "REPORT_ANALYSIS",
+        id: { not: "model-2" }
+      },
+      data: { isSelected: false }
+    });
+    expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
+      where: { id: "model-2" },
+      data: { enabled: true, isSelected: true },
+      include: expect.any(Object)
+    });
+    expect(tx.aiModelConfig.update.mock.calls[0][0].data).not.toHaveProperty("isDefault");
+    expect(payload.model).toMatchObject({
+      isDefault: false,
+      isSelected: true
+    });
+  });
+
+  it("rejects selecting a model whose provider is disabled", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "model-2",
+          providerId: "provider-1",
+          capability: "REPORT_ANALYSIS",
+          enabled: true,
+          isDefault: false,
+          isSelected: false
+        }),
+        updateMany: vi.fn(),
+        update: vi.fn()
+      },
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({ enabled: false })
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/model-2", {
+        method: "PATCH",
+        body: JSON.stringify({ isSelected: true })
+      }),
+      { params: Promise.resolve({ modelId: "model-2" }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "Conflict" });
+    expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(tx.aiModelConfig.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects clearing the currently selected model without a replacement", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "model-1",
+          providerId: "provider-1",
+          capability: "REPORT_ANALYSIS",
+          enabled: true,
+          isDefault: false,
+          isSelected: true
+        }),
+        updateMany: vi.fn(),
+        update: vi.fn()
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), updateMany: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/model-1", {
+        method: "PATCH",
+        body: JSON.stringify({ isSelected: false })
+      }),
+      { params: Promise.resolve({ modelId: "model-1" }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(tx.aiModelConfig.update).not.toHaveBeenCalled();
+  });
+
+  it("edits recommended model settings without changing other recommendations", async () => {
     const tx = {
       aiModelConfig: {
         findUnique: vi.fn().mockResolvedValue({
           id: "model-1",
           capability: "REPORT_ANALYSIS",
           enabled: true,
-          isDefault: true
+          isDefault: true,
+          isSelected: false
         }),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         update: vi.fn().mockResolvedValue(modelRow({
@@ -1054,13 +1221,7 @@ describe("AI service API routes", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(tx.aiModelConfig.updateMany).toHaveBeenCalledWith({
-      where: {
-        capability: "VISION_BEHAVIOR_ANALYSIS",
-        id: { not: "model-1" }
-      },
-      data: { isDefault: false }
-    });
+    expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
     expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
       where: { id: "model-1" },
       data: {
@@ -1077,14 +1238,15 @@ describe("AI service API routes", () => {
     expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
-  it("patches every editable model field and enforces target default uniqueness", async () => {
+  it("patches every editable model field without coupling recommendation to selection", async () => {
     const tx = {
       aiModelConfig: {
         findUnique: vi.fn().mockResolvedValue({
           id: "model-2",
           capability: "INTERVIEW_FOLLOW_UP",
           enabled: false,
-          isDefault: false
+          isDefault: false,
+          isSelected: false
         }),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         update: vi.fn().mockResolvedValue(modelRow({
@@ -1120,13 +1282,7 @@ describe("AI service API routes", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(tx.aiModelConfig.updateMany).toHaveBeenCalledWith({
-      where: {
-        capability: "VISION_BEHAVIOR_ANALYSIS",
-        id: { not: "model-2" }
-      },
-      data: { isDefault: false }
-    });
+    expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
     expect(tx.aiModelConfig.update).toHaveBeenCalledWith({
       where: { id: "model-2" },
       data: {
@@ -1137,7 +1293,7 @@ describe("AI service API routes", () => {
         maxTokens: 4096,
         timeoutMs: 45000,
         costNote: "updated pricing",
-        enabled: true,
+        enabled: false,
         isDefault: true
       },
       include: expect.any(Object)
@@ -1148,16 +1304,22 @@ describe("AI service API routes", () => {
     expect(prisma.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
-  it("deletes a model configuration with safe settings serialization", async () => {
-    const prisma = {
+  it("deletes a non-selected model configuration with safe settings serialization", async () => {
+    const tx = {
       aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({ isSelected: false }),
         delete: vi.fn().mockResolvedValue(modelRow({
           id: "model-3",
           settingsJson: "malformed",
           enabled: false,
-          isDefault: false
+          isDefault: false,
+          isSelected: false
         }))
       }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), delete: vi.fn() }
     };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
 
@@ -1169,12 +1331,37 @@ describe("AI service API routes", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(prisma.aiModelConfig.delete).toHaveBeenCalledWith({
+    expect(tx.aiModelConfig.delete).toHaveBeenCalledWith({
       where: { id: "model-3" },
       include: expect.any(Object)
     });
     expect(payload.model.id).toBe("model-3");
     expect(payload.model.settings).toEqual({});
     expect(payload.model).not.toHaveProperty("settingsJson");
+    expect(prisma.aiModelConfig.delete).not.toHaveBeenCalled();
+  });
+
+  it("rejects deleting the currently selected model", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({ isSelected: true }),
+        delete: vi.fn()
+      }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiModelConfig: { findUnique: vi.fn(), delete: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.DELETE(
+      new Request("http://localhost/api/ai-services/models/model-1"),
+      { params: Promise.resolve({ modelId: "model-1" }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "Conflict" });
+    expect(tx.aiModelConfig.delete).not.toHaveBeenCalled();
   });
 });

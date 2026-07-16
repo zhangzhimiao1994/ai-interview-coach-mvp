@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import type { AiCapability } from "@/lib/domain/aiServiceConstants";
 
-export async function findDefaultAiModel(capability: AiCapability) {
+export async function findRecommendedAiModel(capability: AiCapability) {
   return prisma.aiModelConfig.findFirst({
     where: {
       capability,
@@ -29,8 +29,36 @@ export async function findDefaultAiModel(capability: AiCapability) {
   });
 }
 
+export async function findSelectedAiModel(capability: AiCapability) {
+  return prisma.aiModelConfig.findFirst({
+    where: {
+      capability,
+      enabled: true,
+      isSelected: true,
+      provider: {
+        enabled: true
+      }
+    },
+    include: {
+      provider: {
+        select: {
+          id: true,
+          displayName: true,
+          providerType: true,
+          baseUrl: true,
+          apiKeyPreview: true,
+          apiKeyCiphertext: true,
+          apiKeyIv: true,
+          apiKeyTag: true,
+          enabled: true
+        }
+      }
+    }
+  });
+}
+
 export async function resolveAiProviderLabel(capability: AiCapability) {
-  const configuredModel = await findDefaultAiModel(capability).catch(() => null);
+  const configuredModel = await findSelectedAiModel(capability).catch(() => null);
 
   if (!configuredModel) {
     return process.env.AI_PROVIDER || "mock";

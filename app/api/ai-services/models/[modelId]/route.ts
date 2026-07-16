@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { postErrorResponse } from "@/lib/api/errors";
+import { ApiConflictError, postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { aiModelConfigInputSchema } from "@/lib/validators/aiServices";
 import { serializeModel } from "../../serialization";
@@ -49,7 +49,14 @@ export async function PATCH(request: Request, context: RouteContext) {
     const model = await prisma.$transaction(async (tx) => {
       const existing = await tx.aiModelConfig.findUnique({
         where: { id: normalizedModelId },
-        select: { id: true, capability: true, enabled: true, isDefault: true }
+        select: {
+          id: true,
+          providerId: true,
+          capability: true,
+          enabled: true,
+          isDefault: true,
+          isSelected: true
+        }
       });
 
       if (!existing) {
@@ -59,24 +66,50 @@ export async function PATCH(request: Request, context: RouteContext) {
       const targetCapability = input.capability ?? existing.capability;
       let targetEnabled = input.enabled ?? existing.enabled;
       let targetIsDefault = input.isDefault ?? existing.isDefault;
+      let targetIsSelected = input.isSelected ?? existing.isSelected;
 
-      if (input.isDefault === true) {
+      if (existing.isSelected && input.isSelected === false) {
+        throw new ApiConflictError("Select another model for this capability before clearing the current model.");
+      }
+
+      if (existing.isSelected && input.enabled === false) {
+        throw new ApiConflictError("Select another model for this capability before disabling the current model.");
+      }
+
+      if (
+        existing.isSelected &&
+        input.capability !== undefined &&
+        input.capability !== existing.capability
+      ) {
+        throw new ApiConflictError("Select another model for this capability before changing the current model capability.");
+      }
+
+      if (input.isSelected === true) {
+        const provider = await tx.aiServiceProvider.findUnique({
+          where: { id: existing.providerId },
+          select: { enabled: true }
+        });
+
+        if (!provider?.enabled) {
+          throw new ApiConflictError("Enable the provider before selecting this model for runtime use.");
+        }
+
         targetEnabled = true;
       } else if (input.enabled === false) {
-        targetIsDefault = false;
+        targetIsSelected = false;
       }
 
       if (!targetEnabled) {
-        targetIsDefault = false;
+        targetIsSelected = false;
       }
 
-      if (targetIsDefault) {
+      if (targetIsSelected && input.isSelected === true) {
         await tx.aiModelConfig.updateMany({
           where: {
             capability: targetCapability,
             id: { not: normalizedModelId }
           },
-          data: { isDefault: false }
+          data: { isSelected: false }
         });
       }
 
@@ -108,6 +141,10 @@ export async function PATCH(request: Request, context: RouteContext) {
         data.isDefault = targetIsDefault;
       }
 
+      if (input.isSelected !== undefined || targetIsSelected !== existing.isSelected) {
+        data.isSelected = targetIsSelected;
+      }
+
       return tx.aiModelConfig.update({
         where: { id: normalizedModelId },
         data,
@@ -134,10 +171,29 @@ export async function DELETE(_request: Request, context: RouteContext) {
       return NextResponse.json({ error: "Model is required" }, { status: 400 });
     }
 
-    const model = await prisma.aiModelConfig.delete({
-      where: { id: normalizedModelId },
-      include: modelInclude
+    const model = await prisma.$transaction(async (tx) => {
+      const existing = await tx.aiModelConfig.findUnique({
+        where: { id: normalizedModelId },
+        select: { isSelected: true }
+      });
+
+      if (!existing) {
+        return null;
+      }
+
+      if (existing.isSelected) {
+        throw new ApiConflictError("Select another model for this capability before deleting the current model.");
+      }
+
+      return tx.aiModelConfig.delete({
+        where: { id: normalizedModelId },
+        include: modelInclude
+      });
     });
+
+    if (!model) {
+      return NextResponse.json({ error: "Model not found" }, { status: 404 });
+    }
 
     return NextResponse.json({ model: serializeModel(model) });
   } catch (error) {

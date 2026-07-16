@@ -37,7 +37,8 @@ export const aiModelConfigInputSchema = z
     settings: z.record(recordKey, primitiveSetting).default({}),
     costNote: optionalText,
     enabled: z.boolean().default(true),
-    isDefault: z.boolean().default(false)
+    isDefault: z.boolean().default(false),
+    isSelected: z.boolean().default(false)
   })
   .strict();
 

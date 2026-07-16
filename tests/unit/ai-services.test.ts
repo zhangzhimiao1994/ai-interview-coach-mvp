@@ -3,9 +3,7 @@ import {
   decryptSecret,
   encryptSecret,
   readAiConfigSecret,
-  maskSecret,
-  nextDefaultFlags,
-  type AiCapability
+  maskSecret
 } from "@/lib/domain/aiServices";
 
 function tamperBase64(value: string) {
@@ -98,25 +96,6 @@ describe("AI service configuration helpers", () => {
         "unit-test-secret"
       )
     );
-  });
-
-  it("marks only the selected model as default for a capability", () => {
-    const capability: AiCapability = "REPORT_ANALYSIS";
-    const flags = nextDefaultFlags(
-      [
-        { id: "model-a", capability, isDefault: true },
-        { id: "model-b", capability, isDefault: false },
-        { id: "model-c", capability: "TEXT_TO_SPEECH", isDefault: true }
-      ],
-      "model-b",
-      capability
-    );
-
-    expect(flags).toEqual({
-      "model-a": false,
-      "model-b": true,
-      "model-c": true
-    });
   });
 
   it("rejects the production placeholder encryption secret", () => {

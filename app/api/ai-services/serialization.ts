@@ -49,6 +49,7 @@ type ModelForSerialization = {
   settingsJson: string;
   enabled: boolean;
   isDefault: boolean;
+  isSelected: boolean;
   createdAt: Date;
   updatedAt: Date;
   provider?: ModelProviderForSerialization | null;
@@ -83,6 +84,7 @@ export function serializeModel(model: ModelForSerialization) {
     costNote: model.costNote,
     enabled: model.enabled,
     isDefault: model.isDefault,
+    isSelected: model.isSelected,
     createdAt: model.createdAt,
     updatedAt: model.updatedAt,
     settings: parseJsonObject(model.settingsJson),

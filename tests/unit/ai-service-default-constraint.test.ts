@@ -25,6 +25,10 @@ const uniqueDefaultsMigrationPath = join(
   prismaDirectory,
   "migrations/20260715093000_unique_ai_model_defaults/migration.sql"
 );
+const modelSelectionMigrationPath = join(
+  prismaDirectory,
+  "migrations/20260715094000_add_ai_model_selection/migration.sql"
+);
 
 const duplicateDefaultsSql = `
 PRAGMA foreign_keys = ON;
@@ -68,6 +72,7 @@ async function withMigratedDatabase(
     executeSqlFile(multimodalMigrationPath, databaseUrl);
     executeSqlFile(seedPath, databaseUrl);
     executeSqlFile(uniqueDefaultsMigrationPath, databaseUrl);
+    executeSqlFile(modelSelectionMigrationPath, databaseUrl);
     prisma = new PrismaClient({ datasourceUrl: databaseUrl });
     await verify(prisma);
   } finally {
@@ -79,8 +84,8 @@ async function withMigratedDatabase(
   }
 }
 
-describe("AI model default uniqueness migration", () => {
-  it("exists and creates a partial unique capability index", () => {
+describe("legacy AI model default migration compatibility", () => {
+  it("historically normalized defaults before runtime selection was separated", () => {
     expect(existsSync(uniqueDefaultsMigrationPath)).toBe(true);
 
     const sql = existsSync(uniqueDefaultsMigrationPath)
@@ -90,9 +95,12 @@ describe("AI model default uniqueness migration", () => {
     expect(sql).toMatch(/CREATE UNIQUE INDEX/i);
     expect(sql).toMatch(/ON\s+"AiModelConfig"\s*\(\s*"capability"\s*\)/i);
     expect(sql).toMatch(/WHERE\s+"isDefault"\s*=\s*1/i);
+
+    const selectionSql = readFileSync(modelSelectionMigrationPath, "utf8");
+    expect(selectionSql).toMatch(/DROP INDEX IF EXISTS\s+"AiModelConfig_one_default_per_capability"/i);
   });
 
-  it("deduplicates defaults and rejects conflicting inserts and updates", async () => {
+  it("repairs legacy data and then permits multiple recommendation references", async () => {
     expect(existsSync(uniqueDefaultsMigrationPath)).toBe(true);
     if (!existsSync(uniqueDefaultsMigrationPath)) {
       return;
@@ -131,12 +139,12 @@ describe("AI model default uniqueness migration", () => {
           enabled: true,
           isDefault: true
         }
-      })).rejects.toMatchObject({ code: "P2002" });
+      })).resolves.toMatchObject({ id: "report-d", isDefault: true });
 
       await expect(prisma.aiModelConfig.update({
         where: { id: "report-c" },
         data: { isDefault: true }
-      })).rejects.toMatchObject({ code: "P2002" });
+      })).resolves.toMatchObject({ id: "report-c", isDefault: true });
 
       await expect(prisma.aiModelConfig.create({
         data: {

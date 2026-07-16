@@ -3,6 +3,13 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AiConfigSecretMissingError } from "@/lib/domain/aiServices";
 
+export class ApiConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApiConflictError";
+  }
+}
+
 function isJsonParseError(error: unknown) {
   return error instanceof SyntaxError;
 }
@@ -20,6 +27,13 @@ export function postErrorResponse(error: unknown) {
 
   if (isJsonParseError(error)) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  if (error instanceof ApiConflictError) {
+    return NextResponse.json(
+      { error: "Conflict", message: error.message },
+      { status: 409 }
+    );
   }
 
   const prismaCode = prismaErrorCode(error);

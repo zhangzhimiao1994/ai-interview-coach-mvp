@@ -33,7 +33,7 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         modelName: "gpt-5.6-luna",
         fit: "实时面试主对话，延迟和成本相对均衡。",
         priceNote: "约 $1 输入 / $6 输出，每百万 tokens；以 OpenAI 控制台为准。",
-        howToUse: "配置为实时面试对话默认模型，用于每轮生成面试官回应。",
+        howToUse: "添加后设为实时面试对话的当前使用模型，用于每轮生成面试官回应。",
         suggestedTemperature: 0.5,
         suggestedMaxTokens: 1200,
         suggestedTimeoutMs: 30000
@@ -63,7 +63,7 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         modelName: "claude-sonnet-5",
         fit: "生成更专业的岗位能力模型、阶段题纲和考察标准。",
         priceNote: "约 $2-$3 输入 / $10-$15 输出，每百万 tokens；以 Anthropic 价格页为准。",
-        howToUse: "配置为面试提纲默认模型，用于创建训练会话前生成专业大纲。",
+        howToUse: "添加后设为面试提纲的当前使用模型，用于创建训练会话前生成专业大纲。",
         suggestedTemperature: 0.35,
         suggestedMaxTokens: 2400,
         suggestedTimeoutMs: 60000
@@ -87,7 +87,7 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         modelName: "claude-sonnet-5",
         fit: "最终报告、候选人短板诊断、下一轮训练计划。",
         priceNote: "约 $2-$3 输入 / $10-$15 输出，每百万 tokens；以 Anthropic 价格页为准。",
-        howToUse: "配置为报告分析默认模型，用于训练结束后的完整报告生成。",
+        howToUse: "添加后设为报告分析的当前使用模型，用于训练结束后的完整报告生成。",
         suggestedTemperature: 0.3,
         suggestedMaxTokens: 3600,
         suggestedTimeoutMs: 60000
@@ -117,7 +117,7 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         modelName: "qwen3-tts-flash",
         fit: "中文面试官语音，成本可控。",
         priceNote: "约 0.8 元/万字符；以阿里百炼价格页为准。",
-        howToUse: "配置为语音合成默认模型，用于 /api/digital-human/speech。",
+        howToUse: "添加后设为语音合成的当前使用模型，用于 /api/digital-human/speech。",
         suggestedTemperature: 0.2,
         suggestedMaxTokens: 1000,
         suggestedTimeoutMs: 30000
@@ -153,7 +153,7 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         modelName: "gemini-2.5-flash",
         fit: "抽帧分析神态、视线、停顿和表达稳定性，成本低于逐帧视频分析。",
         priceNote: "多模态输入约 $0.30 每百万 tokens；音频输入约 $1.00 每百万 tokens；以 Gemini 价格页为准。",
-        howToUse: "配置为行为分析默认模型，用于 /api/behavior-analysis 的抽帧增强版本。",
+        howToUse: "添加后设为行为分析的当前使用模型，用于 /api/behavior-analysis 的抽帧增强版本。",
         suggestedTemperature: 0.2,
         suggestedMaxTokens: 1200,
         suggestedTimeoutMs: 45000
