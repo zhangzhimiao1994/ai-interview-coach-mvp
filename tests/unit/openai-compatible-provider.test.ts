@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvider";
+import {
+  createOpenAiCompatibleProvider,
+  probeOpenAiCompatibleModel
+} from "@/lib/ai/openAiCompatibleProvider";
 
 describe("OpenAI-compatible provider", () => {
   it("calls chat completions and parses a training outline JSON response", async () => {
@@ -234,6 +237,88 @@ describe("OpenAI-compatible provider", () => {
     await expect(provider.generateTrainingOutline(outlineRequest)).rejects.toThrow(
       /required structure/
     );
+  });
+
+  it("uses a fixed one-token request for a connection diagnostic", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse("OK"));
+
+    const result = await probeOpenAiCompatibleModel({
+      baseUrl: "https://api.example.com/v1/",
+      apiKey: "sk-diagnostic-secret",
+      modelName: "diagnostic-model",
+      temperature: 1.2,
+      maxTokens: 5000,
+      timeoutMs: 30000,
+      fetchImpl
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      code: "LIVE_CHECK_SUCCEEDED",
+      message: "真实连通测试通过。"
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const requestBody = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
+    expect(requestBody).toMatchObject({
+      model: "diagnostic-model",
+      temperature: 0,
+      max_tokens: 1,
+      messages: [
+        { role: "system", content: "Connection diagnostic. Reply with OK." },
+        { role: "user", content: "OK" }
+      ]
+    });
+    expect(requestBody.response_format).toBeUndefined();
+  });
+
+  it.each([
+    [401, "AUTHENTICATION_FAILED"],
+    [404, "MODEL_NOT_FOUND"],
+    [429, "RATE_LIMITED"],
+    [503, "UPSTREAM_UNAVAILABLE"]
+  ])("maps HTTP %s to a safe diagnostic code", async (status, expectedCode) => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response("upstream-secret-sentinel", { status })
+    );
+
+    const result = await probeOpenAiCompatibleModel({
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "sk-diagnostic-secret",
+      modelName: "diagnostic-model",
+      temperature: 0.4,
+      maxTokens: 1200,
+      timeoutMs: 30000,
+      fetchImpl
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: false,
+      code: expectedCode
+    }));
+    expect(JSON.stringify(result)).not.toContain("upstream-secret-sentinel");
+    expect(JSON.stringify(result)).not.toContain("sk-diagnostic-secret");
+  });
+
+  it("maps an aborted request to a safe timeout diagnostic", async () => {
+    const abortError = new Error("timeout-secret-sentinel");
+    abortError.name = "AbortError";
+    const fetchImpl = vi.fn().mockRejectedValue(abortError);
+
+    const result = await probeOpenAiCompatibleModel({
+      baseUrl: "https://api.example.com/v1",
+      apiKey: "sk-diagnostic-secret",
+      modelName: "diagnostic-model",
+      temperature: 0.4,
+      maxTokens: 1200,
+      timeoutMs: 1,
+      fetchImpl
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: false,
+      code: "TIMEOUT"
+    }));
+    expect(JSON.stringify(result)).not.toContain("timeout-secret-sentinel");
   });
 });
 

@@ -26,6 +26,26 @@ export type OpenAiCompatibleProviderConfig = {
   fetchImpl?: FetchLike;
 };
 
+export type OpenAiCompatibleProbeResult =
+  | {
+      ok: true;
+      code: "LIVE_CHECK_SUCCEEDED";
+      message: string;
+    }
+  | {
+      ok: false;
+      code:
+        | "AUTHENTICATION_FAILED"
+        | "MODEL_NOT_FOUND"
+        | "RATE_LIMITED"
+        | "UPSTREAM_UNAVAILABLE"
+        | "TIMEOUT"
+        | "NETWORK_ERROR"
+        | "INVALID_RESPONSE"
+        | "UPSTREAM_REQUEST_FAILED";
+      message: string;
+    };
+
 class AiProviderHttpError extends AiProviderError {
   constructor(
     readonly status: number,
@@ -253,6 +273,109 @@ async function executeRequest(
     return content;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function safeProbeFailure(error: unknown): OpenAiCompatibleProbeResult {
+  if (error instanceof AiProviderHttpError) {
+    if (error.status === 401 || error.status === 403) {
+      return {
+        ok: false,
+        code: "AUTHENTICATION_FAILED",
+        message: "认证失败，请检查服务商凭据。"
+      };
+    }
+
+    if (error.status === 404) {
+      return {
+        ok: false,
+        code: "MODEL_NOT_FOUND",
+        message: "未找到配置的模型或请求地址。"
+      };
+    }
+
+    if (error.status === 408) {
+      return {
+        ok: false,
+        code: "TIMEOUT",
+        message: "真实连通测试超时。"
+      };
+    }
+
+    if (error.status === 429) {
+      return {
+        ok: false,
+        code: "RATE_LIMITED",
+        message: "服务商暂时限制了请求，请稍后重试。"
+      };
+    }
+
+    if (error.status >= 500) {
+      return {
+        ok: false,
+        code: "UPSTREAM_UNAVAILABLE",
+        message: "服务商当前不可用，请稍后重试。"
+      };
+    }
+
+    return {
+      ok: false,
+      code: "UPSTREAM_REQUEST_FAILED",
+      message: "服务商拒绝了诊断请求。"
+    };
+  }
+
+  if (error instanceof Error && error.name === "AbortError") {
+    return {
+      ok: false,
+      code: "TIMEOUT",
+      message: "真实连通测试超时。"
+    };
+  }
+
+  if (error instanceof TypeError) {
+    return {
+      ok: false,
+      code: "NETWORK_ERROR",
+      message: "无法连接服务商，请检查网络和请求地址。"
+    };
+  }
+
+  if (error instanceof AiProviderError) {
+    return {
+      ok: false,
+      code: "INVALID_RESPONSE",
+      message: "服务商返回了无法识别的诊断响应。"
+    };
+  }
+
+  return {
+    ok: false,
+    code: "UPSTREAM_REQUEST_FAILED",
+    message: "真实连通测试失败。"
+  };
+}
+
+export async function probeOpenAiCompatibleModel(
+  config: OpenAiCompatibleProviderConfig
+): Promise<OpenAiCompatibleProbeResult> {
+  try {
+    await executeRequest(
+      { ...config, temperature: 0, maxTokens: 1 },
+      [
+        { role: "system", content: "Connection diagnostic. Reply with OK." },
+        { role: "user", content: "OK" }
+      ],
+      false
+    );
+
+    return {
+      ok: true,
+      code: "LIVE_CHECK_SUCCEEDED",
+      message: "真实连通测试通过。"
+    };
+  } catch (error) {
+    return safeProbeFailure(error);
   }
 }
 
