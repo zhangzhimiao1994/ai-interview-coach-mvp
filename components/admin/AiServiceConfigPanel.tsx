@@ -169,7 +169,8 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
     setSavingProvider(true);
     setProviderMessage("");
 
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const payload = {
       displayName: String(form.get("displayName") || ""),
       providerType,
@@ -208,7 +209,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       }
 
       setProviders((current) => [result.provider!, ...current]);
-      event.currentTarget.reset();
+      formElement.reset();
       setProviderType("OPENAI_COMPATIBLE");
       setBaseUrl(providerBaseUrlPresets.OPENAI_COMPATIBLE ?? "");
       setProviderMessage("服务商已保存，密钥已加密存储。");
@@ -224,7 +225,8 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
     setSavingModel(true);
     setModelMessage("");
 
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
     const payload = {
       providerId: String(form.get("providerId") || ""),
       displayName: String(form.get("displayName") || ""),
@@ -268,7 +270,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
 
         return [result.model!, ...normalized];
       });
-      event.currentTarget.reset();
+      formElement.reset();
       setModelDraft(initialModelDraft);
       setModelMessage("模型配置已保存。");
     } catch {

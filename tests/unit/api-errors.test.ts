@@ -58,7 +58,7 @@ describe("API error responses", () => {
     expect(response.status).toBe(502);
     expect(payload).toEqual({
       error: "AI service unavailable",
-      message: "The selected AI service failed to return a valid response. Please retry shortly."
+      message: "当前 AI 模型未返回有效结果，请检查模型配置或稍后重试。"
     });
     expect(JSON.stringify(payload)).not.toContain("private upstream response detail");
   });

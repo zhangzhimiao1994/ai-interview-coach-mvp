@@ -20,6 +20,7 @@ export type OpenAiCompatibleProviderConfig = {
   temperature: number;
   maxTokens: number;
   timeoutMs: number;
+  thinkingMode?: "enabled" | "disabled";
   maxRetries?: number;
   retryBaseDelayMs?: number;
   sleepImpl?: (milliseconds: number) => Promise<void>;
@@ -246,6 +247,9 @@ async function executeRequest(
         messages,
         temperature: config.temperature,
         max_tokens: config.maxTokens,
+        ...(config.thinkingMode
+          ? { thinking: { type: config.thinkingMode } }
+          : {}),
         ...(useJsonMode ? { response_format: { type: "json_object" } } : {})
       }),
       signal: controller.signal
@@ -392,12 +396,25 @@ function isRetryable(error: unknown) {
     return error.status === 408 || error.status === 429 || error.status >= 500;
   }
 
+  if (error instanceof AiStructuredOutputError) {
+    return true;
+  }
+
+  if (
+    error instanceof AiProviderError &&
+    (error.message.includes("did not include message content") ||
+      error.message.includes("response body was not JSON"))
+  ) {
+    return true;
+  }
+
   return error instanceof TypeError || (error instanceof Error && error.name === "AbortError");
 }
 
-async function requestJson(
+async function requestJson<T>(
   config: OpenAiCompatibleProviderConfig,
-  messages: Array<{ role: "system" | "user"; content: string }>
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  validate: (value: unknown) => T
 ) {
   const maxRetries = Math.max(0, config.maxRetries ?? 2);
   const retryBaseDelayMs = Math.max(0, config.retryBaseDelayMs ?? 250);
@@ -407,7 +424,7 @@ async function requestJson(
 
   while (true) {
     try {
-      return parseJsonContent(await executeRequest(config, messages, useJsonMode));
+      return validate(parseJsonContent(await executeRequest(config, messages, useJsonMode)));
     } catch (error) {
       if (useJsonMode && isJsonModeUnsupported(error)) {
         useJsonMode = false;
@@ -429,69 +446,73 @@ async function requestJson(
 export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderConfig): AiProvider {
   return {
     async generateTrainingOutline(request: TrainingOutlineRequest) {
-      const result = await requestJson(config, [
-        {
-          role: "system",
-          content:
-            "You are an interview training system. Return strict JSON only, with no Markdown. Use the requested language for user-facing text."
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            task: "generateTrainingOutline",
-            capability: "INTERVIEW_OUTLINE",
-            request,
-            requiredShape: {
-              title: "string",
-              targetRole: "string",
-              targetCompany: "string optional",
-              stages: "TrainingStageType[]",
-              estimatedMinutes: "positive integer",
-              questions: [
-                {
-                  id: "string",
-                  stage: "TrainingStageType",
-                  prompt: "string",
-                  expectedFocus: "string[]",
-                  followUps: "string[]",
-                  difficulty: "LOW | MEDIUM | HIGH",
-                  timeLimitSeconds: "positive integer"
-                }
-              ]
-            }
-          })
-        }
-      ]);
-
-      return parseRequiredShape(trainingOutlineSchema, result, "Interview outline");
+      return requestJson(
+        config,
+        [
+          {
+            role: "system",
+            content:
+              "You are an interview training system. Return strict JSON only, with no Markdown. Use the requested language for user-facing text."
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              task: "generateTrainingOutline",
+              capability: "INTERVIEW_OUTLINE",
+              request,
+              requiredShape: {
+                title: "string",
+                targetRole: "string",
+                targetCompany: "string optional",
+                stages: "TrainingStageType[]",
+                estimatedMinutes: "positive integer",
+                questions: [
+                  {
+                    id: "string",
+                    stage: "TrainingStageType",
+                    prompt: "string",
+                    expectedFocus: "string[]",
+                    followUps: "string[]",
+                    difficulty: "LOW | MEDIUM | HIGH",
+                    timeLimitSeconds: "positive integer"
+                  }
+                ]
+              }
+            })
+          }
+        ],
+        (value) => parseRequiredShape(trainingOutlineSchema, value, "Interview outline")
+      );
     },
     async generateFollowUpCoaching(input: FollowUpCoachingInput) {
-      const result = await requestJson(config, [
-        {
-          role: "system",
-          content:
-            "You are a live AI interviewer and interview coach. Return strict JSON only, with no Markdown. Give concise, actionable coaching and one natural follow-up question in the candidate's language."
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            task: "generateFollowUpCoaching",
-            capability: "INTERVIEW_FOLLOW_UP",
-            input,
-            requiredShape: {
-              instantFeedback: "short coaching feedback string",
-              followUpQuestion: "one next interviewer question",
-              suggestedAnswerStructure: "string[]",
-              riskTags: "string[]"
-            }
-          })
-        }
-      ]);
-
-      return parseRequiredShape(followUpCoachingSchema, result, "Interview follow-up");
+      return requestJson(
+        config,
+        [
+          {
+            role: "system",
+            content:
+              "You are a live AI interviewer and interview coach. Return strict JSON only, with no Markdown. Give concise, actionable coaching and one natural follow-up question in the candidate's language."
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              task: "generateFollowUpCoaching",
+              capability: "INTERVIEW_FOLLOW_UP",
+              input,
+              requiredShape: {
+                instantFeedback: "short coaching feedback string",
+                followUpQuestion: "one next interviewer question",
+                suggestedAnswerStructure: "string[]",
+                riskTags: "string[]"
+              }
+            })
+          }
+        ],
+        (value) => parseRequiredShape(followUpCoachingSchema, value, "Interview follow-up")
+      );
     },
     async generateCoachingReport(input: CoachingReportInput) {
-      const result = await requestJson(config, [
+      const parsed = await requestJson(config, [
         {
           role: "system",
           content:
@@ -577,9 +598,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
             }
           })
         }
-      ]);
-
-      const parsed = parseRequiredShape(coachingReportSchema, result, "Coaching report");
+      ], (value) => parseRequiredShape(coachingReportSchema, value, "Coaching report"));
       const fallbackEvidence = input.turns
         .filter((turn) => turn.behaviorSignals)
         .map((turn) => ({

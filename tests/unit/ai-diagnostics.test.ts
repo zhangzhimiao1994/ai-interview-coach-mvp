@@ -115,6 +115,25 @@ describe("AI configuration diagnostics", () => {
     expect(serialized).not.toContain(model.provider.apiKeyTag);
   });
 
+  it("disables DeepSeek thinking mode during the minimum live text check", async () => {
+    const deps = dependencies(selectedModel({
+      modelOverrides: { modelName: "deepseek-v4-pro" },
+      providerOverrides: {
+        providerType: "DEEPSEEK",
+        baseUrl: "https://api.deepseek.com"
+      }
+    }));
+
+    await diagnoseAiCapability("INTERVIEW_DIALOGUE", {
+      liveCheck: true,
+      dependencies: deps
+    });
+
+    expect(deps.probeTextModel).toHaveBeenCalledWith(expect.objectContaining({
+      thinkingMode: "disabled"
+    }));
+  });
+
   it("maps a failed live text check without exposing the upstream response", async () => {
     const deps = dependencies(selectedModel(), {
       probeResult: {
@@ -303,7 +322,8 @@ describe("AI configuration diagnostics", () => {
       liveCheck: false,
       dependencies: dependencies(selectedModel({
         capability: "TEXT_TO_SPEECH",
-        modelSettings: { sampleRate: 24000, format: "pcm" }
+        modelSettings: { sampleRate: 24000, format: "pcm" },
+        modelOverrides: { modelName: "qwen3-tts-instruct-flash" }
       }))
     });
 

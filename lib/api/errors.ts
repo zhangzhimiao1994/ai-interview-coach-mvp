@@ -26,7 +26,7 @@ export function postErrorResponse(error: unknown) {
     return NextResponse.json(
       {
         error: "AI service unavailable",
-        message: "The selected AI service failed to return a valid response. Please retry shortly."
+        message: "当前 AI 模型未返回有效结果，请检查模型配置或稍后重试。"
       },
       { status: 502 }
     );

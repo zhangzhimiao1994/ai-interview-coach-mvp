@@ -177,6 +177,21 @@ describe("Alibaba Qwen HTTP TTS provider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects unrelated model names before making an HTTP request", async () => {
+    const model = resolvedTtsModel();
+    model.modelName = "Qwen-Audio-TTS";
+    const fetchMock = vi.fn();
+    const provider = createAlibabaTtsProvider(model, {
+      fetch: fetchMock as typeof fetch,
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.synthesize({ text: "你好" })).rejects.toMatchObject({
+      code: "ALIBABA_TTS_MODEL_INVALID"
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects oversized text and instructions before making a provider request", async () => {
     const fetchMock = vi.fn();
     const provider = createAlibabaTtsProvider(resolvedTtsModel(), {

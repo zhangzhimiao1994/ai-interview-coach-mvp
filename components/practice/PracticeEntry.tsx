@@ -29,6 +29,7 @@ type SessionPayload = {
   };
   outline?: TrainingOutline;
   error?: string;
+  message?: string;
 };
 
 function storageKey(taskId: string) {
@@ -53,7 +54,7 @@ export function PracticeEntry({ task, stages }: PracticeEntryProps) {
       const payload = (await response.json().catch(() => null)) as SessionPayload | null;
 
       if (!response.ok || !payload?.session?.id || !payload.outline) {
-        setMessage(payload?.error || "Could not start this practice session.");
+        setMessage(payload?.message || payload?.error || "Could not start this practice session.");
         return;
       }
 

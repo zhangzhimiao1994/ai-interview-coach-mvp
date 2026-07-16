@@ -72,6 +72,7 @@ describe("OpenAI-compatible provider", () => {
     expect(requestBody.temperature).toBe(0.2);
     expect(requestBody.max_tokens).toBe(1600);
     expect(requestBody.response_format).toEqual({ type: "json_object" });
+    expect(requestBody.thinking).toBeUndefined();
   });
 
   it("calls chat completions and parses a coaching report JSON response", async () => {
@@ -215,6 +216,72 @@ describe("OpenAI-compatible provider", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("retries an empty OpenAI-compatible message before failing the request", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(chatResponse(""))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(validOutline())));
+    const provider = outlineProvider(fetchImpl, { retryBaseDelayMs: 0 });
+
+    await expect(provider.generateTrainingOutline(outlineRequest)).resolves.toMatchObject({
+      title: "PM interview"
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries schema-invalid JSON before accepting a valid structured response", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(chatResponse("{}"))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(validOutline())));
+    const provider = outlineProvider(fetchImpl, { retryBaseDelayMs: 0 });
+
+    await expect(provider.generateTrainingOutline(outlineRequest)).resolves.toMatchObject({
+      title: "PM interview"
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds persistent schema-invalid retries to maxRetries plus the initial request", async () => {
+    const fetchImpl = vi.fn().mockImplementation(() =>
+      Promise.resolve(chatResponse("{}"))
+    );
+    const provider = outlineProvider(fetchImpl, {
+      maxRetries: 1,
+      retryBaseDelayMs: 0
+    });
+
+    await expect(provider.generateTrainingOutline(outlineRequest)).rejects.toThrow(
+      /required structure/
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["malformed message JSON", chatResponse("not-json")],
+    [
+      "non-JSON response body",
+      new Response("not-json", {
+        status: 200,
+        headers: { "Content-Type": "text/plain" }
+      })
+    ]
+  ])("retries a %s response once before succeeding", async (_name, firstResponse) => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(firstResponse)
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(validOutline())));
+    const provider = outlineProvider(fetchImpl, {
+      maxRetries: 1,
+      retryBaseDelayMs: 0
+    });
+
+    await expect(provider.generateTrainingOutline(outlineRequest)).resolves.toMatchObject({
+      title: "PM interview"
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("retries without JSON mode when an endpoint does not support response_format", async () => {
     const fetchImpl = vi
       .fn()
@@ -231,7 +298,9 @@ describe("OpenAI-compatible provider", () => {
   });
 
   it("reports an upstream structured-output error when the JSON shape is invalid", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(chatResponse("{}"));
+    const fetchImpl = vi.fn().mockImplementation(() =>
+      Promise.resolve(chatResponse("{}"))
+    );
     const provider = outlineProvider(fetchImpl);
 
     await expect(provider.generateTrainingOutline(outlineRequest)).rejects.toThrow(
@@ -360,7 +429,7 @@ function chatResponse(content: string) {
 
 function outlineProvider(
   fetchImpl: ReturnType<typeof vi.fn>,
-  overrides: { retryBaseDelayMs?: number } = {}
+  overrides: { retryBaseDelayMs?: number; maxRetries?: number } = {}
 ) {
   return createOpenAiCompatibleProvider({
     baseUrl: "https://api.example.com/v1",

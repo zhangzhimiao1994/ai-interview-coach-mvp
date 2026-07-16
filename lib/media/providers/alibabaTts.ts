@@ -87,6 +87,12 @@ export function validateAlibabaHttpTtsModelName(modelName: string) {
     );
   }
 
+  if (!/^qwen3-tts-(?:flash|instruct-flash)(?:-\d{4}-\d{2}-\d{2})?$/i.test(normalized)) {
+    throw new MediaConfigurationError("Alibaba TTS model name is invalid", {
+      code: "ALIBABA_TTS_MODEL_INVALID"
+    });
+  }
+
   return normalized;
 }
 

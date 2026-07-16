@@ -50,7 +50,9 @@ function providerForModel(model: ConfiguredModel): AiProvider | null {
       modelName: model.modelName,
       temperature: model.temperature,
       maxTokens: model.maxTokens,
-      timeoutMs: model.timeoutMs
+      timeoutMs: model.timeoutMs,
+      thinkingMode:
+        model.provider.providerType === "DEEPSEEK" ? "disabled" : undefined
     });
   }
 

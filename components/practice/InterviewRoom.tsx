@@ -207,11 +207,12 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
       });
       const payload = (await response.json().catch(() => null)) as {
         error?: string;
+        message?: string;
         coaching?: FollowUpCoaching;
       } | null;
 
       if (!response.ok) {
-        setMessage(payload?.error || "Could not save this answer.");
+        setMessage(payload?.message || payload?.error || "Could not save this answer.");
         return;
       }
 
@@ -274,10 +275,13 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
         method: "POST",
         headers: { "Content-Type": "application/json" }
       });
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        message?: string;
+      } | null;
 
       if (!response.ok) {
-        setMessage(payload?.error || "Could not complete this session.");
+        setMessage(payload?.message || payload?.error || "Could not complete this session.");
         return;
       }
 
