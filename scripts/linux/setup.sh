@@ -23,6 +23,8 @@ set -a
 . ./.env
 set +a
 
+NODE_ENV=production node scripts/validate-production-env.mjs
+
 mkdir -p data
 
 npm ci

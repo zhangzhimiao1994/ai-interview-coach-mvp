@@ -14,4 +14,6 @@ if [ -f .env ]; then
   set +a
 fi
 
+node scripts/validate-production-env.mjs
+
 exec npm run start

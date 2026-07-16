@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/validate-production-env.mjs && next start",
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",

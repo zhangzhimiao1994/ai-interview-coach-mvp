@@ -11,12 +11,18 @@ type RateLimitBucket = {
 };
 
 const buckets = new Map<string, RateLimitBucket>();
+const pruneIntervalMs = 60_000;
+let nextPruneAt = 0;
 
 export function isPlaceholderSecret(value: string | undefined) {
   return !value || value.trim() === "" || value.trim() === productionPlaceholder;
 }
 
 export function isProtectedPath(pathname: string) {
+  if (pathname === "/api/health") {
+    return false;
+  }
+
   return (
     pathname === "/admin" ||
     pathname.startsWith("/admin/") ||
@@ -50,6 +56,11 @@ export function authenticateBasicRequest(authorization: string | null, config: A
 }
 
 export function consumeRateLimit(key: string, limit: number, windowMs: number, now = Date.now()) {
+  if (now >= nextPruneAt) {
+    pruneExpiredRateLimits(now);
+    nextPruneAt = now + pruneIntervalMs;
+  }
+
   const existing = buckets.get(key);
 
   if (!existing || existing.resetAt <= now) {
@@ -65,6 +76,20 @@ export function consumeRateLimit(key: string, limit: number, windowMs: number, n
   return { allowed: true, remaining: limit - existing.count, resetAt: existing.resetAt };
 }
 
+export function pruneExpiredRateLimits(now = Date.now()) {
+  let removed = 0;
+
+  for (const [key, bucket] of buckets) {
+    if (bucket.resetAt <= now) {
+      buckets.delete(key);
+      removed += 1;
+    }
+  }
+
+  return removed;
+}
+
 export function resetRateLimits() {
   buckets.clear();
+  nextPruneAt = 0;
 }

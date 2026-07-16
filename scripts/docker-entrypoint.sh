@@ -3,6 +3,8 @@ set -eu
 
 mkdir -p /app/data
 
+node scripts/validate-production-env.mjs
+
 echo "Applying database migrations..."
 npm run db:migrate:deploy
 
