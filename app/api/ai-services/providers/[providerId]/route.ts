@@ -60,7 +60,7 @@ function completeCredentialEnvelope(provider: {
     provider.credentialsIv,
     provider.credentialsTag
   ];
-  const hasAnyField = fields.some(Boolean);
+  const hasAnyField = fields.some((field) => field !== null);
   const hasEveryField = fields.every((field) => typeof field === "string" && field.length > 0);
 
   if (hasAnyField && !hasEveryField) {

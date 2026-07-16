@@ -29,6 +29,31 @@ type ProviderForSerialization = {
   updatedAt: Date;
 };
 
+type ModelProviderForSerialization = {
+  id: string;
+  displayName: string;
+  providerType: string;
+  enabled: boolean;
+};
+
+type ModelForSerialization = {
+  id: string;
+  providerId: string;
+  displayName: string;
+  modelName: string;
+  capability: string;
+  temperature: number;
+  maxTokens: number;
+  timeoutMs: number;
+  costNote: string | null;
+  settingsJson: string;
+  enabled: boolean;
+  isDefault: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  provider?: ModelProviderForSerialization | null;
+};
+
 export function serializeProvider(provider: ProviderForSerialization) {
   return {
     id: provider.id,
@@ -45,13 +70,31 @@ export function serializeProvider(provider: ProviderForSerialization) {
   };
 }
 
-export function serializeModel<
-  T extends { settingsJson: string }
->(model: T): Omit<T, "settingsJson"> & { settings: JsonObject } {
-  const { settingsJson, ...safeModel } = model;
-
+export function serializeModel(model: ModelForSerialization) {
   return {
-    ...safeModel,
-    settings: parseJsonObject(settingsJson)
+    id: model.id,
+    providerId: model.providerId,
+    displayName: model.displayName,
+    modelName: model.modelName,
+    capability: model.capability,
+    temperature: model.temperature,
+    maxTokens: model.maxTokens,
+    timeoutMs: model.timeoutMs,
+    costNote: model.costNote,
+    enabled: model.enabled,
+    isDefault: model.isDefault,
+    createdAt: model.createdAt,
+    updatedAt: model.updatedAt,
+    settings: parseJsonObject(model.settingsJson),
+    ...(model.provider
+      ? {
+          provider: {
+            id: model.provider.id,
+            displayName: model.provider.displayName,
+            providerType: model.provider.providerType,
+            enabled: model.provider.enabled
+          }
+        }
+      : {})
   };
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decryptCredentialMap,
+  decryptSecret,
   encryptCredentialMap
 } from "@/lib/domain/aiServices";
 
@@ -226,6 +227,92 @@ describe("AI service API routes", () => {
     }
   });
 
+  it("allowlists provider and included model response fields", async () => {
+    const prisma = {
+      aiServiceProvider: {
+        findMany: vi.fn().mockResolvedValue([
+          providerRow({
+            providerSecretSentinel: "provider-secret-sentinel",
+            auditJson: "provider-raw-json-sentinel",
+            models: [modelRow({
+              modelSecretSentinel: "model-secret-sentinel",
+              diagnosticsJson: "model-raw-json-sentinel"
+            })]
+          })
+        ])
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/route");
+    const response = await route.GET();
+    const serialized = JSON.stringify(await response.json());
+
+    expect(response.status).toBe(200);
+    for (const forbidden of [
+      "provider-secret-sentinel",
+      "provider-raw-json-sentinel",
+      "model-secret-sentinel",
+      "model-raw-json-sentinel",
+      "providerSecretSentinel",
+      "auditJson",
+      "modelSecretSentinel",
+      "diagnosticsJson"
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
+  it("allowlists model and nested provider response fields", async () => {
+    const prisma = {
+      aiModelConfig: {
+        findMany: vi.fn().mockResolvedValue([
+          modelRow({
+            modelSecretSentinel: "model-list-secret-sentinel",
+            metadataJson: "model-list-raw-json-sentinel",
+            provider: {
+              id: "provider-1",
+              displayName: "Alibaba Cloud",
+              providerType: "OPENAI_COMPATIBLE",
+              enabled: true,
+              apiKeyCiphertext: "nested-provider-ciphertext-sentinel",
+              credentialsPreviewJson: "nested-provider-raw-json-sentinel",
+              nestedProviderSecret: "nested-provider-secret-sentinel"
+            }
+          })
+        ])
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/route");
+    const response = await route.GET();
+    const payload = await response.json();
+    const serialized = JSON.stringify(payload);
+
+    expect(response.status).toBe(200);
+    expect(payload.models[0].provider).toEqual({
+      id: "provider-1",
+      displayName: "Alibaba Cloud",
+      providerType: "OPENAI_COMPATIBLE",
+      enabled: true
+    });
+    for (const forbidden of [
+      "model-list-secret-sentinel",
+      "model-list-raw-json-sentinel",
+      "nested-provider-ciphertext-sentinel",
+      "nested-provider-raw-json-sentinel",
+      "nested-provider-secret-sentinel",
+      "modelSecretSentinel",
+      "metadataJson",
+      "apiKeyCiphertext",
+      "credentialsPreviewJson",
+      "nestedProviderSecret"
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
   it("preserves blank legacy keys and merges changed structured credentials", async () => {
     vi.stubEnv("AI_CONFIG_SECRET", "route-test-config-secret");
     const storedEnvelope = encryptCredentialMap({
@@ -288,8 +375,90 @@ describe("AI service API routes", () => {
       apiKey: "new-****-key",
       workspace: "old-****pace"
     });
+    expect(payload.provider.settings).toEqual({ region: "cn-beijing", retries: 2 });
     expect(JSON.stringify(payload)).not.toContain("new-structured-key");
     expect(JSON.stringify(payload)).not.toContain(updateData.credentialsCiphertext);
+  });
+
+  it("replaces the legacy API key only when a nonblank value is supplied", async () => {
+    vi.stubEnv("AI_CONFIG_SECRET", "route-test-config-secret");
+    const existing = providerRow({
+      apiKeyCiphertext: "stored-legacy-ciphertext",
+      apiKeyIv: "stored-legacy-iv",
+      apiKeyTag: "stored-legacy-tag",
+      apiKeyPreview: "stor****-key"
+    });
+    const prisma = {
+      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
+          ...existing,
+          ...data
+        })))
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ apiKey: "new-legacy-api-key" })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+    const payload = await response.json();
+    const updateData = prisma.aiServiceProvider.update.mock.calls[0][0].data;
+
+    expect(response.status).toBe(200);
+    expect(updateData).toEqual(expect.objectContaining({
+      apiKeyCiphertext: expect.any(String),
+      apiKeyIv: expect.any(String),
+      apiKeyTag: expect.any(String),
+      apiKeyPreview: "new-****-key"
+    }));
+    expect(updateData.apiKeyCiphertext).not.toBe("stored-legacy-ciphertext");
+    expect(decryptSecret({
+      ciphertext: updateData.apiKeyCiphertext,
+      iv: updateData.apiKeyIv,
+      tag: updateData.apiKeyTag
+    }, "route-test-config-secret")).toBe("new-legacy-api-key");
+    expect(payload.provider.apiKeyPreview).toBe("new-****-key");
+    expect(JSON.stringify(payload)).not.toContain("new-legacy-api-key");
+    expect(JSON.stringify(payload)).not.toContain(updateData.apiKeyCiphertext);
+  });
+
+  it("replaces provider settings only when settings are supplied", async () => {
+    const existing = providerRow({ settingsJson: JSON.stringify({ region: "cn-beijing" }) });
+    const prisma = {
+      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockImplementation(({ data }) => Promise.resolve(providerRow({
+          ...existing,
+          ...data
+        })))
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ settings: { region: "us-west", retries: 4 } })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(prisma.aiServiceProvider.update).toHaveBeenCalledWith({
+      where: { id: "provider-1" },
+      data: { settingsJson: JSON.stringify({ region: "us-west", retries: 4 }) }
+    });
+    expect(payload.provider.settings).toEqual({ region: "us-west", retries: 4 });
   });
 
   it("returns 404 when updating a missing provider", async () => {
@@ -324,6 +493,41 @@ describe("AI service API routes", () => {
           credentialsIv: null,
           credentialsTag: "stored-tag"
         })),
+        update: vi.fn()
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ credentials: { apiKey: "replacement-key" } })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Internal server error" });
+    expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["empty string with null components", {
+      credentialsCiphertext: "",
+      credentialsIv: null,
+      credentialsTag: null
+    }],
+    ["empty string with populated components", {
+      credentialsCiphertext: "",
+      credentialsIv: "stored-iv",
+      credentialsTag: "stored-tag"
+    }]
+  ])("rejects a stored credential envelope containing %s", async (_case, envelope) => {
+    const prisma = {
+      $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(providerRow(envelope)),
         update: vi.fn()
       }
     };
@@ -466,7 +670,7 @@ describe("AI service API routes", () => {
     expect(payload.model).not.toHaveProperty("settingsJson");
   });
 
-  it("setting a model as default forces it enabled", async () => {
+  it("patches every editable model field and enforces target default uniqueness", async () => {
     const prisma = {
       $transaction: vi.fn(async (callback: (tx: typeof prisma) => unknown) => callback(prisma)),
       aiModelConfig: {
@@ -489,17 +693,45 @@ describe("AI service API routes", () => {
     const response = await route.PATCH(
       new Request("http://localhost/api/ai-services/models/model-2", {
         method: "PATCH",
-        body: JSON.stringify({ isDefault: true, enabled: false })
+        body: JSON.stringify({
+          displayName: "Qwen Follow-up Updated",
+          modelName: "qwen-plus-latest",
+          capability: "VISION_BEHAVIOR_ANALYSIS",
+          temperature: 0.7,
+          maxTokens: 4096,
+          timeoutMs: 45000,
+          costNote: "updated pricing",
+          enabled: false,
+          isDefault: true
+        })
       }),
       { params: Promise.resolve({ modelId: "model-2" }) }
     );
 
     expect(response.status).toBe(200);
+    expect(prisma.aiModelConfig.updateMany).toHaveBeenCalledWith({
+      where: {
+        capability: "VISION_BEHAVIOR_ANALYSIS",
+        id: { not: "model-2" }
+      },
+      data: { isDefault: false }
+    });
     expect(prisma.aiModelConfig.update).toHaveBeenCalledWith({
       where: { id: "model-2" },
-      data: { isDefault: true, enabled: true },
+      data: {
+        displayName: "Qwen Follow-up Updated",
+        modelName: "qwen-plus-latest",
+        capability: "VISION_BEHAVIOR_ANALYSIS",
+        temperature: 0.7,
+        maxTokens: 4096,
+        timeoutMs: 45000,
+        costNote: "updated pricing",
+        enabled: true,
+        isDefault: true
+      },
       include: expect.any(Object)
     });
+    expect(prisma.aiModelConfig.update.mock.calls[0][0].data).not.toHaveProperty("settingsJson");
   });
 
   it("deletes a model configuration with safe settings serialization", async () => {
