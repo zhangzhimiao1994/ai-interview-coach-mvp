@@ -4,6 +4,8 @@ import { Cpu, KeyRound, Plus, Route, Server, Star, Trash2 } from "lucide-react";
 import React from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { AlibabaProviderFields, CapabilitySettings } from "./AiMultimodalConfigFields";
+import { modelSettingsFromForm } from "@/lib/domain/aiModelSettings";
 import {
   aiCapabilities,
   aiProviderTypes,
@@ -108,6 +110,10 @@ const initialModelDraft = {
   costNote: ""
 };
 
+function nonEmptyEntries(values: Record<string, string>) {
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value.trim().length > 0));
+}
+
 function apiErrorMessage(result: ApiResult<unknown> | null, fallback: string) {
   if (!result) {
     return fallback;
@@ -169,6 +175,19 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       providerType,
       baseUrl,
       apiKey: String(form.get("apiKey") || ""),
+      credentials: providerType === "TONGYI"
+        ? nonEmptyEntries({
+            asrApiKey: String(form.get("asrApiKey") || ""),
+            rtcAppKey: String(form.get("rtcAppKey") || "")
+          })
+        : {},
+      settings: providerType === "TONGYI"
+        ? nonEmptyEntries({
+            region: String(form.get("region") || "cn-beijing"),
+            workspaceId: String(form.get("workspaceId") || ""),
+            rtcAppId: String(form.get("rtcAppId") || "")
+          })
+        : {},
       enabled: form.get("enabled") === "on",
       notes: String(form.get("notes") || "")
     };
@@ -213,6 +232,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       temperature: Number(form.get("temperature") || 0.4),
       maxTokens: Number(form.get("maxTokens") || 1200),
       timeoutMs: Number(form.get("timeoutMs") || 30000),
+      settings: modelSettingsFromForm(modelDraft.capability, form),
       costNote: String(form.get("costNote") || ""),
       enabled: form.get("enabled") === "on",
       isDefault: form.get("isDefault") === "on",
@@ -425,6 +445,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
               onChange={(event) => setBaseUrl(event.target.value)}
             />
             <Field label="API Key" name="apiKey" type="password" placeholder="保存后仅显示掩码" />
+            {providerType === "TONGYI" ? <AlibabaProviderFields /> : null}
             <Field label="备注" name="notes" placeholder="适合报告分析、备用模型等" />
             <label className="flex items-center gap-2 text-sm text-ink">
               <input name="enabled" type="checkbox" defaultChecked />
@@ -486,6 +507,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                 ))}
               </select>
             </label>
+            <CapabilitySettings capability={modelDraft.capability} />
             <div className="grid gap-3 sm:grid-cols-3">
               <Field
                 label="温度"

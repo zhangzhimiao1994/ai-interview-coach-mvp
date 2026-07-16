@@ -47,4 +47,54 @@ describe("model recommendation matrix", () => {
     expect(source).toContain("modelRecommendationGroups");
     expect(source).toContain("添加参考");
   });
+
+  it("uses the agreed editable Alibaba media model references", () => {
+    const recommendations = modelRecommendationGroups.flatMap((group) => group.recommendations);
+
+    expect(recommendations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        capability: "SPEECH_TO_TEXT",
+        providerType: "TONGYI",
+        modelName: "qwen3-asr-flash-realtime"
+      }),
+      expect.objectContaining({
+        capability: "TEXT_TO_SPEECH",
+        providerType: "TONGYI",
+        modelName: "qwen3-tts-instruct-flash-realtime"
+      }),
+      expect.objectContaining({
+        capability: "DIGITAL_HUMAN_REALTIME",
+        providerType: "TONGYI",
+        modelName: "avatar-dialog"
+      }),
+      expect.objectContaining({
+        capability: "VISION_BEHAVIOR_ANALYSIS",
+        providerType: "TONGYI",
+        modelName: "qwen3.6-flash"
+      })
+    ]));
+  });
+
+  it("exposes Alibaba provider and capability-specific settings in the admin form", () => {
+    const source = [
+      "components/admin/AiServiceConfigPanel.tsx",
+      "components/admin/AiMultimodalConfigFields.tsx",
+      "lib/domain/aiModelSettings.ts"
+    ].map((path) => readFileSync(join(process.cwd(), path), "utf8")).join("\n");
+
+    for (const field of [
+      "workspaceId",
+      "rtcAppId",
+      "asrApiKey",
+      "rtcAppKey",
+      "sampleRate",
+      "avatarId",
+      "minimumConfidence",
+      "frameIntervalMs"
+    ]) {
+      expect(source).toContain(field);
+    }
+    expect(source).toContain("credentials:");
+    expect(source).toContain("settings:");
+  });
 });

@@ -1,6 +1,6 @@
 import { defaultInterviewerTemplates } from "../domain/interviewerTemplates";
 import { prisma } from "./prisma";
-import { seedMockAiModels } from "./seedAiModels";
+import { seedAlibabaMediaModels, seedMockAiModels } from "./seedAiModels";
 
 const demoCompany = {
   id: "demo-company",
@@ -80,6 +80,7 @@ async function main() {
   });
 
   await seedMockAiModels(prisma);
+  await seedAlibabaMediaModels(prisma);
 }
 
 main()
