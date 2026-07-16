@@ -1,32 +1,15 @@
 import { NextResponse } from "next/server";
 import { postErrorResponse } from "@/lib/api/errors";
-import { encryptSecret, maskSecret, readAiConfigSecret } from "@/lib/domain/aiServices";
+import {
+  encryptCredentialMap,
+  encryptSecret,
+  maskSecret,
+  previewCredentialMap,
+  readAiConfigSecret
+} from "@/lib/domain/aiServices";
 import { prisma } from "@/lib/db/prisma";
 import { parseAiServiceProviderInput } from "@/lib/validators/aiServices";
-
-function serializeProvider(provider: {
-  id: string;
-  displayName: string;
-  providerType: string;
-  baseUrl: string | null;
-  apiKeyPreview: string | null;
-  enabled: boolean;
-  notes: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}) {
-  return {
-    id: provider.id,
-    displayName: provider.displayName,
-    providerType: provider.providerType,
-    baseUrl: provider.baseUrl,
-    apiKeyPreview: provider.apiKeyPreview,
-    enabled: provider.enabled,
-    notes: provider.notes,
-    createdAt: provider.createdAt,
-    updatedAt: provider.updatedAt
-  };
-}
+import { serializeModel, serializeProvider } from "../serialization";
 
 export async function GET() {
   const providers = await prisma.aiServiceProvider.findMany({
@@ -41,7 +24,7 @@ export async function GET() {
   return NextResponse.json({
     providers: providers.map((provider) => ({
       ...serializeProvider(provider),
-      models: provider.models
+      models: provider.models.map(serializeModel)
     }))
   });
 }
@@ -49,16 +32,25 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const input = parseAiServiceProviderInput(await request.json());
-    const encrypted = input.apiKey ? encryptSecret(input.apiKey, readAiConfigSecret()) : null;
+    const configSecret = readAiConfigSecret();
+    const encryptedApiKey = input.apiKey
+      ? encryptSecret(input.apiKey, configSecret)
+      : null;
+    const encryptedCredentials = encryptCredentialMap(input.credentials, configSecret);
     const provider = await prisma.aiServiceProvider.create({
       data: {
         displayName: input.displayName,
         providerType: input.providerType,
         baseUrl: input.baseUrl,
-        apiKeyCiphertext: encrypted?.ciphertext,
-        apiKeyIv: encrypted?.iv,
-        apiKeyTag: encrypted?.tag,
+        apiKeyCiphertext: encryptedApiKey?.ciphertext,
+        apiKeyIv: encryptedApiKey?.iv,
+        apiKeyTag: encryptedApiKey?.tag,
         apiKeyPreview: input.apiKey ? maskSecret(input.apiKey) : undefined,
+        credentialsCiphertext: encryptedCredentials.ciphertext,
+        credentialsIv: encryptedCredentials.iv,
+        credentialsTag: encryptedCredentials.tag,
+        credentialsPreviewJson: JSON.stringify(previewCredentialMap(input.credentials)),
+        settingsJson: JSON.stringify(input.settings),
         enabled: input.enabled,
         notes: input.notes
       }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { parseAiModelConfigInput } from "@/lib/validators/aiServices";
+import { serializeModel } from "../serialization";
 
 const modelInclude = {
   provider: {
@@ -20,26 +21,32 @@ export async function GET() {
     include: modelInclude
   });
 
-  return NextResponse.json({ models });
+  return NextResponse.json({ models: models.map(serializeModel) });
 }
 
 export async function POST(request: Request) {
   try {
     const input = parseAiModelConfigInput(await request.json());
+    const { settings, ...modelInput } = input;
 
-    if (input.isDefault) {
-      await prisma.aiModelConfig.updateMany({
-        where: { capability: input.capability },
-        data: { isDefault: false }
+    const model = await prisma.$transaction(async (tx) => {
+      if (input.isDefault) {
+        await tx.aiModelConfig.updateMany({
+          where: { capability: input.capability },
+          data: { isDefault: false }
+        });
+      }
+
+      return tx.aiModelConfig.create({
+        data: {
+          ...modelInput,
+          settingsJson: JSON.stringify(settings)
+        },
+        include: modelInclude
       });
-    }
-
-    const model = await prisma.aiModelConfig.create({
-      data: input,
-      include: modelInclude
     });
 
-    return NextResponse.json({ model }, { status: 201 });
+    return NextResponse.json({ model: serializeModel(model) }, { status: 201 });
   } catch (error) {
     return postErrorResponse(error);
   }

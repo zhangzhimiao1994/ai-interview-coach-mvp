@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
+import { aiModelConfigInputSchema } from "@/lib/validators/aiServices";
+import { serializeModel } from "../../serialization";
 
 type RouteContext = {
   params: Promise<{
@@ -20,11 +21,9 @@ const modelInclude = {
   }
 } as const;
 
-const updateModelSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    isDefault: z.boolean().optional()
-  })
+const updateModelSchema = aiModelConfigInputSchema
+  .omit({ providerId: true })
+  .partial()
   .strict();
 
 export async function PATCH(request: Request, context: RouteContext) {
@@ -41,25 +40,34 @@ export async function PATCH(request: Request, context: RouteContext) {
     const model = await prisma.$transaction(async (tx) => {
       const existing = await tx.aiModelConfig.findUnique({
         where: { id: normalizedModelId },
-        select: { id: true, capability: true }
+        select: { id: true, capability: true, isDefault: true }
       });
 
       if (!existing) {
         return null;
       }
 
-      if (input.isDefault === true) {
+      const targetCapability = input.capability ?? existing.capability;
+      const targetIsDefault = input.isDefault ?? existing.isDefault;
+
+      if (targetIsDefault) {
         await tx.aiModelConfig.updateMany({
-          where: { capability: existing.capability },
+          where: {
+            capability: targetCapability,
+            id: { not: normalizedModelId }
+          },
           data: { isDefault: false }
         });
       }
 
+      const { settings, ...updateInput } = input;
+
       return tx.aiModelConfig.update({
         where: { id: normalizedModelId },
         data: {
-          ...input,
-          enabled: input.isDefault === true ? true : input.enabled
+          ...updateInput,
+          ...(settings === undefined ? {} : { settingsJson: JSON.stringify(settings) }),
+          ...(input.isDefault === true ? { enabled: true } : {})
         },
         include: modelInclude
       });
@@ -69,7 +77,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       return NextResponse.json({ error: "Model not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ model });
+    return NextResponse.json({ model: serializeModel(model) });
   } catch (error) {
     return postErrorResponse(error);
   }
@@ -89,7 +97,7 @@ export async function DELETE(_request: Request, context: RouteContext) {
       include: modelInclude
     });
 
-    return NextResponse.json({ model });
+    return NextResponse.json({ model: serializeModel(model) });
   } catch (error) {
     return postErrorResponse(error);
   }
