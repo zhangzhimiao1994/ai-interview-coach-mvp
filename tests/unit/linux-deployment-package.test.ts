@@ -57,6 +57,24 @@ describe("linux deployment package", () => {
     expect(readWorkspaceFile("docker-compose.yml")).toContain("http://127.0.0.1:3000/api/health");
   });
 
+  it("keeps Linux entry scripts on LF line endings", () => {
+    const attributesPath = join(root, ".gitattributes");
+
+    expect(existsSync(attributesPath)).toBe(true);
+    if (existsSync(attributesPath)) {
+      expect(readWorkspaceFile(".gitattributes")).toContain("*.sh text eol=lf");
+    }
+
+    for (const path of [
+      "scripts/docker-entrypoint.sh",
+      "scripts/linux/migrate.sh",
+      "scripts/linux/setup.sh",
+      "scripts/linux/start.sh"
+    ]) {
+      expect(readWorkspaceFile(path)).not.toContain("\r\n");
+    }
+  });
+
   it("packages the diagnostics API and admin assets in the Docker build context", () => {
     expect(existsSync(join(root, "app/api/ai-services/diagnostics/route.ts"))).toBe(true);
     expect(existsSync(join(root, "components/admin/AiDiagnosticsPanel.tsx"))).toBe(true);

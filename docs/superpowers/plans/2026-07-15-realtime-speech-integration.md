@@ -12,9 +12,10 @@
 
 ## File Map
 
-- Modify `package.json` and lockfile: add `ws`, `@types/ws`, and custom server scripts.
-- Create `server.mjs`: Next.js HTTP server plus `/ws/asr` upgrade handling.
+- Modify `package.json` and lockfile: add `ws`, `@types/ws`, production `tsx`, and custom server scripts.
+- Create `server.ts`: Next.js HTTP server plus `/ws/asr` upgrade handling.
 - Create `lib/realtime/tickets.ts`: one-time ASR tickets.
+- Create `lib/realtime/upgradeRouter.ts`: preserve Next.js upgrades while routing `/ws/asr` to `ws`.
 - Create `lib/realtime/asrGateway.ts`: validated browser-to-Alibaba WebSocket proxy.
 - Create `lib/media/providers/alibabaCredentials.ts`: decrypt and normalize Alibaba configuration.
 - Create `lib/media/providers/alibabaAsr.ts`: upstream URL and event schemas.
@@ -36,8 +37,9 @@
 
 **Files:**
 - Modify: `package.json`
-- Create: `server.mjs`
+- Create: `server.ts`
 - Create: `lib/realtime/tickets.ts`
+- Create: `lib/realtime/upgradeRouter.ts`
 - Test: `tests/unit/realtime-tickets.test.ts`
 
 - [ ] **Step 1: Write one-time ticket tests**
@@ -68,6 +70,8 @@ Run: `npm install ws`
 
 Run: `npm install -D @types/ws`
 
+Move the existing `tsx` package to production dependencies because both source and Docker production startup execute `server.ts` directly.
+
 Expected: `package.json` and lockfile include both packages.
 
 - [ ] **Step 4: Implement the ticket store**
@@ -96,16 +100,16 @@ export function createRealtimeTicketStore(now = Date.now) {
 export const realtimeTicketStore = createRealtimeTicketStore();
 ```
 
-- [ ] **Step 5: Create `server.mjs`**
+- [ ] **Step 5: Create `server.ts`**
 
-Use `next`, `node:http`, and `WebSocketServer({ noServer: true })`. Route normal requests to `app.getRequestHandler()`. On upgrade, accept only `/ws/asr`, call the exported `handleAsrUpgrade`, and destroy every other socket. Use `--dev` to select development mode.
+Use `next`, `node:http`, and `WebSocketServer({ noServer: true })`. Route normal requests to `app.getRequestHandler()`. Route `/ws/asr` to the same-process WebSocket server and delegate every other upgrade to `app.getUpgradeHandler()` so development HMR keeps working. Until Task 2 wires the ASR gateway, close accepted ASR sockets with retryable code `1013`. Use `--dev` to select development mode.
 
 Update scripts:
 
 ```json
 {
-  "dev": "node server.mjs --dev",
-  "start": "node server.mjs"
+  "dev": "tsx server.ts --dev",
+  "start": "node scripts/validate-production-env.mjs && tsx server.ts"
 }
 ```
 
@@ -118,7 +122,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add package.json package-lock.json server.mjs lib/realtime/tickets.ts tests/unit/realtime-tickets.test.ts
+git add .gitattributes package.json package-lock.json server.ts lib/realtime/tickets.ts lib/realtime/upgradeRouter.ts tests/unit/realtime-tickets.test.ts tests/unit/realtime-upgrade-router.test.ts tests/unit/linux-deployment-package.test.ts
 git commit -m "add same-process realtime websocket server"
 ```
 
