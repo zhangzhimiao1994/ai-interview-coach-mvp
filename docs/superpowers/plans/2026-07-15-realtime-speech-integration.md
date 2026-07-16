@@ -353,27 +353,27 @@ git commit -m "add configurable Alibaba interview speech synthesis"
 - Modify: `components/practice/InterviewRoom.tsx`
 - Test: `tests/unit/digital-interviewer-video.test.tsx`
 
-- [ ] **Step 1: Add failing rendering tests**
+- [x] **Step 1: Add failing rendering tests**
 
 Assert the component exposes `阿里真实语音`, `浏览器语音降级`, an `<audio>` element, and does not play provider audio and browser speech simultaneously.
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `npm test -- tests/unit/digital-interviewer-video.test.tsx`
 
 Expected: FAIL because the component only invokes `speechSynthesis`.
 
-- [ ] **Step 3: Implement audio lifecycle**
+- [x] **Step 3: Implement audio lifecycle**
 
 On a user click, call `/api/digital-human/speech`, assign `audioUrl` to a single `Audio` instance, and use `play`, `pause`, `ended`, and `error` events to drive mouth/status state. If the API returns browser fallback, invoke `SpeechSynthesisUtterance` instead. Cancel and revoke resources on prompt change and unmount.
 
 Expose mode text and retry without rendering a nested card.
 
-- [ ] **Step 4: Pass session context**
+- [x] **Step 4: Pass session context**
 
 Pass `sessionId`, `questionId`, and `expression` from `InterviewRoom`. Pass `storedSession.sessionId` to `CandidateMediaPanel`.
 
-- [ ] **Step 5: Run focused tests and build**
+- [x] **Step 5: Run focused tests and build**
 
 Run: `npm test -- tests/unit/digital-interviewer-video.test.tsx tests/unit/candidate-media-panel.test.tsx tests/unit/digital-human-interface-routes.test.ts`
 
@@ -383,7 +383,7 @@ Run: `npm run build`
 
 Expected: production build succeeds with the custom server entrypoint.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add components/practice/DigitalInterviewerVideo.tsx components/practice/InterviewRoom.tsx tests/unit/digital-interviewer-video.test.tsx

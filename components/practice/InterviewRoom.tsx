@@ -335,6 +335,9 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
               stage={stageDisplayName(currentQuestion.stage)}
               prompt={displayPrompt}
               status={allAnswered ? "listening" : "speaking"}
+              sessionId={storedSession.sessionId}
+              questionId={activeFollowUp ? `${currentQuestion.id}::follow-up::1` : currentQuestion.id}
+              expression={activeFollowUp ? "probing" : "neutral"}
             />
 
             <CandidateMediaPanel
