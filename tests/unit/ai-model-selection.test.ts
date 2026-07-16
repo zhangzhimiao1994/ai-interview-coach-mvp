@@ -24,5 +24,13 @@ describe("AI model runtime selection", () => {
       })
     }));
     expect(findFirst.mock.calls[0][0].where).not.toHaveProperty("isDefault");
+    expect(findFirst.mock.calls[0][0].include.provider.select).toEqual(
+      expect.objectContaining({
+        settingsJson: true,
+        credentialsCiphertext: true,
+        credentialsIv: true,
+        credentialsTag: true
+      })
+    );
   });
 });

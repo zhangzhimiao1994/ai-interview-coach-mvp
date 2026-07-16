@@ -50,6 +50,10 @@ export async function findSelectedAiModel(capability: AiCapability) {
           apiKeyCiphertext: true,
           apiKeyIv: true,
           apiKeyTag: true,
+          credentialsCiphertext: true,
+          credentialsIv: true,
+          credentialsTag: true,
+          settingsJson: true,
           enabled: true
         }
       }
