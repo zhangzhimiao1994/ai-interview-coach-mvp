@@ -1,5 +1,4 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import type { AiCapability } from "./aiServiceConstants";
 import { isPlaceholderSecret } from "@/lib/security/requestGuards";
 export { aiCapabilities, aiProviderTypes, type AiCapability, type AiProviderType } from "./aiServiceConstants";
 

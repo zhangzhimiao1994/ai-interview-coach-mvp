@@ -65,7 +65,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 
       const targetCapability = input.capability ?? existing.capability;
       let targetEnabled = input.enabled ?? existing.enabled;
-      let targetIsDefault = input.isDefault ?? existing.isDefault;
+      const targetIsDefault = input.isDefault ?? existing.isDefault;
       let targetIsSelected = input.isSelected ?? existing.isSelected;
 
       if (existing.isSelected && input.isSelected === false) {

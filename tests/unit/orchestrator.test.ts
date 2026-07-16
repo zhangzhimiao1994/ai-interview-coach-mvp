@@ -7,7 +7,12 @@ import {
   mockAiProvider,
   serializeCoachingReportForStorage
 } from "@/lib/ai";
-import type { AiProvider, CoachingReportResult, TrainingOutline } from "@/lib/ai";
+import type {
+  AiProvider,
+  CoachingReportResult,
+  TrainingOutline,
+  TrainingOutlineRequest
+} from "@/lib/ai";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -27,10 +32,10 @@ describe("createAiOrchestrator", () => {
       generateFollowUpCoaching: vi.fn(),
       generateCoachingReport: vi.fn()
     };
-    const request = {
+    const request: TrainingOutlineRequest = {
       targetRole: "Product Manager",
       targetCompany: "Acme",
-      stages: ["WARM_UP"] as const
+      stages: ["WARM_UP"]
     };
 
     const orchestrator = createAiOrchestrator({ provider });
