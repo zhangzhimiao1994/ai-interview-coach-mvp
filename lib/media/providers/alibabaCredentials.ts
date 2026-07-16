@@ -20,6 +20,28 @@ export type AlibabaAsrCredentials = {
   region: AlibabaRealtimeRegion;
 };
 
+export type AlibabaTtsCredentials = {
+  apiKey: string;
+  workspaceId: string;
+  region: AlibabaRealtimeRegion;
+};
+
+export function isAlibabaWorkspaceId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})$/.test(value.trim())
+  );
+}
+
+export function isAlibabaRegion(
+  value: unknown
+): value is AlibabaRealtimeRegion {
+  return (
+    typeof value === "string" &&
+    alibabaRealtimeRegions.includes(value.trim() as AlibabaRealtimeRegion)
+  );
+}
+
 function textSetting(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -78,7 +100,7 @@ export function resolveAlibabaAsrCredentials(
     });
   }
 
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})$/.test(workspaceId)) {
+  if (!isAlibabaWorkspaceId(workspaceId)) {
     throw new MediaConfigurationError("Alibaba workspace ID is invalid", {
       provider: model.providerType,
       code: "ALIBABA_WORKSPACE_INVALID"
@@ -86,7 +108,7 @@ export function resolveAlibabaAsrCredentials(
   }
 
   const region = textSetting(model.providerSettings.region);
-  if (!alibabaRealtimeRegions.includes(region as AlibabaRealtimeRegion)) {
+  if (!isAlibabaRegion(region)) {
     throw new MediaConfigurationError("Alibaba realtime region is invalid", {
       provider: model.providerType,
       code: "ALIBABA_REGION_INVALID"
@@ -100,6 +122,63 @@ export function resolveAlibabaAsrCredentials(
     throw new MediaConfigurationError("Alibaba ASR API key is required", {
       provider: model.providerType,
       code: "ALIBABA_ASR_API_KEY_REQUIRED"
+    });
+  }
+
+  return {
+    apiKey,
+    workspaceId,
+    region: region as AlibabaRealtimeRegion
+  };
+}
+
+export function resolveAlibabaTtsCredentials(
+  model: ResolvedMediaModel,
+  readConfigSecret: () => string = readAiConfigSecret
+): AlibabaTtsCredentials {
+  if (
+    model.capability !== "TEXT_TO_SPEECH" ||
+    model.providerType !== "TONGYI"
+  ) {
+    throw new MediaConfigurationError(
+      "The selected speech model is not an Alibaba TTS model",
+      {
+        provider: model.providerType,
+        code: "ALIBABA_TTS_PROVIDER_REQUIRED"
+      }
+    );
+  }
+
+  const workspaceId = textSetting(model.providerSettings.workspaceId);
+  if (!workspaceId) {
+    throw new MediaConfigurationError("Alibaba workspace ID is required", {
+      provider: model.providerType,
+      code: "ALIBABA_WORKSPACE_REQUIRED"
+    });
+  }
+
+  if (!isAlibabaWorkspaceId(workspaceId)) {
+    throw new MediaConfigurationError("Alibaba workspace ID is invalid", {
+      provider: model.providerType,
+      code: "ALIBABA_WORKSPACE_INVALID"
+    });
+  }
+
+  const region = textSetting(model.providerSettings.region);
+  if (!isAlibabaRegion(region)) {
+    throw new MediaConfigurationError("Alibaba TTS region is invalid", {
+      provider: model.providerType,
+      code: "ALIBABA_REGION_INVALID"
+    });
+  }
+
+  const decrypted = decryptCredentials(model, readConfigSecret);
+  const apiKey = textSetting(decrypted.credentials.ttsApiKey) || decrypted.apiKey;
+
+  if (!apiKey) {
+    throw new MediaConfigurationError("Alibaba TTS API key is required", {
+      provider: model.providerType,
+      code: "ALIBABA_TTS_API_KEY_REQUIRED"
     });
   }
 

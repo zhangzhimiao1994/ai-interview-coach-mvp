@@ -11,8 +11,7 @@ export function modelSettingsFromForm(capability: AiCapability, form: FormData) 
     case "TEXT_TO_SPEECH":
       return {
         voice: String(form.get("voice") || "Cherry"),
-        sampleRate: Number(form.get("sampleRate") || 24000),
-        format: String(form.get("format") || "pcm")
+        instructions: String(form.get("instructions") || "")
       };
     case "DIGITAL_HUMAN_REALTIME":
       return {

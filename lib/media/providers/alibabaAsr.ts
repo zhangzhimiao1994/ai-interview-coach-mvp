@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
-  alibabaRealtimeRegions,
+  isAlibabaRegion,
+  isAlibabaWorkspaceId,
   type AlibabaRealtimeRegion
 } from "@/lib/media/providers/alibabaCredentials";
 import type { ResolvedMediaModel } from "@/lib/media/config";
@@ -186,13 +187,13 @@ export function buildAlibabaAsrUrl({
   region,
   modelName
 }: AlibabaAsrUrlInput) {
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})$/.test(workspaceId)) {
+  if (!isAlibabaWorkspaceId(workspaceId)) {
     throw new MediaConfigurationError("Alibaba workspace ID is invalid", {
       code: "ALIBABA_WORKSPACE_INVALID"
     });
   }
 
-  if (!alibabaRealtimeRegions.includes(region as AlibabaRealtimeRegion)) {
+  if (!isAlibabaRegion(region)) {
     throw new MediaConfigurationError("Alibaba realtime region is invalid", {
       code: "ALIBABA_REGION_INVALID"
     });

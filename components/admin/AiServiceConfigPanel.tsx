@@ -176,8 +176,9 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       baseUrl,
       apiKey: String(form.get("apiKey") || ""),
       credentials: providerType === "TONGYI"
-        ? nonEmptyEntries({
+          ? nonEmptyEntries({
             asrApiKey: String(form.get("asrApiKey") || ""),
+            ttsApiKey: String(form.get("ttsApiKey") || ""),
             rtcAppKey: String(form.get("rtcAppKey") || "")
           })
         : {},

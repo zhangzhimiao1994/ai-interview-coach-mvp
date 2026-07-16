@@ -21,6 +21,12 @@ import {
   type OpenAiCompatibleProbeResult,
   type OpenAiCompatibleProviderConfig
 } from "./openAiCompatibleProvider";
+import {
+  isAlibabaRegion,
+  isAlibabaWorkspaceId
+} from "@/lib/media/providers/alibabaCredentials";
+import { validateAlibabaHttpTtsModelName } from "@/lib/media/providers/alibabaTts";
+import { MediaConfigurationError } from "@/lib/media/errors";
 
 type JsonObject = Record<string, unknown>;
 
@@ -218,19 +224,19 @@ function requiredConfiguration(
 ) {
   const missing: string[] = [];
   const isMock = model.provider.providerType === "MOCK";
-  const usesAlibabaRealtimeEndpoint =
-    capability === "SPEECH_TO_TEXT" &&
+  const usesAlibabaMediaEndpoint =
+    (capability === "SPEECH_TO_TEXT" || capability === "TEXT_TO_SPEECH") &&
     model.provider.providerType === "TONGYI";
 
   if (!hasText(model.modelName)) {
     missing.push("模型名称");
   }
 
-  if (!isMock && !usesAlibabaRealtimeEndpoint && !model.provider.baseUrl) {
+  if (!isMock && !usesAlibabaMediaEndpoint && !model.provider.baseUrl) {
     missing.push("Base URL");
   } else if (
     !isMock &&
-    !usesAlibabaRealtimeEndpoint &&
+    !usesAlibabaMediaEndpoint &&
     !isHttpUrl(model.provider.baseUrl)
   ) {
     throw new DiagnosticConfigurationError(
@@ -241,8 +247,15 @@ function requiredConfiguration(
 
   const usesAsrCredential =
     capability === "SPEECH_TO_TEXT" && hasText(credentials.asrApiKey);
+  const usesTtsCredential =
+    capability === "TEXT_TO_SPEECH" && hasText(credentials.ttsApiKey);
 
-  if (!isMock && !hasText(apiKey) && !usesAsrCredential) {
+  if (
+    !isMock &&
+    !hasText(apiKey) &&
+    !usesAsrCredential &&
+    !usesTtsCredential
+  ) {
     missing.push("主 API Key");
   }
 
@@ -252,13 +265,10 @@ function requiredConfiguration(
         if (!hasText(apiKey) && !hasText(credentials.asrApiKey)) {
           missing.push("主 API Key 或 ASR API Key");
         }
-        if (!hasText(providerSettings.workspaceId)) {
+        if (!isAlibabaWorkspaceId(providerSettings.workspaceId)) {
           missing.push("Workspace ID");
         }
-        if (
-          !hasText(providerSettings.region) ||
-          !["cn-beijing", "ap-southeast-1"].includes(providerSettings.region)
-        ) {
+        if (!isAlibabaRegion(providerSettings.region)) {
           missing.push("实时服务地域");
         }
         if (!hasText(modelSettings.language)) missing.push("识别语言");
@@ -268,9 +278,30 @@ function requiredConfiguration(
         }
         break;
       case "TEXT_TO_SPEECH":
+        if (!hasText(apiKey) && !hasText(credentials.ttsApiKey)) {
+          missing.push("主 API Key 或 TTS API Key");
+        }
+        if (!isAlibabaWorkspaceId(providerSettings.workspaceId)) {
+          missing.push("Workspace ID");
+        }
+        if (!isAlibabaRegion(providerSettings.region)) {
+          missing.push("服务地域");
+        }
         if (!hasText(modelSettings.voice)) missing.push("音色");
-        if (!isPositiveInteger(modelSettings.sampleRate)) missing.push("采样率");
-        if (!hasText(modelSettings.format)) missing.push("输出格式");
+        try {
+          validateAlibabaHttpTtsModelName(model.modelName);
+        } catch (error) {
+          if (error instanceof MediaConfigurationError) {
+            throw new DiagnosticConfigurationError(
+              error.code,
+              error.code === "ALIBABA_TTS_HTTP_MODEL_REQUIRED"
+                ? "当前播放链路使用 HTTP，请选择不带 -realtime 的阿里 TTS 模型。"
+                : "阿里 TTS 模型名称无效。"
+            );
+          }
+
+          throw error;
+        }
         break;
       case "DIGITAL_HUMAN_REALTIME":
         if (!hasText(providerSettings.rtcAppId)) missing.push("RTC App ID");
@@ -429,6 +460,30 @@ export async function diagnoseAiCapability(
         options.liveCheck
           ? "实时语音连通需要麦克风音频，将在面试间内按需验证。"
           : "配置检查通过，实时语音连接将在面试间内按需建立。",
+        deps.now
+      );
+    }
+
+    if (capability === "TEXT_TO_SPEECH") {
+      if (model.provider.providerType !== "TONGYI") {
+        return result(
+          context,
+          "CONFIGURED_NOT_ADAPTED",
+          "ADAPTER_NOT_IMPLEMENTED",
+          "配置完整，当前语音合成适配器仅支持阿里百炼。",
+          deps.now
+        );
+      }
+
+      return result(
+        context,
+        "CONFIG_VALID",
+        options.liveCheck
+          ? "LIVE_CHECK_REQUIRES_TEXT"
+          : "ADAPTER_AVAILABLE",
+        options.liveCheck
+          ? "语音合成真实连通需要生成测试音频，将在面试间内按需验证。"
+          : "配置检查通过，语音合成将在面试间内按需调用。",
         deps.now
       );
     }

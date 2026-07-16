@@ -76,10 +76,14 @@ describe("Alibaba media model seed references", () => {
     const created = prisma.aiModelConfig.create.mock.calls.map(([args]) => args.data);
     expect(created.map((model) => model.modelName)).toEqual([
       "qwen3-asr-flash-realtime",
-      "qwen3-tts-instruct-flash-realtime",
+      "qwen3-tts-instruct-flash",
       "avatar-dialog",
       "qwen3.6-flash"
     ]);
+    expect(created[1].settingsJson).toBe(JSON.stringify({
+      voice: "Cherry",
+      instructions: "语气专业、自然、清晰。"
+    }));
     expect(created.every((model) => model.isSelected === false)).toBe(true);
     expect(created[0].isDefault).toBe(true);
     expect(created[1].isDefault).toBe(false);

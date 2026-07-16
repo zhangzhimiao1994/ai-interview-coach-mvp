@@ -60,7 +60,7 @@ describe("model recommendation matrix", () => {
       expect.objectContaining({
         capability: "TEXT_TO_SPEECH",
         providerType: "TONGYI",
-        modelName: "qwen3-tts-instruct-flash-realtime"
+        modelName: "qwen3-tts-instruct-flash"
       }),
       expect.objectContaining({
         capability: "DIGITAL_HUMAN_REALTIME",
@@ -86,8 +86,10 @@ describe("model recommendation matrix", () => {
       "workspaceId",
       "rtcAppId",
       "asrApiKey",
+      "ttsApiKey",
       "rtcAppKey",
       "sampleRate",
+      "instructions",
       "avatarId",
       "minimumConfidence",
       "frameIntervalMs"

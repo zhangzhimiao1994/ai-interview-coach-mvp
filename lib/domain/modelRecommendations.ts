@@ -19,7 +19,7 @@ export type ModelRecommendationGroup = {
   recommendations: ModelRecommendation[];
 };
 
-export const modelRecommendationLastUpdated = "2026-07-12";
+export const modelRecommendationLastUpdated = "2026-07-16";
 
 export const modelRecommendationGroups: ModelRecommendationGroup[] = [
   {
@@ -114,10 +114,10 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         capability: "TEXT_TO_SPEECH",
         providerType: "TONGYI",
         providerName: "阿里百炼",
-        modelName: "qwen3-tts-instruct-flash-realtime",
-        fit: "中文实时面试官语音参考模型，可配置音色、采样率和输出格式。",
+        modelName: "qwen3-tts-instruct-flash",
+        fit: "中文面试官非实时语音合成参考模型，可配置音色和自然语言语气指令。",
         priceNote: "约 0.8 元/万字符；以阿里百炼价格页为准。",
-        howToUse: "添加后设为语音合成的当前使用模型，用于 /api/digital-human/speech。",
+        howToUse: "添加后设为语音合成的当前使用模型，由 /api/digital-human/speech 通过 HTTP 返回可播放音频。",
         suggestedTemperature: 0.2,
         suggestedMaxTokens: 1000,
         suggestedTimeoutMs: 30000

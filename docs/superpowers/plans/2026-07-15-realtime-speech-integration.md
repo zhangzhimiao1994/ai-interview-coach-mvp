@@ -283,21 +283,35 @@ git commit -m "use Alibaba realtime speech recognition in practice"
 
 **Files:**
 - Create: `lib/media/providers/alibabaTts.ts`
+- Create: `lib/media/digitalHumanSpeech.ts`
 - Modify: `app/api/digital-human/speech/route.ts`
+- Modify: `lib/media/providers/alibabaCredentials.ts`
+- Modify: `lib/media/types.ts`
+- Modify: `lib/ai/diagnostics.ts`
+- Modify: `components/admin/AiMultimodalConfigFields.tsx`
+- Modify: `components/admin/AiServiceConfigPanel.tsx`
+- Modify: `lib/domain/aiModelSettings.ts`
+- Modify: `lib/domain/modelRecommendations.ts`
+- Modify: `lib/db/seedAiModels.ts`
+- Create: `prisma/migrations/20260716195500_use_http_alibaba_tts_model/migration.sql`
 - Test: `tests/unit/alibaba-tts.test.ts`
+- Test: `tests/unit/alibaba-tts-model-migration.test.ts`
+- Test: `tests/unit/ai-diagnostics.test.ts`
+- Test: `tests/unit/model-recommendations.test.ts`
+- Test: `tests/unit/seed-ai-models.test.ts`
 - Test: `tests/unit/digital-human-interface-routes.test.ts`
 
-- [ ] **Step 1: Write failing provider and route tests**
+- [x] **Step 1: Write failing provider and route tests**
 
 Mock `fetch` and assert the request body uses the database `modelName`, voice, language, and instructions. Assert successful route output is `ALIBABA_TTS`, while provider failure returns `BROWSER_TTS_FALLBACK` with `fallbackUsed: true` and a non-secret reason code.
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `npm test -- tests/unit/alibaba-tts.test.ts tests/unit/digital-human-interface-routes.test.ts`
 
 Expected: FAIL because the route always returns browser fallback.
 
-- [ ] **Step 3: Implement TTS provider**
+- [x] **Step 3: Implement TTS provider**
 
 For non-realtime browser playback, call the configured Alibaba HTTP multimodal generation endpoint with:
 
@@ -315,17 +329,17 @@ For non-realtime browser playback, call the configured Alibaba HTTP multimodal g
 
 Return the provider audio URL, expiration time, `audio/wav`, provider/model labels, and trace ID. Use one retry only for 429/500/502/503/504.
 
-- [ ] **Step 4: Update the route**
+- [x] **Step 4: Update the route**
 
 Resolve `TEXT_TO_SPEECH`, invoke the adapter, record real success/failure in `AiCallLog`, and return an explicit browser fallback only after logging the failed attempt. Never mark fallback as Alibaba success.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `npm test -- tests/unit/alibaba-tts.test.ts tests/unit/digital-human-interface-routes.test.ts`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add lib/media/providers/alibabaTts.ts app/api/digital-human/speech/route.ts tests/unit/alibaba-tts.test.ts tests/unit/digital-human-interface-routes.test.ts

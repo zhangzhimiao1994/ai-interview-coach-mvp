@@ -314,6 +314,79 @@ describe("AI configuration diagnostics", () => {
     expect(result.message).toContain("音色");
   });
 
+  it("accepts an Alibaba HTTP TTS adapter with a dedicated key and no Base URL", async () => {
+    const deps = dependencies(selectedModel({
+      capability: "TEXT_TO_SPEECH",
+      apiKey: null,
+      credentials: { ttsApiKey: "tts-secret-sentinel" },
+      providerSettings: {
+        workspaceId: "ws-main",
+        region: "cn-beijing"
+      },
+      modelSettings: { voice: "Cherry" },
+      modelOverrides: { modelName: "qwen3-tts-instruct-flash" },
+      providerOverrides: { baseUrl: null }
+    }));
+
+    const result = await diagnoseAiCapability("TEXT_TO_SPEECH", {
+      liveCheck: true,
+      dependencies: deps
+    });
+
+    expect(result).toMatchObject({
+      status: "CONFIG_VALID",
+      code: "LIVE_CHECK_REQUIRES_TEXT"
+    });
+    expect(deps.probeTextModel).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("tts-secret-sentinel");
+  });
+
+  it("rejects WebSocket-only TTS models for the HTTP playback adapter", async () => {
+    const result = await diagnoseAiCapability("TEXT_TO_SPEECH", {
+      liveCheck: false,
+      dependencies: dependencies(selectedModel({
+        capability: "TEXT_TO_SPEECH",
+        providerSettings: {
+          workspaceId: "ws-main",
+          region: "cn-beijing"
+        },
+        modelSettings: { voice: "Cherry" },
+        modelOverrides: {
+          modelName: "qwen3-tts-instruct-flash-realtime"
+        },
+        providerOverrides: { baseUrl: null }
+      }))
+    });
+
+    expect(result).toMatchObject({
+      status: "MISCONFIGURED",
+      code: "ALIBABA_TTS_HTTP_MODEL_REQUIRED"
+    });
+    expect(result.message).toContain("HTTP");
+  });
+
+  it("uses the runtime Workspace ID validation in Alibaba TTS diagnostics", async () => {
+    const result = await diagnoseAiCapability("TEXT_TO_SPEECH", {
+      liveCheck: false,
+      dependencies: dependencies(selectedModel({
+        capability: "TEXT_TO_SPEECH",
+        providerSettings: {
+          workspaceId: "invalid.workspace.example.com",
+          region: "cn-beijing"
+        },
+        modelSettings: { voice: "Cherry" },
+        modelOverrides: { modelName: "qwen3-tts-instruct-flash" },
+        providerOverrides: { baseUrl: null }
+      }))
+    });
+
+    expect(result).toMatchObject({
+      status: "MISCONFIGURED",
+      code: "MISSING_REQUIRED_CONFIGURATION"
+    });
+    expect(result.message).toContain("Workspace ID");
+  });
+
   it("accepts a complete Alibaba realtime avatar configuration", async () => {
     const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
       liveCheck: false,

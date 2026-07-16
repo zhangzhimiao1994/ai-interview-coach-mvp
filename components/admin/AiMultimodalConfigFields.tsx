@@ -7,9 +7,10 @@ export function AlibabaProviderFields() {
       <h3 className="text-sm font-medium text-ink">阿里百炼与 Avatar 参数</h3>
       <div className="grid gap-3 sm:grid-cols-2">
         <ConfigField label="地域" name="region" defaultValue="cn-beijing" />
-        <ConfigField label="Workspace ID" name="workspaceId" placeholder="实时语音识别必填" />
+        <ConfigField label="Workspace ID" name="workspaceId" placeholder="语音识别和合成必填" />
         <ConfigField label="RTC App ID" name="rtcAppId" placeholder="实时数字人使用" />
         <ConfigField label="ASR API Key" name="asrApiKey" type="password" placeholder="留空则使用主 API Key" />
+        <ConfigField label="TTS API Key" name="ttsApiKey" type="password" placeholder="留空则使用主 API Key" />
         <ConfigField label="RTC App Key" name="rtcAppKey" type="password" placeholder="加密保存" />
       </div>
     </div>
@@ -31,8 +32,7 @@ export function CapabilitySettings({ capability }: { capability: AiCapability })
     return (
       <SettingsGrid>
         <ConfigField label="音色" name="voice" defaultValue="Cherry" />
-        <ConfigField label="采样率" name="sampleRate" type="number" defaultValue={24000} />
-        <ConfigField label="输出格式" name="format" defaultValue="pcm" />
+        <ConfigField label="默认语气指令（可选）" name="instructions" defaultValue="语气专业、自然、清晰。" />
       </SettingsGrid>
     );
   }

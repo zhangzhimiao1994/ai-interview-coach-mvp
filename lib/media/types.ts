@@ -43,6 +43,7 @@ export type SpeechSynthesisInput = {
   language?: string;
   speed?: number;
   expression?: string;
+  instructions?: string;
 };
 
 type SpeechAudioLocation =
