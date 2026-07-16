@@ -4,7 +4,7 @@
 
 **Goal:** Extend the existing database-backed AI configuration system so speech, digital-human, and behavior providers can store encrypted provider credentials and editable per-model settings without hard-coded model names.
 
-**Architecture:** Keep `AiServiceProvider` as the authentication/endpoint owner and `AiModelConfig` as the capability-routing unit. Add encrypted JSON credentials, public provider settings, and model settings while retaining the current API key columns for backward compatibility. Introduce media-provider contracts and a database resolver that every later plan will use.
+**Architecture:** Keep `AiServiceProvider` as the authentication/endpoint owner and `AiModelConfig` as the capability-routing unit. Add encrypted JSON credentials, public provider settings, and model settings while retaining the current API key columns for backward compatibility. Keep `isDefault` as editable recommendation/initialization metadata, add a separate `isSelected` runtime state, and require exactly one enabled selected model per capability. Introduce media-provider contracts and a database resolver that every later plan will use; the resolver must never route by `isDefault`.
 
 **Tech Stack:** Next.js 15 route handlers, TypeScript, Zod, Prisma 5 with SQLite, React 19, Vitest.
 
@@ -12,19 +12,20 @@
 
 ## File Map
 
-- Modify `prisma/schema.prisma`: add provider credential/settings and model settings columns.
+- Modify `prisma/schema.prisma`: add provider credential/settings, model settings, and separate `isSelected` runtime-selection state.
 - Create `prisma/migrations/20260715090000_add_multimodal_config/migration.sql`: additive migration only.
+- Create `prisma/migrations/20260715094000_add_selected_ai_models/migration.sql`: migrate the former runtime choice into `isSelected`, remove default-model uniqueness, and enforce one selected model per capability.
 - Modify `lib/domain/aiServices.ts`: encrypted JSON helpers and safe preview generation.
 - Modify `lib/validators/aiServices.ts`: strict schemas for credentials and settings.
 - Modify `app/api/ai-services/providers/route.ts`: save encrypted provider credentials without returning plaintext.
 - Modify `app/api/ai-services/models/route.ts`: save model `settingsJson`.
 - Modify `app/api/ai-services/models/[modelId]/route.ts`: edit full model configuration, not only flags.
 - Create `lib/media/types.ts`: stable contracts for ASR, TTS, digital-human, and behavior adapters.
-- Create `lib/media/config.ts`: resolve the current enabled default model from the database.
+- Create `lib/media/config.ts`: resolve the enabled currently selected model from the database.
 - Create `lib/media/errors.ts`: typed provider and configuration errors.
 - Modify `components/admin/AiServiceConfigPanel.tsx`: provider-specific fields and editable model settings.
-- Modify `lib/domain/modelRecommendations.ts`: Alibaba defaults are seed suggestions only.
-- Modify `lib/db/seed.ts`: optional Alibaba model defaults when an Alibaba provider exists.
+- Modify `lib/domain/modelRecommendations.ts`: Alibaba defaults are editable recommendation/reference values only.
+- Modify `lib/db/seed.ts`: optional Alibaba recommendation defaults and initial selections when an Alibaba provider exists.
 - Test `tests/unit/multimodal-config.test.ts`.
 - Test `tests/unit/ai-service-routes.test.ts`.
 
@@ -33,6 +34,7 @@
 **Files:**
 - Modify: `prisma/schema.prisma`
 - Create: `prisma/migrations/20260715090000_add_multimodal_config/migration.sql`
+- Create: `prisma/migrations/20260715094000_add_selected_ai_models/migration.sql`
 - Test: `tests/unit/multimodal-config.test.ts`
 
 - [ ] **Step 1: Write the failing schema test**
@@ -49,6 +51,7 @@ describe("multimodal provider configuration schema", () => {
     expect(schema).toContain("credentialsTag        String?");
     expect(schema).toContain("credentialsPreviewJson String?");
     expect(schema).toContain('settingsJson          String           @default("{}")');
+    expect(schema).toContain("isSelected");
   });
 });
 ```
@@ -75,6 +78,8 @@ Add to `AiModelConfig`:
 
 ```prisma
   settingsJson String @default("{}")
+  isDefault    Boolean @default(false) // recommendation/initialization reference only
+  isSelected   Boolean @default(false) // runtime routing state
 ```
 
 Create the migration:
@@ -87,6 +92,18 @@ ALTER TABLE "AiServiceProvider" ADD COLUMN "credentialsPreviewJson" TEXT;
 ALTER TABLE "AiServiceProvider" ADD COLUMN "settingsJson" TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE "AiModelConfig" ADD COLUMN "settingsJson" TEXT NOT NULL DEFAULT '{}';
 ```
+
+Create the follow-up selection migration so existing installations preserve their former active choice without retaining the old semantics:
+
+```sql
+ALTER TABLE "AiModelConfig" ADD COLUMN "isSelected" BOOLEAN NOT NULL DEFAULT false;
+UPDATE "AiModelConfig" SET "isSelected" = "isDefault" WHERE "enabled" = true;
+DROP INDEX IF EXISTS "AiModelConfig_one_default_per_capability";
+CREATE UNIQUE INDEX "AiModelConfig_one_selected_per_capability"
+  ON "AiModelConfig"("capability") WHERE "isSelected" = true;
+```
+
+The application invariant is that `isSelected = true` implies both the model and its provider are enabled. Selection and replacement happen in one transaction. `isDefault` is not unique and is never consulted by runtime routing.
 
 - [ ] **Step 4: Generate Prisma Client and run the test**
 
@@ -101,7 +118,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add prisma/schema.prisma prisma/migrations/20260715090000_add_multimodal_config/migration.sql tests/unit/multimodal-config.test.ts
+git add prisma/schema.prisma prisma/migrations/20260715090000_add_multimodal_config/migration.sql prisma/migrations/20260715094000_add_selected_ai_models/migration.sql tests/unit/multimodal-config.test.ts
 git commit -m "add multimodal provider configuration fields"
 ```
 
@@ -211,7 +228,7 @@ git commit -m "encrypt structured provider credentials"
 
 - [ ] **Step 1: Add failing route assertions**
 
-Add tests that post Alibaba credentials/settings and assert Prisma receives encrypted fields plus JSON settings, then patch a model name and settings:
+Add tests that post Alibaba credentials/settings and assert Prisma receives encrypted fields plus JSON settings, then patch a model name and settings. Add selection tests proving `isDefault` only changes recommendation metadata, while setting `isSelected` atomically clears the previous selection for that capability and requires an enabled model/provider:
 
 ```ts
 expect(prisma.aiServiceProvider.create).toHaveBeenCalledWith({
@@ -269,7 +286,7 @@ const updateModelSchema = aiModelConfigInputSchema
   .strict();
 ```
 
-When capability changes or `isDefault` becomes true, clear defaults for the target capability inside the existing transaction.
+When capability changes or `isSelected` becomes true, clear the previous selected model for the target capability inside the existing transaction. Selecting a model enables it; disabling or deleting a selected model must be rejected unless the same transaction selects a replacement. Updating `isDefault` must not clear selections or affect runtime routing.
 
 - [ ] **Step 5: Run tests**
 
@@ -298,7 +315,7 @@ git commit -m "support editable multimodal provider settings"
 import { describe, expect, it, vi } from "vitest";
 import { resolveMediaModel } from "@/lib/media/config";
 
-it("uses the database default model name instead of a hard-coded value", async () => {
+it("uses the currently selected database model instead of a recommendation or hard-coded value", async () => {
   const findModel = vi.fn().mockResolvedValue({
     id: "model-1",
     modelName: "qwen3.6-flash-2026-04-16",
@@ -338,7 +355,7 @@ export class MediaProviderError extends Error {
 }
 ```
 
-Implement `resolveMediaModel` by calling `findDefaultAiModel(capability)`, parsing provider/model settings JSON, and throwing `MediaConfigurationError` when no enabled default exists.
+Implement `resolveMediaModel` by calling `findSelectedAiModel(capability)`, parsing provider/model settings JSON, and throwing `MediaConfigurationError` when no enabled current selection exists. The query must require `isSelected: true`, an enabled model, and an enabled provider; it must never fall back to `isDefault`.
 
 - [ ] **Step 4: Run tests**
 

@@ -4,7 +4,7 @@
 
 **Goal:** Analyze consented candidate camera frames with a configurable visual model and persist only structured, evidence-linked coaching signals.
 
-**Architecture:** Capture at most eight compressed JPEG frames per answer in the browser, submit them with local audio signals and transcript to a provider adapter, and discard images after the request. Alibaba `qwen3.6-flash` is the seeded default; Gemini implements the same contract as an optional secondary adapter. Persist structured observations and confidence on `SessionTurn`, then feed them into follow-up and final-report generation.
+**Architecture:** Capture at most eight compressed JPEG frames per answer in the browser, submit them with local audio signals and transcript to a provider adapter, and discard images after the request. Alibaba `qwen3.6-flash` is an editable seeded recommendation (`isDefault`), while runtime analysis always uses the enabled currently selected (`isSelected`) model for `VISION_BEHAVIOR_ANALYSIS`; Gemini implements the same contract as an optional secondary adapter. Persist structured observations and confidence on `SessionTurn`, then feed them into follow-up and final-report generation.
 
 **Tech Stack:** React MediaStream/canvas, Next.js route handlers, Zod, Prisma SQLite, Alibaba OpenAI-compatible multimodal API, Vitest.
 
@@ -164,7 +164,7 @@ Implement `checkConnection` and `analyze` using the same input/output types. Whe
 
 - [ ] **Step 5: Implement registry selection**
 
-Map `TONGYI` to Alibaba behavior, a Gemini `CUSTOM` provider with `settings.vendor === "GEMINI"` to Gemini behavior, and throw for unsupported providers. Registry input is the resolved database model, so model names remain editable.
+Map `TONGYI` to Alibaba behavior, a Gemini `CUSTOM` provider with `settings.vendor === "GEMINI"` to Gemini behavior, and throw for unsupported providers. Registry input is the enabled currently selected database model, so model names remain editable and changing `isSelected` takes effect without code changes. Never route from `isDefault`.
 
 - [ ] **Step 6: Run tests**
 

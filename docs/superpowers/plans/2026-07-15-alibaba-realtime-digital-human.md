@@ -211,7 +211,7 @@ Use the configured endpoint with default `wss://dashscope.aliyuncs.com/api-ws/v1
 
 - [ ] **Step 6: Implement provider selection**
 
-Resolve the selected default model for `DIGITAL_HUMAN_REALTIME` at session creation time. Register Alibaba, Tavus, and local fallback provider names, while allowing database configuration to change the default without code changes.
+Resolve the enabled currently selected model (`isSelected`) for `DIGITAL_HUMAN_REALTIME` at session creation time. Register Alibaba, Tavus, and local fallback provider names, while allowing database selection to change the active provider/model without code changes. `isDefault` remains recommendation/initialization metadata and must not be used for runtime routing.
 
 - [ ] **Step 7: Run tests**
 
@@ -433,7 +433,7 @@ Expected: FAIL on the new capabilities.
 
 - [ ] **Step 3: Implement the Tavus adapter**
 
-Map provider settings to Tavus conversation creation and cleanup behind the common contract. Return a hosted conversation URL for its client mode and preserve Alibaba as the default only through database selection, not an adapter-level constant.
+Map provider settings to Tavus conversation creation and cleanup behind the common contract. Return a hosted conversation URL for its client mode. Keep Alibaba model names as editable database recommendations, while the independent current selection determines whether Alibaba or Tavus handles a new session.
 
 - [ ] **Step 4: Add tiered admin checks**
 
@@ -441,7 +441,7 @@ Implement a non-billable configuration check for required credentials/settings a
 
 - [ ] **Step 5: Improve admin controls**
 
-Expose editable Alibaba endpoint, avatar ID, RTC AppId, encrypted RTC AppKey, sample rate, idle timeout, and model name. Add Tavus API key, persona ID, and replica ID. Keep the unique default-model selector provided by the configuration-foundation plan.
+Expose editable Alibaba endpoint, avatar ID, RTC AppId, encrypted RTC AppKey, sample rate, idle timeout, and model name. Add Tavus API key, persona ID, and replica ID. Show recommendation/default metadata separately from the unique current-model selector provided by the configuration-foundation plan; only the latter changes runtime routing.
 
 - [ ] **Step 6: Run tests**
 

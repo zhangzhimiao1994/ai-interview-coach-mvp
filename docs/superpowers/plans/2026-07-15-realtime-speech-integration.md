@@ -4,7 +4,7 @@
 
 **Goal:** Replace browser-only speech with configurable Alibaba realtime ASR and TTS while preserving explicit browser fallbacks on desktop and mobile.
 
-**Architecture:** Run Next.js and a same-process `ws` upgrade server from a custom Node entrypoint. The browser sends microphone PCM only to the same-origin ASR WebSocket; the server authenticates and proxies the strict ASR event subset to Alibaba. TTS remains server-side and returns playable audio; both capabilities resolve the current default database model on every new session.
+**Architecture:** Run Next.js and a same-process `ws` upgrade server from a custom Node entrypoint. The browser sends microphone PCM only to the same-origin ASR WebSocket; the server authenticates and proxies the strict ASR event subset to Alibaba. TTS remains server-side and returns playable audio; both capabilities resolve the enabled currently selected (`isSelected`) database model on every new session. `isDefault` is recommendation metadata only and never participates in ASR or TTS runtime routing.
 
 **Tech Stack:** Next.js 15 custom server, Node.js HTTP, `ws`, Web Audio API, AudioWorklet, React 19, Zod, Vitest, Playwright.
 
@@ -368,7 +368,7 @@ git commit -m "play real provider speech in interview room"
 
 - [ ] **Step 1: Document configuration and fallback modes**
 
-Document Alibaba region/workspace/API keys, model defaults, same-origin `/ws/asr`, reverse-proxy WebSocket headers, and browser fallback behavior. Include Nginx `proxy_set_header Upgrade $http_upgrade;` and `proxy_set_header Connection "upgrade";`.
+Document Alibaba region/workspace/API keys, editable recommended model defaults, the separate current-selection control, same-origin `/ws/asr`, reverse-proxy WebSocket headers, and browser fallback behavior. Include Nginx `proxy_set_header Upgrade $http_upgrade;` and `proxy_set_header Connection "upgrade";`.
 
 - [ ] **Step 2: Run all automated checks**
 
