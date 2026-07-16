@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { summarizeBehaviorSignals } from "@/lib/domain/behaviorSignals";
+import { AiProviderError, AiStructuredOutputError } from "./errors";
 import type {
   AiProvider,
   CoachingReportInput,
@@ -19,8 +20,21 @@ export type OpenAiCompatibleProviderConfig = {
   temperature: number;
   maxTokens: number;
   timeoutMs: number;
+  maxRetries?: number;
+  retryBaseDelayMs?: number;
+  sleepImpl?: (milliseconds: number) => Promise<void>;
   fetchImpl?: FetchLike;
 };
+
+class AiProviderHttpError extends AiProviderError {
+  constructor(
+    readonly status: number,
+    readonly responseBody: string
+  ) {
+    super(`OpenAI-compatible request failed: ${status} ${responseBody}`.trim());
+    this.name = "AiProviderHttpError";
+  }
+}
 
 const trainingStageSchema = z.enum([
   "WARM_UP",
@@ -146,9 +160,55 @@ function chatCompletionsEndpoint(baseUrl: string) {
   return `${baseUrl.replace(/\/+$/, "")}/chat/completions`;
 }
 
-async function requestJson(
+function sleep(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function parseJsonContent(content: string) {
+  const trimmed = content.trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
+  const objectStart = trimmed.indexOf("{");
+  const objectEnd = trimmed.lastIndexOf("}");
+  const embedded = objectStart >= 0 && objectEnd > objectStart
+    ? trimmed.slice(objectStart, objectEnd + 1)
+    : undefined;
+  const candidates = [trimmed, fenced, embedded].filter(
+    (candidate, index, values): candidate is string =>
+      Boolean(candidate) && values.indexOf(candidate) === index
+  );
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as unknown;
+    } catch {
+      // Try the next safe extraction strategy.
+    }
+  }
+
+  throw new AiStructuredOutputError("AI response was not valid structured JSON.");
+}
+
+function parseRequiredShape<T>(schema: z.ZodType<T>, value: unknown, capability: string) {
+  const parsed = schema.safeParse(value);
+
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  const issueSummary = parsed.error.issues
+    .slice(0, 3)
+    .map((issue) => `${issue.path.join(".") || "response"}: ${issue.message}`)
+    .join("; ");
+
+  throw new AiStructuredOutputError(
+    `${capability} response did not match the required structure: ${issueSummary}`
+  );
+}
+
+async function executeRequest(
   config: OpenAiCompatibleProviderConfig,
-  messages: Array<{ role: "system" | "user"; content: string }>
+  messages: Array<{ role: "system" | "user"; content: string }>,
+  useJsonMode: boolean
 ) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -166,28 +226,80 @@ async function requestJson(
         messages,
         temperature: config.temperature,
         max_tokens: config.maxTokens,
-        response_format: { type: "json_object" }
+        ...(useJsonMode ? { response_format: { type: "json_object" } } : {})
       }),
       signal: controller.signal
     });
 
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error(`OpenAI-compatible request failed: ${response.status} ${body}`.trim());
+      throw new AiProviderHttpError(response.status, body.slice(0, 1_000));
     }
 
-    const payload = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
+    let payload: { choices?: Array<{ message?: { content?: string } }> };
+
+    try {
+      payload = (await response.json()) as typeof payload;
+    } catch (error) {
+      throw new AiProviderError("OpenAI-compatible response body was not JSON.", { cause: error });
+    }
+
     const content = payload.choices?.[0]?.message?.content;
 
     if (!content) {
-      throw new Error("OpenAI-compatible response did not include message content.");
+      throw new AiProviderError("OpenAI-compatible response did not include message content.");
     }
 
-    return JSON.parse(content) as unknown;
+    return content;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function isJsonModeUnsupported(error: unknown) {
+  return (
+    error instanceof AiProviderHttpError &&
+    (error.status === 400 || error.status === 422) &&
+    /response_format|json_object|json mode/i.test(error.responseBody)
+  );
+}
+
+function isRetryable(error: unknown) {
+  if (error instanceof AiProviderHttpError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500;
+  }
+
+  return error instanceof TypeError || (error instanceof Error && error.name === "AbortError");
+}
+
+async function requestJson(
+  config: OpenAiCompatibleProviderConfig,
+  messages: Array<{ role: "system" | "user"; content: string }>
+) {
+  const maxRetries = Math.max(0, config.maxRetries ?? 2);
+  const retryBaseDelayMs = Math.max(0, config.retryBaseDelayMs ?? 250);
+  const wait = config.sleepImpl ?? sleep;
+  let retryCount = 0;
+  let useJsonMode = true;
+
+  while (true) {
+    try {
+      return parseJsonContent(await executeRequest(config, messages, useJsonMode));
+    } catch (error) {
+      if (useJsonMode && isJsonModeUnsupported(error)) {
+        useJsonMode = false;
+        continue;
+      }
+
+      if (retryCount < maxRetries && isRetryable(error)) {
+        const delay = retryBaseDelayMs * 2 ** retryCount;
+        retryCount += 1;
+        await wait(delay);
+        continue;
+      }
+
+      throw error;
+    }
   }
 }
 
@@ -228,7 +340,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
         }
       ]);
 
-      return trainingOutlineSchema.parse(result);
+      return parseRequiredShape(trainingOutlineSchema, result, "Interview outline");
     },
     async generateFollowUpCoaching(input: FollowUpCoachingInput) {
       const result = await requestJson(config, [
@@ -253,7 +365,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
         }
       ]);
 
-      return followUpCoachingSchema.parse(result);
+      return parseRequiredShape(followUpCoachingSchema, result, "Interview follow-up");
     },
     async generateCoachingReport(input: CoachingReportInput) {
       const result = await requestJson(config, [
@@ -344,7 +456,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleProviderC
         }
       ]);
 
-      const parsed = coachingReportSchema.parse(result);
+      const parsed = parseRequiredShape(coachingReportSchema, result, "Coaching report");
       const fallbackEvidence = input.turns
         .filter((turn) => turn.behaviorSignals)
         .map((turn) => ({

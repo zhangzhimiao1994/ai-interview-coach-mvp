@@ -427,9 +427,10 @@ describe("deserializeStoredCoachingReport", () => {
 
 describe("createConfiguredAiOrchestrator", () => {
   it("defaults to the database provider with mock fallback", async () => {
-    vi.stubEnv("AI_PROVIDER", "");
-
-    const orchestrator = createConfiguredAiOrchestrator();
+    const orchestrator = createConfiguredAiOrchestrator(
+      { AI_PROVIDER: "" },
+      { findModel: vi.fn().mockResolvedValue(null) }
+    );
     const outline = await orchestrator.generateTrainingOutline({
       targetRole: "Designer",
       stages: ["WARM_UP"]

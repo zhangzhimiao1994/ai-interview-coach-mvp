@@ -1,6 +1,9 @@
 import { mockAiProvider } from "./mockProvider";
 import { createAiOrchestrator } from "./orchestrator";
-import { createDbConfiguredAiProvider } from "./dbConfiguredProvider";
+import {
+  createDbConfiguredAiProvider,
+  type DbConfiguredAiProviderOptions
+} from "./dbConfiguredProvider";
 import type { AiProvider } from "./types";
 
 const supportedProviders = ["database", "mock"] as const;
@@ -24,13 +27,16 @@ function readProviderName(env: Record<string, string | undefined>): AiProviderNa
 }
 
 export function createConfiguredAiOrchestrator(
-  env: Record<string, string | undefined> = process.env
+  env: Record<string, string | undefined> = process.env,
+  databaseProviderOptions: DbConfiguredAiProviderOptions = {}
 ): AiProvider {
   const providerName = readProviderName(env);
 
   switch (providerName) {
     case "database":
-      return createAiOrchestrator({ provider: createDbConfiguredAiProvider() });
+      return createAiOrchestrator({
+        provider: createDbConfiguredAiProvider(databaseProviderOptions)
+      });
     case "mock":
       return createAiOrchestrator({ provider: mockAiProvider });
   }

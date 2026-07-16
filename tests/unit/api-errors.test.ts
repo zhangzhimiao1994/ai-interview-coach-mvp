@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import { postErrorResponse } from "@/lib/api/errors";
+import { AiProviderError } from "@/lib/ai/errors";
 
 function knownRequestError(code: string) {
   return new Prisma.PrismaClientKnownRequestError(
@@ -46,5 +47,19 @@ describe("API error responses", () => {
       message: "The requested record does not exist."
     });
     expect(JSON.stringify(payload)).not.toContain("database detail");
+  });
+
+  it("maps upstream AI failures to a safe 502 response", async () => {
+    const response = postErrorResponse(
+      new AiProviderError("private upstream response detail")
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(payload).toEqual({
+      error: "AI service unavailable",
+      message: "The selected AI service failed to return a valid response. Please retry shortly."
+    });
+    expect(JSON.stringify(payload)).not.toContain("private upstream response detail");
   });
 });

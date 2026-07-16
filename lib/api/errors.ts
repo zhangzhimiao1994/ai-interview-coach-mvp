@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { AiConfigSecretMissingError } from "@/lib/domain/aiServices";
+import { AiProviderError } from "@/lib/ai/errors";
 
 export class ApiConflictError extends Error {
   constructor(message: string) {
@@ -21,6 +22,16 @@ function prismaErrorCode(error: unknown) {
 }
 
 export function postErrorResponse(error: unknown) {
+  if (error instanceof AiProviderError) {
+    return NextResponse.json(
+      {
+        error: "AI service unavailable",
+        message: "The selected AI service failed to return a valid response. Please retry shortly."
+      },
+      { status: 502 }
+    );
+  }
+
   if (error instanceof ZodError) {
     return NextResponse.json({ error: "Validation failed", issues: error.issues }, { status: 400 });
   }

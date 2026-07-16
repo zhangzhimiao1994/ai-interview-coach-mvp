@@ -188,4 +188,103 @@ describe("OpenAI-compatible provider", () => {
     expect(report.perQuestionFeedback[0].answerEvidence).toContain("I led a growth project");
     expect(report.details?.readinessVerdict.priorityRisk).toBe("Missing measurable outcomes.");
   });
+
+  it("extracts JSON from a Markdown code block", async () => {
+    const content = `\`\`\`json\n${JSON.stringify(validOutline())}\n\`\`\``;
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse(content));
+    const provider = outlineProvider(fetchImpl);
+
+    const outline = await provider.generateTrainingOutline(outlineRequest);
+
+    expect(outline.title).toBe("PM interview");
+  });
+
+  it("retries transient upstream failures", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("temporarily unavailable", { status: 503 }))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(validOutline())));
+    const provider = outlineProvider(fetchImpl, { retryBaseDelayMs: 0 });
+
+    await expect(provider.generateTrainingOutline(outlineRequest)).resolves.toMatchObject({
+      title: "PM interview"
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries without JSON mode when an endpoint does not support response_format", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("response_format is not supported", { status: 400 }))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(validOutline())));
+    const provider = outlineProvider(fetchImpl, { retryBaseDelayMs: 0 });
+
+    await provider.generateTrainingOutline(outlineRequest);
+
+    const firstBody = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
+    const secondBody = JSON.parse(fetchImpl.mock.calls[1][1].body as string);
+    expect(firstBody.response_format).toEqual({ type: "json_object" });
+    expect(secondBody.response_format).toBeUndefined();
+  });
+
+  it("reports an upstream structured-output error when the JSON shape is invalid", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(chatResponse("{}"));
+    const provider = outlineProvider(fetchImpl);
+
+    await expect(provider.generateTrainingOutline(outlineRequest)).rejects.toThrow(
+      /required structure/
+    );
+  });
 });
+
+const outlineRequest = {
+  targetRole: "Product Manager",
+  targetCompany: "Example Tech",
+  stages: ["FORMAL_INTERVIEW" as const],
+  questionCountPerStage: 1,
+  preferredLanguage: "zh-CN" as const
+};
+
+function validOutline() {
+  return {
+    title: "PM interview",
+    targetRole: "Product Manager",
+    targetCompany: "Example Tech",
+    stages: ["FORMAL_INTERVIEW"],
+    estimatedMinutes: 2,
+    questions: [
+      {
+        id: "formal-0",
+        stage: "FORMAL_INTERVIEW",
+        prompt: "Tell me about a product project you shipped.",
+        expectedFocus: ["context", "personal contribution"],
+        followUps: ["How did you measure the result?"],
+        difficulty: "MEDIUM",
+        timeLimitSeconds: 120
+      }
+    ]
+  };
+}
+
+function chatResponse(content: string) {
+  return new Response(
+    JSON.stringify({ choices: [{ message: { content } }] }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
+}
+
+function outlineProvider(
+  fetchImpl: ReturnType<typeof vi.fn>,
+  overrides: { retryBaseDelayMs?: number } = {}
+) {
+  return createOpenAiCompatibleProvider({
+    baseUrl: "https://api.example.com/v1",
+    apiKey: "sk-test",
+    modelName: "deepseek-chat",
+    temperature: 0.2,
+    maxTokens: 1600,
+    timeoutMs: 30000,
+    fetchImpl,
+    ...overrides
+  });
+}

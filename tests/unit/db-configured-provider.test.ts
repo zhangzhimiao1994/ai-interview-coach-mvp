@@ -18,7 +18,7 @@ describe("DB configured AI provider", () => {
     expect(outline.questions[0].stage).toBe("FORMAL_INTERVIEW");
   });
 
-  it("falls back when a configured provider cannot be initialized", async () => {
+  it("does not hide a selected provider initialization failure with mock output", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("AI_CONFIG_SECRET", "");
     const fallbackProvider: AiProvider = {
@@ -63,12 +63,12 @@ describe("DB configured AI provider", () => {
       })
     });
 
-    const outline = await provider.generateTrainingOutline({
-      targetRole: "Product Manager",
-      stages: ["FORMAL_INTERVIEW"]
-    });
-
-    expect(outline.title).toBe("Fallback outline");
-    expect(fallbackProvider.generateTrainingOutline).toHaveBeenCalledOnce();
+    await expect(
+      provider.generateTrainingOutline({
+        targetRole: "Product Manager",
+        stages: ["FORMAL_INTERVIEW"]
+      })
+    ).rejects.toThrow(/AI_CONFIG_SECRET/);
+    expect(fallbackProvider.generateTrainingOutline).not.toHaveBeenCalled();
   });
 });

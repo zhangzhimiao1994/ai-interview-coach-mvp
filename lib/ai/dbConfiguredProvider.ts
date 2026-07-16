@@ -6,7 +6,7 @@ import type { AiProvider, CoachingReportInput, FollowUpCoachingInput, TrainingOu
 
 type ConfiguredModel = NonNullable<Awaited<ReturnType<typeof findSelectedAiModel>>>;
 
-type DbConfiguredAiProviderOptions = {
+export type DbConfiguredAiProviderOptions = {
   findModel?: typeof findSelectedAiModel;
   fallbackProvider?: AiProvider;
 };
@@ -63,14 +63,21 @@ async function withFallback<T>(
   fallbackProvider: AiProvider,
   invoke: (provider: AiProvider) => Promise<T>
 ) {
-  try {
-    const model = await findModel(capability).catch(() => null);
-    const provider = model ? providerForModel(model) : null;
+  const model = await findModel(capability);
 
-    return await invoke(provider ?? fallbackProvider);
-  } catch {
+  if (!model) {
     return invoke(fallbackProvider);
   }
+
+  const provider = providerForModel(model);
+
+  if (!provider) {
+    throw new Error(
+      `Selected AI model ${model.provider.displayName}/${model.modelName} cannot be initialized.`
+    );
+  }
+
+  return invoke(provider);
 }
 
 export function createDbConfiguredAiProvider({
