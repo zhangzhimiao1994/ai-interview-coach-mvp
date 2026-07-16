@@ -97,4 +97,25 @@ describe("linux deployment package", () => {
     expect(docs).toContain("/api/ai-services/diagnostics");
     expect(docs).toContain("真实连通测试不会自动执行");
   });
+
+  it("documents realtime speech configuration, proxying, and explicit fallbacks", () => {
+    const deploymentDocs = readWorkspaceFile("docs/linux-deployment.md");
+    const mediaDocs = readWorkspaceFile("docs/digital-human-and-behavior-interfaces.md");
+
+    expect(deploymentDocs).toContain("/ws/asr");
+    expect(deploymentDocs).toContain("proxy_set_header Upgrade $http_upgrade;");
+    expect(deploymentDocs).toContain('proxy_set_header Connection "upgrade";');
+    expect(deploymentDocs).toContain("同源 WebSocket");
+
+    for (const setting of ["region", "workspaceId", "asrApiKey", "ttsApiKey"]) {
+      expect(mediaDocs).toContain(`\`${setting}\``);
+    }
+    expect(mediaDocs).toContain("qwen3-asr-flash-realtime");
+    expect(mediaDocs).toContain("qwen3-tts-instruct-flash");
+    expect(mediaDocs).toContain("当前使用（isSelected）");
+    expect(mediaDocs).toContain("阿里实时识别优先");
+    expect(mediaDocs).toContain("浏览器识别降级");
+    expect(mediaDocs).toContain("阿里真实语音优先");
+    expect(mediaDocs).toContain("浏览器语音降级");
+  });
 });

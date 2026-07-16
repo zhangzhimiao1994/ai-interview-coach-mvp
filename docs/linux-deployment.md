@@ -179,15 +179,34 @@ server {
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 ```
 
-公开给候选人使用前，需要配置 HTTPS。否则浏览器可能限制摄像头和麦克风权限。
+应用的自定义 Node 入口在同一个端口处理 Next.js HTTP 请求和 `/ws/asr` WebSocket upgrade，不需要开放额外的中继端口。上面的 `Upgrade` 和 `Connection` 头必须保留，否则同源 WebSocket 会在 Nginx 处失败并触发浏览器识别降级。
+
+公开给候选人使用前必须配置 HTTPS。否则浏览器可能限制摄像头、麦克风、AudioWorklet 和安全的 `wss://` 连接。生产页面、API 与 `/ws/asr` 必须使用同一域名；不要把阿里上游 WebSocket 地址或 API Key 暴露给浏览器。
+
+### 生产环境配置阿里语音
+
+阿里凭据不写入 `.env`。管理员通过 `AI 配置中心` 保存以下数据库配置，API Key 会使用 `AI_CONFIG_SECRET` 加密：
+
+- 服务商公开设置：`region`、`workspaceId`；
+- 加密凭据：通用 `apiKey`，以及可选的 `asrApiKey`、`ttsApiKey`；
+- ASR 参考模型：`qwen3-asr-flash-realtime`；
+- TTS 参考模型：`qwen3-tts-instruct-flash`。
+
+推荐参考可以编辑，但不会自动参与调用。必须分别把一个 ASR 模型和一个 TTS 模型设为“当前使用（isSelected）”。更新配置后，新建 ASR 会话和新的语音合成请求会读取最新选择，正在进行的 WebSocket 不会中途切换模型。
+
+候选人端显示“阿里实时识别优先 / 浏览器识别降级”，数字面试官显示“阿里真实语音优先 / 浏览器语音降级”。降级是显式运行状态，不会记录成阿里成功。
 
 ## 更新服务
 
@@ -256,7 +275,7 @@ curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
   "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
 ```
 
-语音、数字人和行为分析适配器落地前，主动检查只返回配置状态和“等待适配器”，不会把配置完整误报为真实服务可用。
+阿里 ASR/TTS 适配器已经落地，诊断会校验工作区、地域、专用或通用 API Key、当前模型和协议兼容性，但不会自动录音或合成付费音频。真实数字人视频和视觉行为分析仍只返回配置状态与“等待适配器”，不会把配置完整误报为真实服务可用。
 
 ## 备份 SQLite 数据
 

@@ -396,11 +396,11 @@ git commit -m "play real provider speech in interview room"
 - Modify: `docs/digital-human-and-behavior-interfaces.md`
 - Modify: `docs/linux-deployment.md`
 
-- [ ] **Step 1: Document configuration and fallback modes**
+- [x] **Step 1: Document configuration and fallback modes**
 
 Document Alibaba region/workspace/API keys, editable recommended model defaults, the separate current-selection control, same-origin `/ws/asr`, reverse-proxy WebSocket headers, and browser fallback behavior. Include Nginx `proxy_set_header Upgrade $http_upgrade;` and `proxy_set_header Connection "upgrade";`.
 
-- [ ] **Step 2: Run all automated checks**
+- [x] **Step 2: Run all automated checks**
 
 Run: `npm test`
 
@@ -414,7 +414,9 @@ Expected: production build succeeds.
 
 Start the server, use an HTTPS origin, grant microphone permission, confirm live Alibaba transcript updates, provider TTS playback, replay/pause, and explicit browser fallback after disabling the configured model.
 
-- [ ] **Step 4: Commit**
+> 2026-07-16：自动化行为测试、生产构建和 Docker 冒烟检查已完成。本地环境只有占位凭据，且没有可授权的真实麦克风/移动设备，因此不冒充已完成真实阿里付费调用；此项保留为部署到 HTTPS 环境并配置真实凭据后的人工验收清单。
+
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/digital-human-and-behavior-interfaces.md docs/linux-deployment.md
