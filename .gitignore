@@ -28,6 +28,7 @@ coverage/
 work/
 outputs/
 .codex/
+.superpowers/
 
 # logs
 *.log
