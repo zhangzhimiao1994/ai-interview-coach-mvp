@@ -47,7 +47,9 @@ describe("CosyVoice and Lingmou reference migration", () => {
           ('alibaba-media-provider-1-digital-human-realtime', '阿里云 Avatar 实时数字人', 'avatar-dialog', '{"avatarId":"","voiceId":"","rtcMode":"web"}', 1, 1, 1),
           ('user-custom-model', '用户自定义', 'qwen3-tts-instruct-flash', '{"voice":"Cherry","instructions":"语气专业、自然、清晰。"}', 1, 1, 0),
           ('alibaba-media-provider-2-text-to-speech', '阿里百炼 非实时语音合成', 'qwen3-tts-instruct-flash', '{"voice":"Custom","instructions":"语气专业、自然、清晰。"}', 1, 1, 0),
-          ('alibaba-media-provider-2-digital-human-realtime', '已编辑数字人', 'avatar-dialog', '{"avatarId":"custom","voiceId":"","rtcMode":"web"}', 1, 1, 1);
+          ('alibaba-media-provider-2-digital-human-realtime', '已编辑数字人', 'avatar-dialog', '{"avatarId":"custom","voiceId":"","rtcMode":"web"}', 1, 1, 1),
+          ('alibaba-media-provider-3-text-to-speech', '用户重命名的语音合成', 'qwen3-tts-instruct-flash', '{"voice":"Cherry","instructions":"语气专业、自然、清晰。"}', 1, 1, 0),
+          ('alibaba-media-provider-3-digital-human-realtime', '用户重命名的数字人', 'avatar-dialog', '{"avatarId":"","voiceId":"","rtcMode":"web"}', 1, 1, 1);
       `, "utf8");
       executeSqlFile(setupPath, databaseUrl);
       executeSqlFile(migrationPath, databaseUrl);
@@ -77,6 +79,16 @@ describe("CosyVoice and Lingmou reference migration", () => {
         {
           id: "alibaba-media-provider-2-text-to-speech", displayName: "阿里百炼 非实时语音合成",
           modelName: "qwen3-tts-instruct-flash", settingsJson: JSON.stringify({ voice: "Custom", instructions: "语气专业、自然、清晰。" }),
+          enabled: true, isDefault: true, isSelected: false
+        },
+        {
+          id: "alibaba-media-provider-3-digital-human-realtime", displayName: "用户重命名的数字人",
+          modelName: "avatar-dialog", settingsJson: JSON.stringify({ avatarId: "", voiceId: "", rtcMode: "web" }),
+          enabled: true, isDefault: true, isSelected: true
+        },
+        {
+          id: "alibaba-media-provider-3-text-to-speech", displayName: "用户重命名的语音合成",
+          modelName: "qwen3-tts-instruct-flash", settingsJson: JSON.stringify({ voice: "Cherry", instructions: "语气专业、自然、清晰。" }),
           enabled: true, isDefault: true, isSelected: false
         },
         {
