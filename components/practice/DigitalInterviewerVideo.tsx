@@ -42,6 +42,24 @@ type PublicDigitalHumanSession = {
   expiresAt: string;
 };
 
+type DigitalHumanSessionActivation = {
+  session: PublicDigitalHumanSession;
+  avatarClient: LingmouAvatarClient | null;
+  avatarMode: "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+  avatarMessage: string;
+};
+
+type DigitalHumanSessionOwnership = {
+  trainingSessionId: string;
+  controller: AbortController;
+  promise: Promise<DigitalHumanSessionActivation>;
+  session: PublicDigitalHumanSession | null;
+  avatarClient: LingmouAvatarClient | null;
+  lease: number;
+  finalized: boolean;
+  deleteRequested: boolean;
+};
+
 const statusText = {
   ready: "候场中",
   speaking: "正在提问",
@@ -131,6 +149,23 @@ function deleteDigitalHumanSession(id: string) {
   }).catch(() => undefined);
 }
 
+function deleteOwnedDigitalHumanSession(owner: DigitalHumanSessionOwnership) {
+  if (!owner.session || owner.deleteRequested) return;
+  owner.deleteRequested = true;
+  deleteDigitalHumanSession(owner.session.id);
+}
+
+function finalizeDigitalHumanSessionOwnership(
+  owner: DigitalHumanSessionOwnership
+) {
+  if (owner.finalized) return;
+  owner.finalized = true;
+  owner.controller.abort();
+  owner.avatarClient?.exit();
+  owner.avatarClient = null;
+  deleteOwnedDigitalHumanSession(owner);
+}
+
 export function DigitalInterviewerVideo({
   interviewerName,
   stage,
@@ -153,9 +188,10 @@ export function DigitalInterviewerVideo({
   const [sessionUnavailable, setSessionUnavailable] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const avatarRootRef = useRef<HTMLDivElement | null>(null);
+  const avatarRootRef = useRef<HTMLVideoElement | null>(null);
   const avatarClientRef = useRef<LingmouAvatarClient | null>(null);
   const digitalSessionRef = useRef<PublicDigitalHumanSession | null>(null);
+  const sessionOwnershipRef = useRef<DigitalHumanSessionOwnership | null>(null);
   const avatarModeRef = useRef<AvatarMode>(avatarMode);
   const abortRef = useRef<AbortController | null>(null);
   const objectUrlRef = useRef<string | null>(null);
@@ -250,8 +286,7 @@ export function DigitalInterviewerVideo({
   );
 
   useEffect(() => {
-    let disposed = false;
-    const controller = new AbortController();
+    let subscribed = true;
     stopSpeech(true);
     setDigitalSession(null);
     digitalSessionRef.current = null;
@@ -262,15 +297,52 @@ export function DigitalInterviewerVideo({
     setActiveAvatarMode(sessionId ? "CONNECTING" : "LOCAL_AVATAR");
 
     if (!sessionId) {
+      const existing = sessionOwnershipRef.current;
+      sessionOwnershipRef.current = null;
+      if (existing) {
+        const ownedClient = existing.avatarClient;
+        const ownedSession = existing.session;
+        finalizeDigitalHumanSessionOwnership(existing);
+        if (avatarClientRef.current === ownedClient) avatarClientRef.current = null;
+        if (digitalSessionRef.current === ownedSession) {
+          digitalSessionRef.current = null;
+        }
+      }
       return () => {
-        disposed = true;
-        controller.abort();
+        subscribed = false;
         stopSpeech(false);
       };
     }
 
-    void (async () => {
-      try {
+    let owner = sessionOwnershipRef.current;
+    if (
+      !owner ||
+      owner.finalized ||
+      owner.trainingSessionId !== sessionId
+    ) {
+      if (owner) {
+        const ownedClient = owner.avatarClient;
+        const ownedSession = owner.session;
+        finalizeDigitalHumanSessionOwnership(owner);
+        if (avatarClientRef.current === ownedClient) avatarClientRef.current = null;
+        if (digitalSessionRef.current === ownedSession) {
+          digitalSessionRef.current = null;
+        }
+      }
+      const controller = new AbortController();
+      owner = {
+        trainingSessionId: sessionId,
+        controller,
+        promise: Promise.resolve(null as never),
+        session: null,
+        avatarClient: null,
+        lease: 0,
+        finalized: false,
+        deleteRequested: false
+      };
+      const createdOwner = owner;
+      const root = avatarRootRef.current;
+      owner.promise = (async () => {
         const response = await fetch("/api/digital-human/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -284,55 +356,114 @@ export function DigitalInterviewerVideo({
           throw new Error("DIGITAL_HUMAN_SESSION_UNAVAILABLE");
         }
         const createdSession = payload.session;
-        if (disposed) {
-          deleteDigitalHumanSession(createdSession.id);
-          return;
+        createdOwner.session = createdSession;
+        if (createdOwner.finalized) {
+          deleteOwnedDigitalHumanSession(createdOwner);
+          throw new DOMException("Session finalized", "AbortError");
         }
 
-        digitalSessionRef.current = createdSession;
         if (createdSession.mode === "LINGMOU_CLOUD" && createdSession.connection) {
           try {
-            const root = avatarRootRef.current;
             if (!root) throw new Error("LINGMOU_ROOT_UNAVAILABLE");
             const client = await createLingmouAvatarClient();
-            if (disposed) {
+            createdOwner.avatarClient = client;
+            if (createdOwner.finalized) {
               client.exit();
-              deleteDigitalHumanSession(createdSession.id);
-              return;
+              throw new DOMException("Session finalized", "AbortError");
             }
-            avatarClientRef.current = client;
             await client.start(createdSession.connection, root);
-            if (disposed) {
+            if (createdOwner.finalized) {
               client.exit();
-              return;
+              throw new DOMException("Session finalized", "AbortError");
             }
-            setActiveAvatarMode("LINGMOU_CLOUD");
-          } catch {
-            avatarClientRef.current?.exit();
-            avatarClientRef.current = null;
-            setActiveAvatarMode("LOCAL_AVATAR");
-            setAvatarMessage("数字人画面已降级");
+            return {
+              session: createdSession,
+              avatarClient: client,
+              avatarMode: "LINGMOU_CLOUD",
+              avatarMessage: ""
+            };
+          } catch (error) {
+            if (
+              createdOwner.finalized ||
+              caughtErrorName(error) === "AbortError"
+            ) {
+              throw error;
+            }
+            createdOwner.avatarClient?.exit();
+            createdOwner.avatarClient = null;
+            return {
+              session: createdSession,
+              avatarClient: null,
+              avatarMode: "LOCAL_AVATAR",
+              avatarMessage: "数字人画面已降级"
+            };
           }
-        } else {
-          setActiveAvatarMode("LOCAL_AVATAR");
         }
-        if (!disposed) setDigitalSession(createdSession);
-      } catch (error) {
-        if (disposed || caughtErrorName(error) === "AbortError") return;
+
+        return {
+          session: createdSession,
+          avatarClient: null,
+          avatarMode: "LOCAL_AVATAR",
+          avatarMessage: ""
+        };
+      })();
+      sessionOwnershipRef.current = owner;
+    }
+
+    owner.lease += 1;
+    const lease = owner.lease;
+    const activeOwner = owner;
+    void activeOwner.promise.then(
+      (activation) => {
+        if (
+          !subscribed ||
+          activeOwner.finalized ||
+          sessionOwnershipRef.current !== activeOwner
+        ) {
+          return;
+        }
+        digitalSessionRef.current = activation.session;
+        avatarClientRef.current = activation.avatarClient;
+        setActiveAvatarMode(activation.avatarMode);
+        setAvatarMessage(activation.avatarMessage);
+        setDigitalSession(activation.session);
+      },
+      (error) => {
+        if (
+          !subscribed ||
+          activeOwner.finalized ||
+          caughtErrorName(error) === "AbortError" ||
+          sessionOwnershipRef.current !== activeOwner
+        ) {
+          return;
+        }
         setActiveAvatarMode("LOCAL_AVATAR");
         setSessionUnavailable(true);
       }
-    })();
+    );
 
     return () => {
-      disposed = true;
-      controller.abort();
+      subscribed = false;
       stopSpeech(false);
-      avatarClientRef.current?.exit();
-      avatarClientRef.current = null;
-      const current = digitalSessionRef.current;
-      digitalSessionRef.current = null;
-      if (current) deleteDigitalHumanSession(current.id);
+      void Promise.resolve().then(() => {
+        if (
+          sessionOwnershipRef.current !== activeOwner ||
+          activeOwner.finalized ||
+          activeOwner.lease !== lease
+        ) {
+          return;
+        }
+        sessionOwnershipRef.current = null;
+        const ownedClient = activeOwner.avatarClient;
+        const ownedSession = activeOwner.session;
+        finalizeDigitalHumanSessionOwnership(activeOwner);
+        if (avatarClientRef.current === ownedClient) {
+          avatarClientRef.current = null;
+        }
+        if (digitalSessionRef.current === ownedSession) {
+          digitalSessionRef.current = null;
+        }
+      });
     };
   }, [sessionId, setActiveAvatarMode, stopSpeech]);
 
@@ -370,6 +501,32 @@ export function DigitalInterviewerVideo({
   );
 
   const playPrompt = useCallback(async () => {
+    const existingAudio = audioRef.current;
+    if (
+      speechState === "paused" &&
+      existingAudio &&
+      isCurrentProviderAudio(existingAudio)
+    ) {
+      try {
+        await existingAudio.play();
+        if (isCurrentProviderAudio(existingAudio)) {
+          setSpeechState("speaking");
+          setSpeechMessage("正在播放 CosyVoice 语音。");
+        }
+      } catch (error) {
+        if (
+          caughtErrorName(error) === "NotAllowedError" &&
+          isCurrentProviderAudio(existingAudio)
+        ) {
+          setSpeechState("paused");
+          setSpeechMessage("CosyVoice 已生成，请再次点击播放问题。");
+          return;
+        }
+        speakWithBrowser("CosyVoice 暂不可用，已切换为浏览器语音降级。");
+      }
+      return;
+    }
+
     const generation = stopSpeech(false);
     setSpeechMessage("");
 
@@ -436,12 +593,17 @@ export function DigitalInterviewerVideo({
           setSpeechState("idle");
           setSpeechMessage("CosyVoice 播报已发送至灵眸数字人。");
         } catch (error) {
+          if (
+            !playbackGuard.isCurrent(generation) ||
+            caughtErrorName(error) === "AbortError"
+          ) {
+            return;
+          }
           avatarClientRef.current?.interrupt();
           setActiveAvatarMode("LOCAL_AVATAR");
           setAvatarMessage("数字人画面已降级");
           setSpeechState("idle");
           setSpeechMessage("数字人画面已降级，请点击重播完整问题。");
-          if (caughtErrorName(error) === "AbortError") return;
           return;
         }
         return;
@@ -460,6 +622,7 @@ export function DigitalInterviewerVideo({
         chunks.push(next.value);
         totalBytes += next.value.byteLength;
       }
+      if (totalBytes === 0) throw new Error("TTS_STREAM_EMPTY");
       const pcm = new Uint8Array(totalBytes);
       let offset = 0;
       for (const chunk of chunks) {
@@ -511,6 +674,7 @@ export function DigitalInterviewerVideo({
     questionId,
     sessionId,
     speakWithBrowser,
+    speechState,
     stopSpeech,
     setActiveAvatarMode
   ]);
@@ -570,10 +734,13 @@ export function DigitalInterviewerVideo({
 
           <div className="mx-auto flex w-full max-w-sm flex-1 items-center justify-center py-5">
             <div className="relative aspect-[3/4] w-full max-w-[240px] overflow-hidden rounded-[2rem] border border-white/15 bg-white/10 shadow-2xl">
-              <div
+              <video
                 ref={avatarRootRef}
                 data-testid="lingmou-avatar-root"
-                className="absolute inset-0 overflow-hidden rounded-[2rem]"
+                aria-label="灵眸数字人视频"
+                autoPlay
+                playsInline
+                className="absolute inset-0 h-full w-full rounded-[2rem] object-cover"
               />
               {!cloudReady ? (
                 <div

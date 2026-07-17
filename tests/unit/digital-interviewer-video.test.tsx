@@ -11,7 +11,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const lingmou = vi.hoisted(() => {
   const client = {
-    start: vi.fn(async () => undefined),
+    start: vi.fn(async (): Promise<void> => undefined),
     pushPcm: vi.fn(),
     interrupt: vi.fn(),
     exit: vi.fn()
@@ -195,7 +195,7 @@ async function renderInteractive(
   audio: HTMLAudioElement,
   overrides: Partial<React.ComponentProps<typeof DigitalInterviewerVideo>> = {}
 ) {
-  const avatarRoot = {} as HTMLElement;
+  const avatarRoot = {} as HTMLVideoElement;
   let renderer: ReactTestRenderer | null = null;
   await act(async () => {
     renderer = TestRenderer.create(
@@ -245,11 +245,52 @@ describe("DigitalInterviewerVideo", () => {
     );
 
     expect(markup).toContain('data-testid="lingmou-avatar-root"');
+    expect(markup).toContain('<video');
     expect(markup).toContain("灵眸真实数字人 / 本地数字人降级");
     expect(markup).toContain("CosyVoice / 浏览器语音降级");
     expect(markup).toContain("AI 生成数字人");
     expect(markup).toContain("请介绍项目经验。");
     expect(lingmou.createClient).not.toHaveBeenCalled();
+  });
+
+  it("keeps fallback visible and does not auto-play until cloud readiness resolves", async () => {
+    const { audio } = setupInteractiveBrowser();
+    let resolveReadiness: (() => void) | undefined;
+    lingmou.client.start.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReadiness = resolve;
+        })
+    );
+    const fetchMock = createFetchRouter({ mode: "LINGMOU_CLOUD" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { renderer } = await renderInteractive(audio);
+    const speechCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/speech"));
+
+    expect(
+      renderer.root.findAll(
+        (node) => node.props["data-testid"] === "local-avatar-fallback"
+      )
+    ).toHaveLength(1);
+    expect(speechCalls()).toHaveLength(0);
+    expect(lingmou.client.pushPcm).not.toHaveBeenCalled();
+    expect(audio.play).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveReadiness?.();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(
+      renderer.root.findAll(
+        (node) => node.props["data-testid"] === "local-avatar-fallback"
+      )
+    ).toHaveLength(0);
+    expect(speechCalls()).toHaveLength(1);
+    expect(lingmou.client.pushPcm).toHaveBeenCalled();
   });
 
   it("streams cloud PCM with one-chunk lookahead and never plays hidden audio", async () => {
@@ -293,6 +334,147 @@ describe("DigitalInterviewerVideo", () => {
     expect(String.fromCharCode(...wav.slice(0, 4))).toBe("RIFF");
     expect(String.fromCharCode(...wav.slice(8, 12))).toBe("WAVE");
     expect(Array.from(wav.slice(44))).toEqual([0x34, 0x12, 0xfe, 0xff]);
+  });
+
+  it("falls back to browser speech without creating WAV audio for an empty local stream", async () => {
+    const { audio, speechSynthesis, createObjectURL } =
+      setupInteractiveBrowser();
+    vi.stubGlobal(
+      "fetch",
+      createFetchRouter({ speech: () => pcmResponse([]) })
+    );
+
+    await renderInteractive(audio);
+
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(audio.play).not.toHaveBeenCalled();
+    expect(speechSynthesis.speak).toHaveBeenCalledOnce();
+  });
+
+  it("plays a single local PCM chunk as one WAV payload", async () => {
+    const { audio, blobs } = setupInteractiveBrowser();
+    vi.stubGlobal(
+      "fetch",
+      createFetchRouter({ speech: () => pcmResponse([[0x78, 0x56]]) })
+    );
+
+    await renderInteractive(audio);
+
+    expect(audio.play).toHaveBeenCalledOnce();
+    expect(blobs).toHaveLength(1);
+    const wav = new Uint8Array(await blobs[0].arrayBuffer());
+    expect(Array.from(wav.slice(44))).toEqual([0x78, 0x56]);
+  });
+
+  it("falls back to browser speech when the local PCM reader errors", async () => {
+    const { audio, speechSynthesis, createObjectURL } =
+      setupInteractiveBrowser();
+    vi.stubGlobal(
+      "fetch",
+      createFetchRouter({
+        speech: () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error(new Error("stream failed"));
+              }
+            })
+          )
+      })
+    );
+
+    await renderInteractive(audio);
+
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(audio.play).not.toHaveBeenCalled();
+    expect(speechSynthesis.speak).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a cancelled local reader overwrite the next question audio", async () => {
+    const { audio, speechSynthesis, createObjectURL } =
+      setupInteractiveBrowser();
+    let oldController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/digital-human/sessions") {
+          return sessionResponse("LOCAL_AVATAR");
+        }
+        if (url.endsWith("/speech")) {
+          const body = JSON.parse(String(init?.body)) as { questionId: string };
+          if (body.questionId === "question-1") {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  oldController = controller;
+                }
+              })
+            );
+          }
+          return pcmResponse([[7, 0]]);
+        }
+        if (url.endsWith("/heartbeat")) return Response.json({ ok: true });
+        if (init?.method === "DELETE") return Response.json({ ok: true });
+        throw new Error(`Unexpected request ${url}`);
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { renderer } = await renderInteractive(audio);
+    expect(oldController).toBeDefined();
+
+    await act(async () => {
+      renderer.update(
+        <DigitalInterviewerVideo
+          interviewerName="AI 面试官"
+          stage="正式面试"
+          prompt="下一道题。"
+          sessionId="training-session-1"
+          questionId="question-2"
+        />
+      );
+    });
+    await flushEffects();
+
+    expect(audio.src).toBe("blob:interviewer-audio-1");
+    expect(audio.play).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      oldController?.error(new Error("old local stream failed"));
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(audio.src).toBe("blob:interviewer-audio-1");
+    expect(audio.play).toHaveBeenCalledOnce();
+    expect(speechSynthesis.speak).not.toHaveBeenCalled();
+  });
+
+  it("retries an autoplay-blocked local audio element without refetching speech", async () => {
+    const audio = createAudioMock();
+    vi.mocked(audio.play)
+      .mockRejectedValueOnce(new DOMException("Playback blocked", "NotAllowedError"))
+      .mockResolvedValueOnce(undefined);
+    const { createObjectURL } = setupInteractiveBrowser(audio);
+    const fetchMock = createFetchRouter();
+    vi.stubGlobal("fetch", fetchMock);
+    const { renderer } = await renderInteractive(audio);
+    const speechCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/speech"));
+
+    expect(audio.play).toHaveBeenCalledOnce();
+    expect(speechCalls()).toHaveLength(1);
+    expect(audio.src).toBe("blob:interviewer-audio-1");
+
+    await act(async () => {
+      findReplayButton(renderer).props.onClick();
+    });
+    await flushEffects();
+
+    expect(audio.play).toHaveBeenCalledTimes(2);
+    expect(speechCalls()).toHaveLength(1);
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(audio.src).toBe("blob:interviewer-audio-1");
   });
 
   it("keeps the visual downgrade notice when cloud SDK startup fails", async () => {
@@ -391,6 +573,73 @@ describe("DigitalInterviewerVideo", () => {
     );
   });
 
+  it("ignores an old cloud reader failure after the next question is active", async () => {
+    const { audio } = setupInteractiveBrowser();
+    let oldController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/digital-human/sessions") {
+          return sessionResponse("LINGMOU_CLOUD");
+        }
+        if (url.endsWith("/speech")) {
+          const body = JSON.parse(String(init?.body)) as { questionId: string };
+          if (body.questionId === "question-1") {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  oldController = controller;
+                }
+              })
+            );
+          }
+          return pcmResponse([[9, 0]]);
+        }
+        if (url.endsWith("/heartbeat")) return Response.json({ ok: true });
+        if (init?.method === "DELETE") return Response.json({ ok: true });
+        throw new Error(`Unexpected request ${url}`);
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { renderer } = await renderInteractive(audio);
+    expect(oldController).toBeDefined();
+
+    await act(async () => {
+      renderer.update(
+        <DigitalInterviewerVideo
+          interviewerName="AI 面试官"
+          stage="正式面试"
+          prompt="下一道题。"
+          sessionId="training-session-1"
+          questionId="question-2"
+        />
+      );
+    });
+    await flushEffects();
+
+    expect(lingmou.client.pushPcm).toHaveBeenCalledWith(
+      Int16Array.from([9]),
+      true
+    );
+    const interruptCount = lingmou.client.interrupt.mock.calls.length;
+
+    await act(async () => {
+      oldController?.error(new Error("old stream failed"));
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(lingmou.client.interrupt).toHaveBeenCalledTimes(interruptCount);
+    expect(
+      renderer.root.findAll(
+        (node) => node.props["data-testid"] === "local-avatar-fallback"
+      )
+    ).toHaveLength(0);
+    expect(JSON.stringify(renderer.toJSON())).not.toContain(
+      "数字人画面已降级"
+    );
+  });
+
   it("does not auto-replay the same question id but allows explicit replay", async () => {
     const { audio } = setupInteractiveBrowser();
     const fetchMock = createFetchRouter();
@@ -445,6 +694,74 @@ describe("DigitalInterviewerVideo", () => {
       "/api/digital-human/sessions/digital-session-1",
       expect.objectContaining({ method: "DELETE", keepalive: true })
     );
+  });
+
+  it("owns one session across React StrictMode replay and cleans it once on unmount", async () => {
+    vi.useFakeTimers();
+    const { audio } = setupInteractiveBrowser();
+    const fetchMock = createFetchRouter({ mode: "LINGMOU_CLOUD" });
+    vi.stubGlobal("fetch", fetchMock);
+    const avatarRoot = {} as HTMLVideoElement;
+    let renderer: ReactTestRenderer | null = null;
+
+    await act(async () => {
+      renderer = TestRenderer.create(
+        <React.StrictMode>
+          <DigitalInterviewerVideo
+            interviewerName="AI 面试官"
+            stage="正式面试"
+            prompt="请介绍一下你自己。"
+            sessionId="training-session-strict"
+            questionId="question-strict"
+          />
+        </React.StrictMode>,
+        {
+          createNodeMock: (element) => {
+            if (element.type === "audio") return audio;
+            if (
+              (element.props as Record<string, unknown>)["data-testid"] ===
+              "lingmou-avatar-root"
+            ) {
+              return avatarRoot;
+            }
+            return null;
+          },
+          unstable_strictMode: true
+        } as Parameters<typeof TestRenderer.create>[1] & {
+          unstable_strictMode: boolean;
+        }
+      );
+      for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    });
+    const mounted = renderer as ReactTestRenderer | null;
+    if (!mounted) throw new Error("Strict renderer was not created");
+
+    const createCalls = () =>
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === "/api/digital-human/sessions" &&
+          (init as RequestInit | undefined)?.method === "POST"
+      );
+    const deleteCalls = () =>
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url) ===
+            "/api/digital-human/sessions/digital-session-1" &&
+          (init as RequestInit | undefined)?.method === "DELETE"
+      );
+
+    expect(createCalls()).toHaveLength(1);
+    expect(deleteCalls()).toHaveLength(0);
+    expect(lingmou.createClient).toHaveBeenCalledOnce();
+    expect(lingmou.client.start).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      mounted.unmount();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(lingmou.client.exit).toHaveBeenCalledOnce();
+    expect(deleteCalls()).toHaveLength(1);
   });
 
   it("does not create a paid session for the waiting-room preview", async () => {
