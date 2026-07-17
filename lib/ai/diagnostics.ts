@@ -227,16 +227,25 @@ function requiredConfiguration(
   const usesAlibabaMediaEndpoint =
     (capability === "SPEECH_TO_TEXT" || capability === "TEXT_TO_SPEECH") &&
     model.provider.providerType === "TONGYI";
+  const usesLingmouManagedEndpoint =
+    capability === "DIGITAL_HUMAN_REALTIME" &&
+    model.provider.providerType === "LINGMOU";
 
   if (!hasText(model.modelName)) {
     missing.push("模型名称");
   }
 
-  if (!isMock && !usesAlibabaMediaEndpoint && !model.provider.baseUrl) {
+  if (
+    !isMock &&
+    !usesAlibabaMediaEndpoint &&
+    !usesLingmouManagedEndpoint &&
+    !model.provider.baseUrl
+  ) {
     missing.push("Base URL");
   } else if (
     !isMock &&
     !usesAlibabaMediaEndpoint &&
+    !usesLingmouManagedEndpoint &&
     !isHttpUrl(model.provider.baseUrl)
   ) {
     throw new DiagnosticConfigurationError(
@@ -252,6 +261,7 @@ function requiredConfiguration(
 
   if (
     !isMock &&
+    !usesLingmouManagedEndpoint &&
     !hasText(apiKey) &&
     !usesAsrCredential &&
     !usesTtsCredential
@@ -331,6 +341,23 @@ function requiredConfiguration(
   }
 }
 
+function hasCompleteLingmouConfiguration(
+  providerSettings: JsonObject,
+  modelSettings: JsonObject,
+  credentials: CredentialMap
+) {
+  return (
+    hasText(credentials.accessKeyId) &&
+    hasText(credentials.accessKeySecret) &&
+    providerSettings.region === "cn-beijing" &&
+    hasText(modelSettings.configId) &&
+    hasText(modelSettings.instanceId) &&
+    modelSettings.renderMode === "cloud" &&
+    modelSettings.integrationMode === "audio-driven" &&
+    modelSettings.client === "web"
+  );
+}
+
 type ResultContext = {
   capability: AiCapability;
   checkMode: AiDiagnosticCheckMode;
@@ -388,6 +415,24 @@ export async function diagnoseAiCapability(
 
     const model = context.model;
 
+    if (
+      capability === "DIGITAL_HUMAN_REALTIME" &&
+      (
+        !model ||
+        !model.isSelected ||
+        model.capability !== capability ||
+        model.provider.providerType !== "LINGMOU"
+      )
+    ) {
+      return result(
+        context,
+        "NOT_CONFIGURED",
+        "LINGMOU_NOT_CONFIGURED",
+        "灵眸未配置，当前使用本地数字人",
+        deps.now
+      );
+    }
+
     if (!model || !model.isSelected || model.capability !== capability) {
       return result(
         context,
@@ -430,6 +475,23 @@ export async function diagnoseAiCapability(
       model,
       deps.readConfigSecret
     );
+
+    if (
+      capability === "DIGITAL_HUMAN_REALTIME" &&
+      !hasCompleteLingmouConfiguration(
+        providerSettings,
+        modelSettings,
+        credentials
+      )
+    ) {
+      return result(
+        context,
+        "NOT_CONFIGURED",
+        "LINGMOU_NOT_CONFIGURED",
+        "灵眸未配置，当前使用本地数字人",
+        deps.now
+      );
+    }
 
     requiredConfiguration(
       capability,
@@ -484,6 +546,20 @@ export async function diagnoseAiCapability(
         options.liveCheck
           ? "语音合成真实连通需要生成测试音频，将在面试间内按需验证。"
           : "配置检查通过，语音合成将在面试间内按需调用。",
+        deps.now
+      );
+    }
+
+    if (capability === "DIGITAL_HUMAN_REALTIME") {
+      return result(
+        context,
+        "CONFIG_VALID",
+        options.liveCheck
+          ? "LIVE_CHECK_REQUIRES_EXPLICIT_SESSION"
+          : "ADAPTER_AVAILABLE",
+        options.liveCheck
+          ? "真实检查需要显式创建并关闭可能计费的数字人会话，本阶段未执行。"
+          : "配置检查通过，数字人会话只会在面试间内按需建立。",
         deps.now
       );
     }

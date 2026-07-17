@@ -14,10 +14,11 @@ describe("AI diagnostics admin panel", () => {
     expect(markup).toContain("不会自动触发付费请求");
     expect(markup).toContain("检查配置");
     expect(markup).toContain("真实连通测试");
-    expect(markup).toContain("真实测试（当前仅配置）");
+    expect(markup).toContain("真实检查（可能计费）");
     expect(markup).toContain("配置有效");
     expect(markup).toContain("未选择当前模型");
-    expect(markup).toContain("已配置，等待适配器");
+    expect(markup).toContain("未配置");
+    expect(markup).toContain("灵眸未配置，当前使用本地数字人");
     expect(markup).toContain("Alibaba Cloud / Qwen Plus");
     expect(markup).toContain("qwen-plus");
     expect(markup).not.toContain("ciphertext");
@@ -56,10 +57,10 @@ const diagnostics: AiDiagnosticResult[] = [
     modelDisplayName: "Avatar Dialog",
     modelName: "avatar-dialog",
     checkMode: "CONFIG",
-    status: "CONFIGURED_NOT_ADAPTED",
-    code: "ADAPTER_NOT_IMPLEMENTED",
+    status: "NOT_CONFIGURED",
+    code: "LINGMOU_NOT_CONFIGURED",
     latencyMs: 3,
-    message: "配置完整，等待真实服务适配器。",
+    message: "灵眸未配置，当前使用本地数字人",
     checkedAt: "2026-07-16T08:00:00.000Z"
   }
 ];

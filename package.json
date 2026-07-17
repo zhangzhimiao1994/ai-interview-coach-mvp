@@ -19,6 +19,8 @@
     "linux:start": "sh scripts/linux/start.sh"
   },
   "dependencies": {
+    "@alicloud/lingmou20250527": "1.8.0",
+    "@alicloud/openapi-core": "1.0.8",
     "@prisma/client": "^5.22.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",

@@ -5,6 +5,9 @@ export const aiDiagnosticStatuses = [
   "CONFIG_VALID",
   "CONFIGURED_NOT_ADAPTED",
   "NOT_SELECTED",
+  "NOT_CONFIGURED",
+  "LIVE_AVAILABLE",
+  "LIVE_FAILED",
   "MISCONFIGURED",
   "UNREACHABLE"
 ] as const;

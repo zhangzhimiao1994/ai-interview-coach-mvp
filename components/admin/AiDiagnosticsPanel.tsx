@@ -49,6 +49,18 @@ const statusPresentation: Record<
     label: "未选择当前模型",
     className: "bg-slate-100 text-muted"
   },
+  NOT_CONFIGURED: {
+    label: "未配置",
+    className: "bg-amber-50 text-amber-700"
+  },
+  LIVE_AVAILABLE: {
+    label: "真实服务可用",
+    className: "bg-emerald-50 text-emerald-700"
+  },
+  LIVE_FAILED: {
+    label: "真实检查失败",
+    className: "bg-rose-50 text-rose-700"
+  },
   MISCONFIGURED: {
     label: "配置不完整",
     className: "bg-rose-50 text-rose-700"
@@ -195,7 +207,9 @@ export function AiDiagnosticsPanel({
                   onClick={() => runDiagnostic(diagnostic.capability, true)}
                 >
                   <Wifi className="h-3.5 w-3.5" aria-hidden="true" />
-                  {supportsLiveCheck
+                  {diagnostic.capability === "DIGITAL_HUMAN_REALTIME"
+                    ? "真实检查（可能计费）"
+                    : supportsLiveCheck
                     ? "真实连通测试"
                     : "真实测试（当前仅配置）"}
                 </Button>

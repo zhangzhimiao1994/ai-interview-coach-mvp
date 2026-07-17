@@ -407,7 +407,7 @@ describe("AI configuration diagnostics", () => {
     expect(result.message).toContain("Workspace ID");
   });
 
-  it("accepts a complete Alibaba realtime avatar configuration", async () => {
+  it("treats a non-Lingmou realtime avatar selection as not configured", async () => {
     const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
       liveCheck: false,
       dependencies: dependencies(selectedModel({
@@ -419,10 +419,78 @@ describe("AI configuration diagnostics", () => {
     });
 
     expect(result).toMatchObject({
-      status: "CONFIGURED_NOT_ADAPTED",
-      code: "ADAPTER_NOT_IMPLEMENTED"
+      status: "NOT_CONFIGURED",
+      code: "LINGMOU_NOT_CONFIGURED"
     });
+    expect(result.message).toBe("灵眸未配置，当前使用本地数字人");
     expect(JSON.stringify(result)).not.toContain("rtc-secret-sentinel");
+  });
+
+  it("reports no selected realtime Lingmou model as not configured", async () => {
+    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
+      liveCheck: false,
+      dependencies: dependencies(null)
+    });
+
+    expect(result).toMatchObject({
+      status: "NOT_CONFIGURED",
+      code: "LINGMOU_NOT_CONFIGURED",
+      message: "灵眸未配置，当前使用本地数字人"
+    });
+  });
+
+  it.each([
+    ["AccessKey ID", { accessKeyId: "", accessKeySecret: "lingmou-ak-secret" }, {}, {}],
+    ["AccessKey Secret", { accessKeyId: "lingmou-ak-id", accessKeySecret: "" }, {}, {}],
+    ["region", completeLingmouCredentials(), { region: "cn-shanghai" }, {}],
+    ["config ID", completeLingmouCredentials(), {}, { configId: "" }],
+    ["instance ID", completeLingmouCredentials(), {}, { instanceId: "" }],
+    ["cloud rendering", completeLingmouCredentials(), {}, { renderMode: "client" }],
+    ["audio-driven integration", completeLingmouCredentials(), {}, { integrationMode: "text-driven" }],
+    ["web client", completeLingmouCredentials(), {}, { client: "native" }]
+  ])("reports a Lingmou model with invalid %s as not configured", async (
+    _field,
+    credentials,
+    providerSettings,
+    modelSettings
+  ) => {
+    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
+      liveCheck: false,
+      dependencies: dependencies(selectedLingmouModel({
+        credentials,
+        providerSettings,
+        modelSettings
+      }))
+    });
+
+    expect(result).toMatchObject({
+      status: "NOT_CONFIGURED",
+      code: "LINGMOU_NOT_CONFIGURED",
+      message: "灵眸未配置，当前使用本地数字人"
+    });
+    expect(JSON.stringify(result)).not.toContain("lingmou-ak-secret");
+  });
+
+  it.each([
+    [false, "CONFIG", "ADAPTER_AVAILABLE"],
+    [true, "LIVE", "LIVE_CHECK_REQUIRES_EXPLICIT_SESSION"]
+  ])("validates Lingmou configuration without a paid session when liveCheck is %s", async (
+    liveCheck,
+    checkMode,
+    code
+  ) => {
+    const deps = dependencies(selectedLingmouModel());
+
+    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
+      liveCheck,
+      dependencies: deps
+    });
+
+    expect(result).toMatchObject({ status: "CONFIG_VALID", checkMode, code });
+    expect(deps.probeTextModel).not.toHaveBeenCalled();
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("lingmou-ak-id");
+    expect(serialized).not.toContain("lingmou-ak-secret");
   });
 
   it("validates Alibaba observable-behavior sampling ranges", async () => {
@@ -533,6 +601,47 @@ function selectedModel({
     },
     ...modelOverrides
   };
+}
+
+function completeLingmouCredentials() {
+  return {
+    accessKeyId: "lingmou-ak-id",
+    accessKeySecret: "lingmou-ak-secret"
+  };
+}
+
+function selectedLingmouModel({
+  credentials = completeLingmouCredentials(),
+  providerSettings = {},
+  modelSettings = {}
+}: {
+  credentials?: Record<string, string>;
+  providerSettings?: Record<string, unknown>;
+  modelSettings?: Record<string, unknown>;
+} = {}) {
+  return selectedModel({
+    capability: "DIGITAL_HUMAN_REALTIME",
+    apiKey: null,
+    credentials,
+    providerSettings: { region: "cn-beijing", ...providerSettings },
+    modelSettings: {
+      configId: "chat-config-id",
+      instanceId: "paid-instance-id",
+      renderMode: "cloud",
+      integrationMode: "audio-driven",
+      client: "web",
+      ...modelSettings
+    },
+    modelOverrides: {
+      displayName: "灵眸 2D 云渲染音频驱动数字人",
+      modelName: "lingmou-2d-cloud-audio-driven"
+    },
+    providerOverrides: {
+      displayName: "灵眸数字人",
+      providerType: "LINGMOU",
+      baseUrl: null
+    }
+  });
 }
 
 function dependencies(
