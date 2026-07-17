@@ -3,7 +3,8 @@ import { MediaConfigurationError, MediaProviderError } from "@/lib/media/errors"
 import type { ResolvedMediaModel } from "@/lib/media/config";
 import {
   createDigitalHumanSessionService,
-  isValidDigitalHumanSessionTransition
+  isValidDigitalHumanSessionTransition,
+  startDigitalHumanSessionReaper
 } from "@/lib/media/digitalHumanSessions";
 
 type RecordRow = {
@@ -77,6 +78,12 @@ function harness(initial: RecordRow[] = []) {
         (row) =>
           row.trainingSessionId === trainingSessionId &&
           row.status !== "STOPPED"
+      )
+    ),
+    findAllNonTerminalSessions: vi.fn(async () =>
+      [...rows.values()].filter(
+        (record) =>
+          record.mode === "LINGMOU_CLOUD" && record.status !== "STOPPED"
       )
     ),
     findIdleSessions: vi.fn().mockResolvedValue([]),
@@ -308,7 +315,7 @@ describe("digital human session lifecycle", () => {
 
     const error = await service
       .createDigitalHumanSession("training-1")
-      .catch((caught) => caught);
+      .catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({
       code: "DIGITAL_HUMAN_RECOVERY_IDENTITY_PERSIST_FAILED",
@@ -481,5 +488,93 @@ describe("digital human session lifecycle", () => {
       status: 409
     });
     expect(provider.createSession).not.toHaveBeenCalled();
+  });
+
+  it("stops every active cloud session during server shutdown", async () => {
+    const cloudReady = row({
+      id: "cloud-ready",
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-ready",
+      instanceId: "instance-id"
+    });
+    const cloudFailed = row({
+      id: "cloud-failed",
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-failed",
+      instanceId: "instance-id",
+      status: "FAILED"
+    });
+    const local = row({ id: "local-ready" });
+    const { rows, provider, service } = harness([cloudReady, cloudFailed, local]);
+
+    await service.stopAllActiveDigitalHumanSessions("SERVER_SHUTDOWN");
+
+    expect(provider.closeSession).toHaveBeenCalledTimes(2);
+    expect(rows.get("cloud-ready")).toMatchObject({
+      status: "STOPPED",
+      stopReason: "SERVER_SHUTDOWN"
+    });
+    expect(rows.get("cloud-failed")).toMatchObject({
+      status: "STOPPED",
+      stopReason: "SERVER_SHUTDOWN"
+    });
+    expect(rows.get("local-ready")).toMatchObject({ status: "READY" });
+  });
+
+  it("starts one unref'ed 30-second reaper and stops it idempotently", () => {
+    const unref = vi.fn();
+    const interval = { unref } as unknown as ReturnType<typeof setInterval>;
+    const setIntervalSpy = vi
+      .spyOn(globalThis, "setInterval")
+      .mockReturnValue(interval);
+    const clearIntervalSpy = vi
+      .spyOn(globalThis, "clearInterval")
+      .mockImplementation(() => undefined);
+
+    const stopFirst = startDigitalHumanSessionReaper();
+    const stopSecond = startDigitalHumanSessionReaper();
+
+    expect(stopSecond).toBe(stopFirst);
+    expect(setIntervalSpy).toHaveBeenCalledOnce();
+    expect(setIntervalSpy.mock.calls[0]?.[1]).toBe(30_000);
+    expect(unref).toHaveBeenCalledOnce();
+
+    stopFirst();
+    stopSecond();
+
+    expect(clearIntervalSpy).toHaveBeenCalledOnce();
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
+  });
+
+  it("coalesces concurrent close requests while one provider close is in flight", async () => {
+    const cloud = row({
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-session-1",
+      instanceId: "instance-id"
+    });
+    const { rows, provider, service } = harness([cloud]);
+    let releaseClose: () => void = () => undefined;
+    provider.closeSession.mockImplementation(
+      () => new Promise<void>((resolve) => { releaseClose = resolve; })
+    );
+
+    const first = service.stopDigitalHumanSession("digital-1", "CLIENT_EXIT");
+    await vi.waitFor(() =>
+      expect(rows.get("digital-1")?.status).toBe("STOPPING")
+    );
+    const second = service.stopDigitalHumanSession("digital-1", "CLIENT_EXIT");
+    await Promise.resolve();
+    releaseClose();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      undefined,
+      undefined
+    ]);
+    expect(provider.closeSession).toHaveBeenCalledOnce();
+    expect(rows.get("digital-1")?.status).toBe("STOPPED");
   });
 });

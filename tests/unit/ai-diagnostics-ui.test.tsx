@@ -15,6 +15,7 @@ describe("AI diagnostics admin panel", () => {
     expect(markup).toContain("检查配置");
     expect(markup).toContain("真实连通测试");
     expect(markup).toContain("真实检查（可能计费）");
+    expect(markup).toContain("会创建并立即关闭一次真实会话，可能计费");
     expect(markup).toContain("配置有效");
     expect(markup).toContain("未选择当前模型");
     expect(markup).toContain("未配置");
@@ -23,6 +24,11 @@ describe("AI diagnostics admin panel", () => {
     expect(markup).toContain("qwen-plus");
     expect(markup).not.toContain("ciphertext");
     expect(markup).not.toContain("rtc-secret-sentinel");
+    const liveLabel = markup.indexOf("真实检查（可能计费）");
+    const liveButton = markup.lastIndexOf("<button", liveLabel);
+    expect(markup.slice(liveButton, markup.indexOf(">", liveButton))).toContain(
+      "disabled"
+    );
   });
 });
 
@@ -53,9 +59,9 @@ const diagnostics: AiDiagnosticResult[] = [
   },
   {
     capability: "DIGITAL_HUMAN_REALTIME",
-    providerName: "Alibaba Cloud",
-    modelDisplayName: "Avatar Dialog",
-    modelName: "avatar-dialog",
+    providerName: "灵眸数字人",
+    modelDisplayName: "灵眸 2D 云渲染音频驱动数字人",
+    modelName: "lingmou-2d-cloud-audio-driven",
     checkMode: "CONFIG",
     status: "NOT_CONFIGURED",
     code: "LINGMOU_NOT_CONFIGURED",

@@ -144,7 +144,11 @@ export function AiDiagnosticsPanel({
           const isChecking = Boolean(checking[diagnostic.capability]);
           const supportsLiveCheck = isTextDiagnosticCapability(
             diagnostic.capability
-          );
+          ) || diagnostic.capability === "DIGITAL_HUMAN_REALTIME";
+          const liveCheckDisabled =
+            isChecking ||
+            (diagnostic.capability === "DIGITAL_HUMAN_REALTIME" &&
+              diagnostic.status === "NOT_CONFIGURED");
 
           return (
             <article
@@ -189,6 +193,12 @@ export function AiDiagnosticsPanel({
                 </p>
               ) : null}
 
+              {diagnostic.capability === "DIGITAL_HUMAN_REALTIME" ? (
+                <p className="mt-3 text-xs leading-5 text-amber-700">
+                  会创建并立即关闭一次真实会话，可能计费
+                </p>
+              ) : null}
+
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button
                   className="min-h-8 gap-1 px-3 py-1 text-xs"
@@ -203,7 +213,7 @@ export function AiDiagnosticsPanel({
                 <Button
                   className="min-h-8 gap-1 px-3 py-1 text-xs"
                   type="button"
-                  disabled={isChecking}
+                  disabled={liveCheckDisabled}
                   onClick={() => runDiagnostic(diagnostic.capability, true)}
                 >
                   <Wifi className="h-3.5 w-3.5" aria-hidden="true" />

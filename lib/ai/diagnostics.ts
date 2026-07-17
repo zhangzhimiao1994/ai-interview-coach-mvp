@@ -28,6 +28,9 @@ import {
 import { validateAlibabaHttpTtsModelName } from "@/lib/media/providers/alibabaTts";
 import { lingmouAdapterContract } from "@/lib/media/providers/lingmouCredentials";
 import { MediaConfigurationError } from "@/lib/media/errors";
+import { MediaProviderError } from "@/lib/media/errors";
+import type { ResolvedMediaModel } from "@/lib/media/config";
+import { createLingmouProvider } from "@/lib/media/providers/lingmou";
 
 type JsonObject = Record<string, unknown>;
 
@@ -56,6 +59,7 @@ type DiagnosticModel = {
     credentialsCiphertext: string | null;
     credentialsIv: string | null;
     credentialsTag: string | null;
+    closeConfigVersion?: number;
   };
 };
 
@@ -69,6 +73,11 @@ export type AiDiagnosticDependencies = {
   probeTextModel: (
     config: OpenAiCompatibleProviderConfig
   ) => Promise<OpenAiCompatibleProbeResult>;
+  probeLingmouModel: (model: ResolvedMediaModel) => Promise<{
+    ok: boolean;
+    code: string;
+    message: string;
+  }>;
   now: () => number;
 };
 
@@ -98,6 +107,7 @@ function dependencies(
     findModel: findDiagnosticModel,
     readConfigSecret: () => readAiConfigSecret(),
     probeTextModel: probeOpenAiCompatibleModel,
+    probeLingmouModel,
     now: Date.now,
     ...overrides
   };
@@ -314,12 +324,6 @@ function requiredConfiguration(
           throw error;
         }
         break;
-      case "DIGITAL_HUMAN_REALTIME":
-        if (!hasText(providerSettings.rtcAppId)) missing.push("RTC App ID");
-        if (!hasText(credentials.rtcAppKey)) missing.push("RTC App Key");
-        if (!hasText(modelSettings.avatarId)) missing.push("Avatar ID");
-        if (!hasText(modelSettings.rtcMode)) missing.push("RTC 模式");
-        break;
       case "VISION_BEHAVIOR_ANALYSIS":
         if (!isUnitInterval(modelSettings.minimumConfidence)) {
           missing.push("最低置信度");
@@ -359,6 +363,132 @@ function hasCompleteLingmouConfiguration(
     modelSettings.integrationMode === lingmouAdapterContract.integrationMode &&
     modelSettings.client === lingmouAdapterContract.client
   );
+}
+
+function safeLingmouProbeCode(error: unknown, fallback: string) {
+  const code =
+    error instanceof MediaConfigurationError || error instanceof MediaProviderError
+      ? error.code
+      : fallback;
+  return /^[A-Z0-9_.-]{1,100}$/.test(code) ? code : fallback;
+}
+
+function isValidLingmouProbeConnection(
+  connection: Record<string, unknown>,
+  providerSessionId: string
+) {
+  return (
+    [
+      connection.appId,
+      connection.avatarUserId,
+      connection.channel,
+      connection.clientUserId,
+      connection.serverUserId,
+      connection.token,
+      connection.sessionId
+    ].every(hasText) &&
+    typeof connection.timestamp === "number" &&
+    Number.isFinite(connection.timestamp) &&
+    connection.sessionId === providerSessionId
+  );
+}
+
+export async function probeLingmouModel(model: ResolvedMediaModel): Promise<{
+  ok: boolean;
+  code: string;
+  message: string;
+}> {
+  let provider: ReturnType<typeof createLingmouProvider>;
+  try {
+    provider = createLingmouProvider(model);
+  } catch (error) {
+    return {
+      ok: false,
+      code: safeLingmouProbeCode(error, "LINGMOU_LIVE_CREATE_FAILED"),
+      message: "灵眸真实检查失败。"
+    };
+  }
+
+  let providerSessionId: string | null = null;
+  let failureCode: string | null = null;
+  try {
+    const created = await provider.createSession();
+    providerSessionId = created.providerSessionId;
+    if (
+      !hasText(providerSessionId) ||
+      !isValidLingmouProbeConnection(
+        created.connection as unknown as Record<string, unknown>,
+        providerSessionId
+      )
+    ) {
+      failureCode = "LINGMOU_LIVE_INVALID_RESPONSE";
+    }
+  } catch (error) {
+    failureCode = safeLingmouProbeCode(
+      error,
+      "LINGMOU_LIVE_CREATE_FAILED"
+    );
+  } finally {
+    if (providerSessionId) {
+      try {
+        await provider.closeSession(providerSessionId);
+      } catch (error) {
+        failureCode = safeLingmouProbeCode(
+          error,
+          "LINGMOU_LIVE_CLOSE_FAILED"
+        );
+      }
+    }
+  }
+
+  if (failureCode) {
+    return {
+      ok: false,
+      code: failureCode,
+      message: "灵眸真实检查失败。"
+    };
+  }
+
+  return {
+    ok: true,
+    code: "LIVE_AVAILABLE",
+    message: "灵眸真实会话创建并关闭成功。"
+  };
+}
+
+function resolvedLingmouDiagnosticModel(
+  model: DiagnosticModel,
+  providerSettings: JsonObject,
+  modelSettings: JsonObject
+): ResolvedMediaModel {
+  return {
+    capability: "DIGITAL_HUMAN_REALTIME",
+    providerId: model.provider.id,
+    providerName: model.provider.displayName,
+    providerType: model.provider.providerType,
+    providerConfigVersion: model.provider.closeConfigVersion ?? 0,
+    baseUrl: model.provider.baseUrl,
+    providerSettings,
+    modelId: model.id,
+    modelDisplayName: model.displayName,
+    modelName: model.modelName,
+    modelSettings,
+    temperature: model.temperature,
+    maxTokens: model.maxTokens,
+    timeoutMs: model.timeoutMs,
+    credentialEnvelopes: {
+      apiKey: credentialEnvelope(
+        model.provider.apiKeyCiphertext,
+        model.provider.apiKeyIv,
+        model.provider.apiKeyTag
+      ),
+      structured: credentialEnvelope(
+        model.provider.credentialsCiphertext,
+        model.provider.credentialsIv,
+        model.provider.credentialsTag
+      )
+    }
+  };
 }
 
 type ResultContext = {
@@ -555,15 +685,37 @@ export async function diagnoseAiCapability(
     }
 
     if (capability === "DIGITAL_HUMAN_REALTIME") {
+      if (options.liveCheck) {
+        let probe: Awaited<ReturnType<typeof probeLingmouModel>>;
+        try {
+          probe = await deps.probeLingmouModel(
+            resolvedLingmouDiagnosticModel(
+              model,
+              providerSettings,
+              modelSettings
+            )
+          );
+        } catch {
+          probe = {
+            ok: false,
+            code: "LINGMOU_LIVE_FAILED",
+            message: "灵眸真实检查失败。"
+          };
+        }
+        return result(
+          context,
+          probe.ok ? "LIVE_AVAILABLE" : "LIVE_FAILED",
+          probe.code,
+          probe.message,
+          deps.now
+        );
+      }
+
       return result(
         context,
         "CONFIG_VALID",
-        options.liveCheck
-          ? "LIVE_CHECK_REQUIRES_EXPLICIT_SESSION"
-          : "ADAPTER_AVAILABLE",
-        options.liveCheck
-          ? "真实检查需要显式创建并关闭可能计费的数字人会话，本阶段未执行。"
-          : "配置检查通过，数字人会话只会在面试间内按需建立。",
+        "ADAPTER_AVAILABLE",
+        "配置检查通过，数字人会话只会在面试间内按需建立。",
         deps.now
       );
     }

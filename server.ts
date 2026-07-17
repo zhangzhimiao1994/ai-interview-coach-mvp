@@ -3,6 +3,12 @@ import next from "next";
 import { WebSocketServer } from "ws";
 import { handleAsrConnection } from "@/lib/realtime/asrGateway";
 import { createRealtimeUpgradeHandler } from "@/lib/realtime/upgradeRouter";
+import {
+  failUnrecoverableDigitalHumanSessions,
+  startDigitalHumanSessionReaper,
+  stopAllActiveDigitalHumanSessions
+} from "@/lib/media/digitalHumanSessions";
+import { createServerShutdown } from "@/lib/server/lifecycle";
 
 function readPort(value: string | undefined) {
   const port = Number(value ?? "3000");
@@ -21,6 +27,10 @@ async function main() {
   const app = next({ dev, hostname, port });
 
   await app.prepare();
+  await failUnrecoverableDigitalHumanSessions().catch(() => {
+    console.warn("DIGITAL_HUMAN_RECOVERY_FAILED");
+  });
+  const stopReaper = startDigitalHumanSessionReaper();
 
   const requestHandler = app.getRequestHandler();
   const nextUpgradeHandler = app.getUpgradeHandler();
@@ -55,27 +65,31 @@ async function main() {
     });
   });
 
-  let shuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (shuttingDown) {
-      return;
-    }
-
-    shuttingDown = true;
-    console.log(`Received ${signal}; shutting down.`);
-    webSocketServer.clients.forEach((client) => client.close(1001, "Server shutting down"));
-    webSocketServer.close();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    await app.close();
-  };
+  const shutdown = createServerShutdown({
+    stopReaper,
+    closeWebSockets: () => {
+      webSocketServer.clients.forEach((client) =>
+        client.close(1001, "Server shutting down")
+      );
+      return new Promise<void>((resolve, reject) => {
+        webSocketServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+    stopHttpAccept: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
+    stopCloudSessions: () =>
+      stopAllActiveDigitalHumanSessions("SERVER_SHUTDOWN"),
+    closeApp: () => app.close(),
+    warn: (code) => console.warn(code)
+  });
 
   process.once("SIGINT", () => {
-    void shutdown("SIGINT").finally(() => process.exit(0));
+    void shutdown().finally(() => process.exit(0));
   });
   process.once("SIGTERM", () => {
-    void shutdown("SIGTERM").finally(() => process.exit(0));
+    void shutdown().finally(() => process.exit(0));
   });
 
   server.listen(port, hostname, () => {

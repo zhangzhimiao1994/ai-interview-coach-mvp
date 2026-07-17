@@ -1,10 +1,10 @@
 # 数字人、语音和行为分析接口说明
 
-当前版本已经接入可配置的阿里实时语音识别和非实时语音合成，同时保留明确的浏览器降级：
+当前版本已经接入可配置的阿里实时语音识别、CosyVoice PCM 合成和灵眸 2D 云渲染，同时保留明确降级：
 
 - 候选人语音识别：阿里实时识别优先；配置或连接失败时显示“浏览器识别降级”。
 - 数字人语音：阿里真实语音优先；配置、请求或播放失败时显示“浏览器语音降级”。
-- 数字人画面：仍由前端状态化头像、嘴型动画和字幕渲染，真实 Avatar/RTC 尚未接入。
+- 数字人画面：灵眸配置完整时使用真实 RTC 画面；未配置或连接失败时使用本地数字人。
 - 行为分析：仍使用本地可观察信号摘要，视觉抽帧服务尚未接入。
 
 ## 1. 阿里语音配置和运行时选择
@@ -22,11 +22,11 @@
 参考模型是可编辑建议：
 
 - ASR：`qwen3-asr-flash-realtime`
-- TTS：`qwen3-tts-instruct-flash`
+- TTS：`cosyvoice-v3-flash`，默认音色 `longanhuan`
 
 “推荐参考（`isDefault`）”不参与运行时路由。保存模型后，还必须在相应能力中点击“设为当前使用”，使其成为当前使用（isSelected）模型。每项能力只能有一个当前使用模型；新会话和新 TTS 请求始终读取当时选中的模型。
 
-配置诊断默认只检查本地必填项，不会自动产生付费调用。管理员可在后台主动检查；语音适配器会报告配置/适配器状态，文本能力的 `liveCheck` 才会执行最小真实请求。
+配置诊断默认只检查本地必填项，不会自动产生付费调用。管理员可在后台主动检查；灵眸的 `liveCheck: true` 会创建、校验并立即关闭一次可能计费的真实会话，配置不完整时不会调用。
 
 ## 2. 实时语音识别
 
@@ -39,43 +39,28 @@
 
 ## 3. 数字人语音接口
 
-`POST /api/digital-human/speech`
+`POST /api/digital-human/sessions/:sessionId/speech`
 
-用途：把当前面试题转换成可播放语音。请求必须属于仍在进行的训练会话，接口受 Basic Auth、会话校验和每会话限流保护。
+用途：把当前面试题转换成 48 kHz、单声道、PCM16 little-endian 的 CosyVoice 流。数字人会话和题目必须属于仍在进行的训练会话，接口受 Basic Auth、会话校验和每会话限流保护。旧 `/api/digital-human/speech` 付费路径已禁用。
 
 请求示例：
 
 ```json
 {
-  "sessionId": "session-1",
   "questionId": "FORMAL_INTERVIEW-0",
   "text": "请先用一分钟介绍你自己，并说明为什么关注这个岗位。",
-  "voice": "Cherry",
-  "language": "zh-CN",
-  "speed": 0.95,
-  "expression": "neutral"
+  "speed": 0.95
 }
 ```
 
-阿里成功返回：
+成功响应为分块二进制 PCM，并声明：
 
-```json
-{
-  "mode": "ALIBABA_TTS",
-  "providerCapability": "TEXT_TO_SPEECH",
-  "provider": "alibaba",
-  "model": "qwen3-tts-instruct-flash",
-  "fallbackUsed": false,
-  "speech": {
-    "text": "请先用一分钟介绍你自己，并说明为什么关注这个岗位。",
-    "language": "zh-CN",
-    "voice": "Cherry",
-    "speed": 0.95,
-    "audioUrl": "https://example.aliyuncs.com/signed-audio.wav",
-    "mimeType": "audio/wav",
-    "expiresAt": "2026-07-17T00:00:00Z"
-  }
-}
+```text
+Content-Type: audio/pcm
+Cache-Control: no-store
+X-Audio-Format: pcm_s16le
+X-Audio-Sample-Rate: 48000
+X-Audio-Channels: 1
 ```
 
 供应商请求失败并成功记录失败日志后，接口返回显式降级：
@@ -83,20 +68,11 @@
 ```json
 {
   "mode": "BROWSER_TTS_FALLBACK",
-  "providerCapability": "TEXT_TO_SPEECH",
-  "fallbackUsed": true,
-  "reasonCode": "TTS_UNAVAILABLE",
-  "speech": {
-    "text": "请先用一分钟介绍你自己，并说明为什么关注这个岗位。",
-    "language": "zh-CN",
-    "voice": "browser-default",
-    "speed": 0.95,
-    "audioUrl": null
-  }
+  "reasonCode": "TTS_UNAVAILABLE"
 }
 ```
 
-前端只保留一个 `<audio>` 实例。快速重播、切题和卸载都会取消旧请求、停止旧音频并回收 Object URL；供应商音频与 `speechSynthesis` 不会同时播放。若浏览器阻止异步音频自动播放，已生成的真实音频会保留，用户可再次点击“播放问题”。
+云模式把完整 PCM16 样本按序送入灵眸 WebSDK；本地模式聚合为 WAV 播放。快速重播、切题和卸载都会取消旧请求并停止旧音频；CosyVoice 与 `speechSynthesis` 不会同时播放。
 
 ## 4. 数字人渲染接口
 

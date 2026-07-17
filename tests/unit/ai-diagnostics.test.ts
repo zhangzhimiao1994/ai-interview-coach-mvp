@@ -4,26 +4,40 @@ import {
   encryptSecret
 } from "@/lib/domain/aiServices";
 
-const { findFirst } = vi.hoisted(() => ({ findFirst: vi.fn() }));
+const { findFirst, createLingmouProvider, createSession, closeSession } =
+  vi.hoisted(() => ({
+    findFirst: vi.fn(),
+    createLingmouProvider: vi.fn(),
+    createSession: vi.fn(),
+    closeSession: vi.fn()
+  }));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
     aiModelConfig: { findFirst }
   }
 }));
+vi.mock("@/lib/media/providers/lingmou", () => ({ createLingmouProvider }));
 
 import {
   diagnoseAiCapability,
   findDiagnosticModel,
-  getAllAiDiagnostics
+  getAllAiDiagnostics,
+  probeLingmouModel
 } from "@/lib/ai/diagnostics";
 import { aiCapabilities, type AiCapability } from "@/lib/domain/aiServiceConstants";
+import type { ResolvedMediaModel } from "@/lib/media/config";
 
 const configSecret = "unit-test-ai-config-secret";
 
 describe("AI configuration diagnostics", () => {
   beforeEach(() => {
     findFirst.mockReset();
+    createSession.mockReset();
+    closeSession.mockReset();
+    createLingmouProvider.mockReset();
+    createLingmouProvider.mockReturnValue({ createSession, closeSession });
+    closeSession.mockResolvedValue(undefined);
   });
 
   it("queries only the current selection and never the recommendation flag", async () => {
@@ -64,7 +78,7 @@ describe("AI configuration diagnostics", () => {
     });
 
     expect(result).toMatchObject({ status, code, checkMode: "CONFIG" });
-    expect(deps.probeTextModel).not.toHaveBeenCalled();
+    expect(deps.probeLingmouModel).not.toHaveBeenCalled();
   });
 
   it("checks configuration without starting a paid text request", async () => {
@@ -83,7 +97,7 @@ describe("AI configuration diagnostics", () => {
       modelDisplayName: "Qwen Plus",
       modelName: "qwen-plus"
     });
-    expect(deps.probeTextModel).not.toHaveBeenCalled();
+    expect(deps.probeLingmouModel).not.toHaveBeenCalled();
   });
 
   it("runs a minimum live text check with decrypted credentials only in memory", async () => {
@@ -492,26 +506,125 @@ describe("AI configuration diagnostics", () => {
     expect(JSON.stringify(result)).not.toContain("lingmou-ak-secret");
   });
 
-  it.each([
-    [false, "CONFIG", "ADAPTER_AVAILABLE"],
-    [true, "LIVE", "LIVE_CHECK_REQUIRES_EXPLICIT_SESSION"]
-  ])("validates Lingmou configuration without a paid session when liveCheck is %s", async (
-    liveCheck,
-    checkMode,
-    code
-  ) => {
+  it("validates complete Lingmou configuration without a paid session by default", async () => {
     const deps = dependencies(selectedLingmouModel());
 
     const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
-      liveCheck,
+      liveCheck: false,
       dependencies: deps
     });
 
-    expect(result).toMatchObject({ status: "CONFIG_VALID", checkMode, code });
-    expect(deps.probeTextModel).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "CONFIG_VALID",
+      checkMode: "CONFIG",
+      code: "ADAPTER_AVAILABLE"
+    });
+    expect(deps.probeLingmouModel).not.toHaveBeenCalled();
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain("lingmou-ak-id");
     expect(serialized).not.toContain("lingmou-ak-secret");
+  });
+
+  it("runs the Lingmou paid probe only for an explicit live check", async () => {
+    const deps = dependencies(selectedLingmouModel(), {
+      lingmouProbeResult: {
+        ok: true,
+        code: "LIVE_AVAILABLE",
+        message: "灵眸真实会话创建并关闭成功。"
+      }
+    });
+
+    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
+      liveCheck: true,
+      dependencies: deps
+    });
+
+    expect(deps.probeLingmouModel).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: "LIVE_AVAILABLE",
+      checkMode: "LIVE",
+      code: "LIVE_AVAILABLE"
+    });
+    expect(JSON.stringify(result)).not.toContain("lingmou-ak-secret");
+  });
+
+  it("maps a Lingmou paid probe failure to LIVE_FAILED with a safe code", async () => {
+    const deps = dependencies(selectedLingmouModel(), {
+      lingmouProbeResult: {
+        ok: false,
+        code: "LINGMOU_LIVE_CLOSE_FAILED",
+        message: "灵眸真实检查失败。"
+      }
+    });
+
+    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
+      liveCheck: true,
+      dependencies: deps
+    });
+
+    expect(result).toMatchObject({
+      status: "LIVE_FAILED",
+      code: "LINGMOU_LIVE_CLOSE_FAILED"
+    });
+    expect(JSON.stringify(result)).not.toContain("lingmou-ak-secret");
+  });
+
+  it("creates, validates, and immediately closes a Lingmou live probe session", async () => {
+    createSession.mockResolvedValue({
+      providerSessionId: "provider-session-id",
+      connection: lingmouConnection()
+    });
+
+    const result = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(result).toEqual({
+      ok: true,
+      code: "LIVE_AVAILABLE",
+      message: "灵眸真实会话创建并关闭成功。"
+    });
+    expect(closeSession).toHaveBeenCalledWith("provider-session-id");
+  });
+
+  it("closes an invalid Lingmou probe DTO and returns only a safe failure code", async () => {
+    createSession.mockResolvedValue({
+      providerSessionId: "provider-session-id",
+      connection: { ...lingmouConnection(), token: "" }
+    });
+
+    const result = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "LINGMOU_LIVE_INVALID_RESPONSE"
+    });
+    expect(closeSession).toHaveBeenCalledWith("provider-session-id");
+    expect(JSON.stringify(result)).not.toContain("secret sentinel");
+  });
+
+  it("maps Lingmou live create and close failures without exposing raw errors", async () => {
+    createSession.mockRejectedValueOnce(new Error("raw create secret sentinel"));
+    const createFailure = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(createFailure).toMatchObject({
+      ok: false,
+      code: "LINGMOU_LIVE_CREATE_FAILED"
+    });
+    expect(closeSession).not.toHaveBeenCalled();
+
+    createSession.mockResolvedValueOnce({
+      providerSessionId: "provider-session-id",
+      connection: lingmouConnection()
+    });
+    closeSession.mockRejectedValueOnce(new Error("raw close secret sentinel"));
+    const closeFailure = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(closeFailure).toMatchObject({
+      ok: false,
+      code: "LINGMOU_LIVE_CLOSE_FAILED"
+    });
+    expect(JSON.stringify([createFailure, closeFailure])).not.toContain(
+      "secret sentinel"
+    );
   });
 
   it("validates Alibaba observable-behavior sampling ranges", async () => {
@@ -554,7 +667,8 @@ describe("AI configuration diagnostics", () => {
     const results = await getAllAiDiagnostics({
       findModel,
       readConfigSecret: () => configSecret,
-      probeTextModel: vi.fn()
+      probeTextModel: vi.fn(),
+      probeLingmouModel: vi.fn()
     });
 
     expect(results).toHaveLength(aiCapabilities.length);
@@ -671,6 +785,7 @@ function dependencies(
   model: ReturnType<typeof selectedModel> | null,
   options: {
     probeResult?: Record<string, unknown>;
+    lingmouProbeResult?: { ok: boolean; code: string; message: string };
   } = {}
 ) {
   return {
@@ -680,6 +795,53 @@ function dependencies(
       ok: true,
       code: "LIVE_CHECK_SUCCEEDED",
       message: "真实连通测试通过。"
+    }),
+    probeLingmouModel: vi.fn().mockResolvedValue(options.lingmouProbeResult ?? {
+      ok: true,
+      code: "LIVE_AVAILABLE",
+      message: "灵眸真实会话创建并关闭成功。"
     })
+  };
+}
+
+function lingmouConnection() {
+  return {
+    appId: "rtc-app",
+    avatarUserId: "avatar-user",
+    channel: "rtc-channel",
+    clientUserId: "client-user",
+    serverUserId: "server-user",
+    timestamp: 1_784_257_200,
+    token: "short-lived-token",
+    sessionId: "provider-session-id"
+  };
+}
+
+function resolvedLingmouModel(): ResolvedMediaModel {
+  return {
+    capability: "DIGITAL_HUMAN_REALTIME",
+    providerId: "provider-1",
+    providerName: "灵眸数字人",
+    providerType: "LINGMOU",
+    providerConfigVersion: 1,
+    baseUrl: null,
+    providerSettings: { region: "cn-beijing" },
+    modelId: "model-1",
+    modelDisplayName: "灵眸 2D 云渲染音频驱动数字人",
+    modelName: "lingmou-2d-cloud-audio-driven",
+    modelSettings: {
+      configId: "config-id",
+      instanceId: "instance-id",
+      renderMode: "cloud",
+      integrationMode: "audio-driven",
+      client: "web"
+    },
+    temperature: 0.4,
+    maxTokens: 1200,
+    timeoutMs: 30_000,
+    credentialEnvelopes: {
+      apiKey: null,
+      structured: { ciphertext: "ciphertext", iv: "iv", tag: "tag" }
+    }
   };
 }

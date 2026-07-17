@@ -82,6 +82,7 @@ export type DigitalHumanSessionRepository = {
   findNonTerminalSessions: (
     trainingSessionId: string
   ) => Promise<DigitalHumanSessionRecord[]>;
+  findAllNonTerminalSessions: () => Promise<DigitalHumanSessionRecord[]>;
   findIdleSessions: (idleBefore: Date) => Promise<DigitalHumanSessionRecord[]>;
   createSession: (
     data: CreateDigitalHumanSessionRecord
@@ -273,9 +274,18 @@ function createDefaultRepository(): DigitalHumanSessionRepository {
         },
         orderBy: { createdAt: "asc" }
       }),
+    findAllNonTerminalSessions: () =>
+      prisma.digitalHumanSession.findMany({
+        where: {
+          mode: "LINGMOU_CLOUD",
+          status: { in: [...nonStoppedStatuses] }
+        },
+        orderBy: { createdAt: "asc" }
+      }),
     findIdleSessions: (idleBefore) =>
       prisma.digitalHumanSession.findMany({
         where: {
+          mode: "LINGMOU_CLOUD",
           status: { in: ["READY", "SPEAKING"] },
           lastActivityAt: { lt: idleBefore }
         },
@@ -355,6 +365,29 @@ export function createDigitalHumanSessionService(
 ) {
   const deps = { ...defaultDependencies(), ...overrides };
 
+  async function waitForConcurrentStop(
+    id: string,
+    reason: string
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const current = await deps.repository.findSession(id);
+      if (current?.status === "STOPPED") return;
+      if (current?.status === "FAILED") {
+        return stopDigitalHumanSession(id, reason);
+      }
+      if (!current || current.status !== "STOPPING") break;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 10);
+        timer.unref?.();
+      });
+    }
+    throw new DigitalHumanSessionError(
+      "Digital human session is changing state",
+      "DIGITAL_HUMAN_STATE_CONFLICT",
+      409
+    );
+  }
+
   async function transition(
     record: DigitalHumanSessionRecord,
     to: DigitalHumanSessionStatus,
@@ -417,7 +450,10 @@ export function createDigitalHumanSessionService(
     }
   }
 
-  async function stopDigitalHumanSession(id: string, reason: string) {
+  async function stopDigitalHumanSession(
+    id: string,
+    reason: string
+  ): Promise<void> {
     const normalizedReason = safeStopReason(reason);
     const record = await deps.repository.findSession(id);
     if (!record) {
@@ -430,6 +466,9 @@ export function createDigitalHumanSessionService(
     if (record.status === "STOPPED") {
       return;
     }
+    if (record.status === "STOPPING") {
+      return waitForConcurrentStop(id, normalizedReason);
+    }
 
     const stopping = await transition(record, "STOPPING", {
       stopReason: normalizedReason
@@ -441,6 +480,9 @@ export function createDigitalHumanSessionService(
         current.status === "STOPPED"
       ) {
         return;
+      }
+      if (current?.status === "STOPPING") {
+        return waitForConcurrentStop(id, normalizedReason);
       }
       throw new DigitalHumanSessionError(
         "Digital human session is changing state",
@@ -503,6 +545,25 @@ export function createDigitalHumanSessionService(
     const sessions = await deps.repository.findNonTerminalSessions(
       trainingSessionId
     );
+    let failed = false;
+    for (const session of sessions) {
+      try {
+        await stopDigitalHumanSession(session.id, reason);
+      } catch {
+        failed = true;
+      }
+    }
+    if (failed) {
+      throw new DigitalHumanSessionError(
+        "One or more digital human sessions could not be stopped",
+        "DIGITAL_HUMAN_STOP_FAILED",
+        503
+      );
+    }
+  }
+
+  async function stopAllActiveDigitalHumanSessions(reason: string) {
+    const sessions = await deps.repository.findAllNonTerminalSessions();
     let failed = false;
     for (const session of sessions) {
       try {
@@ -726,6 +787,7 @@ export function createDigitalHumanSessionService(
     heartbeatDigitalHumanSession,
     stopDigitalHumanSession,
     stopDigitalHumanSessionsForTrainingSession,
+    stopAllActiveDigitalHumanSessions,
     stopIdleDigitalHumanSessions,
     failUnrecoverableDigitalHumanSessions: (now = deps.now()) =>
       deps.repository.failUnrecoverableSessions(now)
@@ -758,10 +820,47 @@ export async function stopDigitalHumanSessionsForTrainingSession(
   );
 }
 
+export async function stopAllActiveDigitalHumanSessions(reason: string) {
+  return defaultService().stopAllActiveDigitalHumanSessions(reason);
+}
+
 export async function stopIdleDigitalHumanSessions(now?: Date) {
   return defaultService().stopIdleDigitalHumanSessions(now);
 }
 
 export async function failUnrecoverableDigitalHumanSessions(now?: Date) {
   return defaultService().failUnrecoverableDigitalHumanSessions(now);
+}
+
+let activeReaperStop: (() => void) | null = null;
+
+export function startDigitalHumanSessionReaper(options: {
+  intervalMs?: number;
+  now?: () => Date;
+} = {}) {
+  if (activeReaperStop) return activeReaperStop;
+
+  let running = false;
+  let stopped = false;
+  const interval = setInterval(() => {
+    if (running || stopped) return;
+    running = true;
+    void stopIdleDigitalHumanSessions(options.now?.())
+      .catch(() => {
+        console.warn("DIGITAL_HUMAN_REAPER_FAILED");
+      })
+      .finally(() => {
+        running = false;
+      });
+  }, options.intervalMs ?? 30_000);
+  interval.unref?.();
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(interval);
+    if (activeReaperStop === stop) activeReaperStop = null;
+  };
+  activeReaperStop = stop;
+  return stop;
 }

@@ -195,14 +195,17 @@ server {
 
 公开给候选人使用前必须配置 HTTPS。否则浏览器可能限制摄像头、麦克风、AudioWorklet 和安全的 `wss://` 连接。生产页面、API 与 `/ws/asr` 必须使用同一域名；不要把阿里上游 WebSocket 地址或 API Key 暴露给浏览器。
 
-### 生产环境配置阿里语音
+### 生产环境配置百炼语音与灵眸数字人
 
-阿里凭据不写入 `.env`。管理员通过 `AI 配置中心` 保存以下数据库配置，API Key 会使用 `AI_CONFIG_SECRET` 加密：
+百炼 Workspace/API Key 与灵眸 RAM AccessKey 是两套独立凭据，不能混用，也不写入 `.env`。管理员通过 `AI 配置中心` 保存数据库配置，永久凭据会使用 `AI_CONFIG_SECRET` 在后台加密：
 
-- 服务商公开设置：`region`、`workspaceId`；
-- 加密凭据：通用 `apiKey`，以及可选的 `asrApiKey`、`ttsApiKey`；
+- 百炼 `TONGYI` 服务商公开设置：`region`、`workspaceId`；
+- 百炼加密凭据：通用 `apiKey`，以及可选的 `asrApiKey`、`ttsApiKey`；
 - ASR 参考模型：`qwen3-asr-flash-realtime`；
-- TTS 参考模型：`qwen3-tts-instruct-flash`。
+- TTS 当前模型：`cosyvoice-v3-flash`，默认音色 `longanhuan`；
+- 灵眸 `LINGMOU` 服务商加密凭据：最小权限 RAM `accessKeyId` 和 `accessKeySecret`。
+
+灵眸必须先在阿里云控制台创建项目并购买 2D 对话实例，再把项目的 `configId` 和实例的 `instanceId` 填入实时数字人模型。未开通或字段不完整时，诊断的预期状态是 `NOT_CONFIGURED`；面试不会被阻断，本地数字人和 CosyVoice 仍可工作。不要把 RAM AccessKey、RTC Token 或短期入会参数写入环境变量、日志或浏览器配置。
 
 推荐参考可以编辑，但不会自动参与调用。必须分别把一个 ASR 模型和一个 TTS 模型设为“当前使用（isSelected）”。更新配置后，新建 ASR 会话和新的语音合成请求会读取最新选择，正在进行的 WebSocket 不会中途切换模型。
 
@@ -266,7 +269,9 @@ curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
   "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
 ```
 
-GET 摘要和后台首屏只检查本地配置。真实连通测试不会自动执行，只有管理员主动点击后台按钮或明确发送以下 POST 请求时，文本能力才会产生一个极低 token 的真实厂商调用：
+GET 摘要和后台首屏只检查本地配置。真实连通测试不会自动执行，只有管理员主动点击后台按钮或明确发送 POST 请求时才会调用厂商服务。灵眸按钮旁会明确提示“会创建并立即关闭一次真实会话，可能计费”；配置不完整时按钮禁用，且绝不能尝试创建会话。
+
+文本能力的显式检查示例：
 
 ```bash
 curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
@@ -275,7 +280,42 @@ curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
   "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
 ```
 
-阿里 ASR/TTS 适配器已经落地，诊断会校验工作区、地域、专用或通用 API Key、当前模型和协议兼容性，但不会自动录音或合成付费音频。真实数字人视频和视觉行为分析仍只返回配置状态与“等待适配器”，不会把配置完整误报为真实服务可用。
+灵眸真实检查仅在管理员确认可能计费后执行；它会创建、校验并立即关闭一次真实会话：
+
+```bash
+curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
+  -H "Content-Type: application/json" \
+  -d '{"capability":"DIGITAL_HUMAN_REALTIME","liveCheck":true}' \
+  "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
+```
+
+阿里 ASR/CosyVoice 适配器已经落地，诊断会校验工作区、地域、专用或通用 API Key、当前模型和协议兼容性，但不会自动录音或合成付费音频。灵眸只有上述显式检查成功后才显示 `LIVE_AVAILABLE`；本地配置完整但未执行真实检查时只显示 `CONFIG_VALID`。
+
+### 源码与 Docker 同步验收
+
+源码更新后先完成依赖、Prisma Client、迁移和生产构建，再从同一个工作树构建镜像：
+
+```bash
+git switch feature/alibaba-multimodal-integration
+git pull
+npm ci
+npm run db:generate
+npm run db:migrate:deploy
+npm run build
+docker compose config
+docker compose build interview-coach
+docker compose up -d interview-coach
+docker compose ps
+curl -f http://127.0.0.1:3000/api/health
+```
+
+此验收只调用健康接口和诊断 GET，不调用灵眸 `liveCheck: true` POST 或语音合成接口。测试结束必须释放容器并停止本机 Docker Desktop：
+
+```bash
+docker compose down --remove-orphans
+docker ps -a --filter "name=interview-coach"
+docker desktop stop
+```
 
 ## 备份 SQLite 数据
 

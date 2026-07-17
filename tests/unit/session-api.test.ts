@@ -102,6 +102,9 @@ async function loadRoutes() {
     generateFollowUpCoaching: vi.fn(),
     generateCoachingReport: vi.fn()
   };
+  const stopDigitalHumanSessionsForTrainingSession = vi
+    .fn()
+    .mockResolvedValue(undefined);
 
   vi.doMock("@/lib/db/prisma", () => ({ prisma }));
   vi.doMock("@/lib/ai", async (importOriginal) => {
@@ -113,12 +116,22 @@ async function loadRoutes() {
       default: aiOrchestrator
     };
   });
+  vi.doMock("@/lib/media/digitalHumanSessions", () => ({
+    stopDigitalHumanSessionsForTrainingSession
+  }));
 
   const sessionsRoute = await import("@/app/api/sessions/route");
   const answerRoute = await import("@/app/api/sessions/[sessionId]/answer/route");
   const completeRoute = await import("@/app/api/sessions/[sessionId]/complete/route");
 
-  return { prisma, aiOrchestrator, sessionsRoute, answerRoute, completeRoute };
+  return {
+    prisma,
+    aiOrchestrator,
+    stopDigitalHumanSessionsForTrainingSession,
+    sessionsRoute,
+    answerRoute,
+    completeRoute
+  };
 }
 
 describe("session API routes", () => {
@@ -374,7 +387,12 @@ describe("session API routes", () => {
   });
 
   it("generates and stores a report when completing a session", async () => {
-    const { prisma, aiOrchestrator, completeRoute } = await loadRoutes();
+    const {
+      prisma,
+      aiOrchestrator,
+      stopDigitalHumanSessionsForTrainingSession,
+      completeRoute
+    } = await loadRoutes();
     prisma.trainingSession.findUnique.mockResolvedValue({
       id: "session-1",
       taskId: "task-1",
@@ -448,7 +466,95 @@ describe("session API routes", () => {
         })
       })
     );
+    expect(stopDigitalHumanSessionsForTrainingSession).toHaveBeenCalledWith(
+      "session-1",
+      "TRAINING_COMPLETED"
+    );
+    expect(prisma.aiCallLog.create.mock.invocationCallOrder[0]).toBeLessThan(
+      stopDigitalHumanSessionsForTrainingSession.mock.invocationCallOrder[0]
+    );
     expect(body).toEqual({ report });
+  });
+
+  it("does not stop digital humans when report generation fails", async () => {
+    const {
+      prisma,
+      aiOrchestrator,
+      stopDigitalHumanSessionsForTrainingSession,
+      completeRoute
+    } = await loadRoutes();
+    prisma.trainingSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      taskId: "task-1",
+      candidateId: "candidate-1",
+      task: { targetRole: "Product Manager", targetCompany: "Acme" },
+      candidate: { id: "candidate-1", name: "Ada" },
+      turns: [{
+        id: "turn-1",
+        questionId: "warm-up-1",
+        stage: "WARM_UP",
+        question: "Introduce yourself.",
+        answer: "I build products.",
+        feedback: null
+      }]
+    });
+    aiOrchestrator.generateCoachingReport.mockRejectedValue(
+      new Error("report failed")
+    );
+
+    const response = await completeRoute.POST(jsonRequest({}), {
+      params: Promise.resolve({ sessionId: "session-1" })
+    });
+
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(stopDigitalHumanSessionsForTrainingSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps the generated report when digital-human cleanup fails", async () => {
+    const {
+      prisma,
+      aiOrchestrator,
+      stopDigitalHumanSessionsForTrainingSession,
+      completeRoute
+    } = await loadRoutes();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    prisma.trainingSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      taskId: "task-1",
+      candidateId: "candidate-1",
+      task: { targetRole: "Product Manager", targetCompany: "Acme" },
+      candidate: { id: "candidate-1", name: "Ada" },
+      turns: [{
+        id: "turn-1",
+        questionId: "warm-up-1",
+        stage: "WARM_UP",
+        question: "Introduce yourself.",
+        answer: "I build products.",
+        feedback: null
+      }]
+    });
+    aiOrchestrator.generateCoachingReport.mockResolvedValue(report);
+    prisma.coachingReport.upsert.mockResolvedValue({
+      id: "report-1",
+      sessionId: "session-1"
+    });
+    prisma.trainingSession.update.mockResolvedValue({
+      id: "session-1",
+      status: "COMPLETED"
+    });
+    stopDigitalHumanSessionsForTrainingSession.mockRejectedValue(
+      new Error("raw cleanup secret sentinel")
+    );
+
+    const response = await completeRoute.POST(jsonRequest({}), {
+      params: Promise.resolve({ sessionId: "session-1" })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ report });
+    expect(warn).toHaveBeenCalledWith("DIGITAL_HUMAN_TRAINING_CLEANUP_FAILED");
+    expect(warn.mock.calls.flat().join(" ")).not.toContain("secret sentinel");
+    warn.mockRestore();
   });
 
   it("returns an existing report when completing an already completed session", async () => {

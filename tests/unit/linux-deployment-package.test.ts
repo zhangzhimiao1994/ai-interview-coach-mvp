@@ -96,6 +96,24 @@ describe("linux deployment package", () => {
     expect(docs).toContain("curl -u");
     expect(docs).toContain("/api/ai-services/diagnostics");
     expect(docs).toContain("真实连通测试不会自动执行");
+    expect(docs).toContain("百炼 Workspace/API Key 与灵眸 RAM AccessKey 是两套独立凭据");
+    expect(docs).toContain("configId");
+    expect(docs).toContain("instanceId");
+    expect(docs).toContain("NOT_CONFIGURED");
+    expect(docs).toContain("本地数字人和 CosyVoice");
+    expect(docs).toContain("会创建并立即关闭一次真实会话，可能计费");
+    expect(docs).toContain("npm ci");
+    expect(docs).toContain("npm run db:migrate:deploy");
+    expect(docs).toContain("docker compose down --remove-orphans");
+    expect(docs).toContain("docker desktop stop");
+  });
+
+  it("keeps Lingmou RAM credentials out of environment files", () => {
+    const example = readWorkspaceFile(".env.example");
+
+    expect(example).toContain("RAM AccessKey");
+    expect(example).toContain("后台加密");
+    expect(example).not.toMatch(/LINGMOU_(?:ACCESS_KEY|SECRET|TOKEN)/);
   });
 
   it("documents realtime speech configuration, proxying, and explicit fallbacks", () => {
@@ -111,7 +129,7 @@ describe("linux deployment package", () => {
       expect(mediaDocs).toContain(`\`${setting}\``);
     }
     expect(mediaDocs).toContain("qwen3-asr-flash-realtime");
-    expect(mediaDocs).toContain("qwen3-tts-instruct-flash");
+    expect(mediaDocs).toContain("cosyvoice-v3-flash");
     expect(mediaDocs).toContain("当前使用（isSelected）");
     expect(mediaDocs).toContain("阿里实时识别优先");
     expect(mediaDocs).toContain("浏览器识别降级");

@@ -9,6 +9,7 @@ import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { behaviorSignalsSchema } from "@/lib/domain/behaviorSignals";
 import type { TrainingStageType } from "@/lib/domain/stages";
+import { stopDigitalHumanSessionsForTrainingSession } from "@/lib/media/digitalHumanSessions";
 
 type RouteContext = {
   params: Promise<{
@@ -110,6 +111,12 @@ export async function POST(_request: Request, context: RouteContext) {
           costEstimate: 0,
           success: true
         }
+      });
+      await stopDigitalHumanSessionsForTrainingSession(
+        session.id,
+        "TRAINING_COMPLETED"
+      ).catch(() => {
+        console.warn("DIGITAL_HUMAN_TRAINING_CLEANUP_FAILED");
       });
     }
 
