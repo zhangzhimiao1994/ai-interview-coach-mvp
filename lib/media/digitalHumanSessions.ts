@@ -52,6 +52,7 @@ type DigitalHumanSessionRecord = {
   mode: string;
   providerSessionId: string | null;
   instanceId: string | null;
+  providerConfigVersion: number | null;
   status: string;
   lastActivityAt: Date;
   expiresAt: Date;
@@ -157,11 +158,15 @@ function safeStopReason(reason: string) {
 }
 
 function isActiveSessionClaimConflict(error: unknown) {
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? error.code
+      : null;
+  const message = error instanceof Error ? error.message : String(error);
   return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === "P2002"
+    code === "P2002" ||
+    code === "P2034" ||
+    message.includes("DIGITAL_HUMAN_PROVIDER_CONFIG_STALE")
   );
 }
 
@@ -382,6 +387,7 @@ export function createDigitalHumanSessionService(
       mode: "LOCAL_AVATAR",
       providerSessionId: null,
       instanceId: null,
+      providerConfigVersion: null,
       status: "READY",
       lastActivityAt: createdAt,
       expiresAt: new Date(createdAt.getTime() + expiresAfterMs)
@@ -560,6 +566,7 @@ export function createDigitalHumanSessionService(
         typeof model.modelSettings.instanceId === "string"
           ? model.modelSettings.instanceId
           : null,
+      providerConfigVersion: model.providerConfigVersion,
       status: "CONNECTING",
       lastActivityAt: createdAt,
       expiresAt: new Date(createdAt.getTime() + expiresAfterMs)
@@ -612,14 +619,51 @@ export function createDigitalHumanSessionService(
         expiresAt: ready.expiresAt.toISOString()
       };
     } catch {
-      await provider.closeSession(cloud.providerSessionId).catch(() => undefined);
-      await deps.repository
-        .transitionSession(connecting.id, ["CONNECTING", "READY"], {
-          status: "FAILED",
-          endedAt: deps.now(),
-          stopReason: "CLOUD_PERSIST_FAILED"
-        })
-        .catch(() => undefined);
+      let compensationClosed = false;
+      try {
+        await provider.closeSession(cloud.providerSessionId);
+        compensationClosed = true;
+      } catch {
+        compensationClosed = false;
+      }
+
+      try {
+        if (compensationClosed) {
+          const stopping = await deps.repository.transitionSession(
+            connecting.id,
+            ["CONNECTING", "READY"],
+            {
+              status: "STOPPING",
+              providerSessionId: cloud.providerSessionId,
+              stopReason: "CLOUD_PERSIST_FAILED"
+            }
+          );
+          if (!stopping) throw new Error("Recovery state changed");
+          const stopped = await transition(stopping, "STOPPED", {
+            endedAt: deps.now(),
+            stopReason: "CLOUD_PERSIST_FAILED"
+          });
+          if (!stopped) throw new Error("Recovery state changed");
+        } else {
+          const failed = await deps.repository.transitionSession(
+            connecting.id,
+            ["CONNECTING", "READY"],
+            {
+              status: "FAILED",
+              providerSessionId: cloud.providerSessionId,
+              endedAt: deps.now(),
+              stopReason: "CLOUD_PERSIST_FAILED"
+            }
+          );
+          if (!failed) throw new Error("Recovery state changed");
+        }
+      } catch {
+        throw new DigitalHumanSessionError(
+          "Digital human recovery identity could not be persisted",
+          "DIGITAL_HUMAN_RECOVERY_IDENTITY_PERSIST_FAILED",
+          500
+        );
+      }
       throw new DigitalHumanSessionError(
         "Digital human session could not be persisted",
         "DIGITAL_HUMAN_PERSIST_FAILED",

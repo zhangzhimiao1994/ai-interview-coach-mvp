@@ -53,6 +53,7 @@ export async function findSelectedAiModel(capability: AiCapability) {
           credentialsCiphertext: true,
           credentialsIv: true,
           credentialsTag: true,
+          closeConfigVersion: true,
           settingsJson: true,
           enabled: true
         }
@@ -78,6 +79,7 @@ export async function findAiModelById(modelId: string) {
           credentialsCiphertext: true,
           credentialsIv: true,
           credentialsTag: true,
+          closeConfigVersion: true,
           settingsJson: true,
           enabled: true
         }

@@ -9,6 +9,7 @@ function asrModel(): ResolvedMediaModel {
     providerId: "provider-1",
     providerName: "阿里百炼",
     providerType: "TONGYI",
+    providerConfigVersion: 0,
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     providerSettings: {
       workspaceId: "ws-main",

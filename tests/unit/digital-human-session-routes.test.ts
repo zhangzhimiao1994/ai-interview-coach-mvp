@@ -54,6 +54,7 @@ function ttsModel(): ResolvedMediaModel {
     providerId: "tts-provider",
     providerName: "Alibaba Bailian",
     providerType: "TONGYI",
+    providerConfigVersion: 0,
     baseUrl: null,
     providerSettings: { workspaceId: "workspace", region: "cn-beijing" },
     modelId: "tts-model",

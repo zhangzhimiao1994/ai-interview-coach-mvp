@@ -9,6 +9,11 @@ import {
   previewCredentialMap,
   readAiConfigSecret
 } from "@/lib/domain/aiServices";
+import {
+  asProviderCloseConfigurationConflict,
+  assertProviderCloseConfigurationMutable,
+  changesProviderCloseConfiguration
+} from "@/lib/domain/aiServiceProviderSafety";
 import { prisma } from "@/lib/db/prisma";
 import { aiServiceProviderInputSchema } from "@/lib/validators/aiServices";
 import { serializeProvider } from "../../serialization";
@@ -179,6 +184,13 @@ export async function PATCH(request: Request, context: RouteContext) {
         return existing;
       }
 
+      if (changesProviderCloseConfiguration(existing, data)) {
+        await assertProviderCloseConfigurationMutable(
+          tx,
+          normalizedProviderId
+        );
+      }
+
       return tx.aiServiceProvider.update({
         where: { id: normalizedProviderId },
         data
@@ -191,6 +203,39 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     return NextResponse.json({ provider: serializeProvider(provider) });
   } catch (error) {
-    return postErrorResponse(error);
+    return postErrorResponse(asProviderCloseConfigurationConflict(error));
+  }
+}
+
+export async function DELETE(_request: Request, context: RouteContext) {
+  void _request;
+  try {
+    const { providerId } = await context.params;
+    const normalizedProviderId = providerId.trim();
+    if (!normalizedProviderId) {
+      return NextResponse.json(
+        { error: "Provider is required" },
+        { status: 400 }
+      );
+    }
+
+    const provider = await prisma.$transaction(async (tx) => {
+      const existing = await tx.aiServiceProvider.findUnique({
+        where: { id: normalizedProviderId }
+      });
+      if (!existing) return null;
+
+      await assertProviderCloseConfigurationMutable(tx, normalizedProviderId);
+      return tx.aiServiceProvider.delete({
+        where: { id: normalizedProviderId }
+      });
+    });
+
+    if (!provider) {
+      return NextResponse.json({ error: "Provider not found" }, { status: 404 });
+    }
+    return NextResponse.json({ provider: serializeProvider(provider) });
+  } catch (error) {
+    return postErrorResponse(asProviderCloseConfigurationConflict(error));
   }
 }

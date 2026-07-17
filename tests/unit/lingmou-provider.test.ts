@@ -344,6 +344,7 @@ function resolvedModel(overrides: {
     providerId: "lingmou-provider",
     providerName: "灵眸数字人",
     providerType: overrides.providerType ?? "LINGMOU",
+    providerConfigVersion: 0,
     baseUrl: null,
     providerSettings: overrides.providerSettings ?? { region: "cn-beijing" },
     modelId: "lingmou-model",

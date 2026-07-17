@@ -389,7 +389,8 @@ describe("AI service API routes", () => {
           ...existing,
           ...data
         })))
-      }
+      },
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = {
       $transaction: transactionMock(tx),
@@ -500,7 +501,8 @@ describe("AI service API routes", () => {
           ...existing,
           ...data
         })))
-      }
+      },
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = {
       $transaction: transactionMock(tx),
@@ -525,6 +527,165 @@ describe("AI service API routes", () => {
     });
     expect(payload.provider.settings).toEqual({ region: "us-west", retries: 4 });
     expect(prisma.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["provider type", { providerType: "LINGMOU" }],
+    ["provider settings", { settings: { region: "us-west" } }],
+    ["structured credentials", { credentials: { accessKeyId: "new-access-key-id" } }]
+  ])("rejects changing close-critical %s while a cloud session may need closing", async (_case, body) => {
+    vi.stubEnv("AI_CONFIG_SECRET", "route-test-config-secret");
+    const existing = providerRow({
+      credentialsCiphertext: null,
+      credentialsIv: null,
+      credentialsTag: null,
+      credentialsPreviewJson: null
+    });
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn()
+      },
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(1) }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "Conflict" });
+    expect(tx.digitalHumanSession.count).toHaveBeenCalledWith({
+      where: {
+        providerId: "provider-1",
+        mode: "LINGMOU_CLOUD",
+        status: { not: "STOPPED" }
+      }
+    });
+    expect(tx.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
+  it("allows a display-name-only update while a cloud session is active", async () => {
+    const existing = providerRow();
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn().mockImplementation(({ data }) =>
+          Promise.resolve(providerRow({ ...existing, ...data }))
+        )
+      },
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(1) }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), update: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ displayName: "Safe display rename" })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).provider.displayName).toBe("Safe display rename");
+    expect(tx.digitalHumanSession.count).not.toHaveBeenCalled();
+  });
+
+  it("rejects deleting a provider while a cloud session may need closing", async () => {
+    const existing = providerRow();
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        delete: vi.fn()
+      },
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(1) }
+    };
+    const prisma = {
+      $transaction: transactionMock(tx),
+      aiServiceProvider: { findUnique: vi.fn(), delete: vi.fn() }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    expect(route.DELETE).toBeTypeOf("function");
+    const response = await route.DELETE(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "DELETE"
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "Conflict" });
+    expect(tx.aiServiceProvider.delete).not.toHaveBeenCalled();
+  });
+
+  it("maps the database provider-in-use race guard to a bounded 409", async () => {
+    const prisma = {
+      $transaction: vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            "DIGITAL_HUMAN_PROVIDER_IN_USE raw access-key-sentinel"
+          )
+        )
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.DELETE(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "DELETE"
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload).toMatchObject({ error: "Conflict" });
+    expect(JSON.stringify(payload)).not.toContain("access-key-sentinel");
+  });
+
+  it("deletes a provider after all cloud sessions are confirmed stopped", async () => {
+    const existing = providerRow();
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        delete: vi.fn().mockResolvedValue(existing)
+      },
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) }
+    };
+    const prisma = { $transaction: transactionMock(tx) };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.DELETE(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "DELETE"
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).provider.id).toBe("provider-1");
+    expect(tx.aiServiceProvider.delete).toHaveBeenCalledWith({
+      where: { id: "provider-1" }
+    });
   });
 
   it("clears nullable provider text fields while preserving omitted fields", async () => {
@@ -612,7 +773,8 @@ describe("AI service API routes", () => {
           ...existing,
           ...data
         })))
-      }
+      },
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = {
       $transaction: transactionMock(tx),

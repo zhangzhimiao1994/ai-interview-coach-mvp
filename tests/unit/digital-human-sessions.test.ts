@@ -15,6 +15,7 @@ type RecordRow = {
   mode: string;
   providerSessionId: string | null;
   instanceId: string | null;
+  providerConfigVersion: number | null;
   status: string;
   lastActivityAt: Date;
   expiresAt: Date;
@@ -40,6 +41,7 @@ function realtimeModel(): ResolvedMediaModel {
     providerId: "lingmou-provider",
     providerName: "Lingmou",
     providerType: "LINGMOU",
+    providerConfigVersion: 0,
     baseUrl: null,
     providerSettings: { region: "cn-beijing" },
     modelId: "lingmou-model",
@@ -144,6 +146,7 @@ function row(overrides: Partial<RecordRow> = {}): RecordRow {
     mode: "LOCAL_AVATAR",
     providerSessionId: null,
     instanceId: null,
+    providerConfigVersion: null,
     status: "READY",
     lastActivityAt: now,
     expiresAt: new Date(now.getTime() + 15 * 60_000),
@@ -242,7 +245,7 @@ describe("digital human session lifecycle", () => {
     });
   });
 
-  it("compensatingly closes a cloud session when the local READY update fails", async () => {
+  it("records STOPPED after compensation closes a cloud session whose READY update failed", async () => {
     const { rows, repository, provider, service } = harness();
     repository.transitionSession.mockRejectedValueOnce(new Error("database unavailable"));
 
@@ -252,10 +255,66 @@ describe("digital human session lifecycle", () => {
     expect(provider.closeSession).toHaveBeenCalledOnce();
     expect(provider.closeSession).toHaveBeenCalledWith("provider-session-1");
     expect(rows.get("digital-1")).toMatchObject({
-      status: "FAILED",
+      status: "STOPPED",
       stopReason: "CLOUD_PERSIST_FAILED",
       endedAt: now
     });
+  });
+
+  it("persists recovery identity after READY and compensation close fail, then retries DELETE", async () => {
+    const { rows, repository, provider, service } = harness();
+    repository.transitionSession.mockRejectedValueOnce(
+      new Error("ready write unavailable")
+    );
+    provider.closeSession.mockRejectedValueOnce(
+      new Error("raw close access-key-sentinel")
+    );
+
+    const createError = await service
+      .createDigitalHumanSession("training-1")
+      .catch((error) => error);
+
+    expect(createError).toMatchObject({ code: "DIGITAL_HUMAN_PERSIST_FAILED" });
+    expect(String(createError)).not.toContain("access-key-sentinel");
+    expect(rows.get("digital-1")).toMatchObject({
+      providerId: "lingmou-provider",
+      instanceId: "instance-id",
+      providerConfigVersion: 0,
+      providerSessionId: "provider-session-1",
+      status: "FAILED",
+      stopReason: "CLOUD_PERSIST_FAILED"
+    });
+
+    await service.stopDigitalHumanSession("digital-1", "CLIENT_DELETE_RETRY");
+
+    expect(provider.closeSession).toHaveBeenCalledTimes(2);
+    expect(provider.closeSession).toHaveBeenLastCalledWith("provider-session-1");
+    expect(rows.get("digital-1")).toMatchObject({
+      status: "STOPPED",
+      stopReason: "CLIENT_DELETE_RETRY"
+    });
+  });
+
+  it("returns a bounded operational error when recovery identity cannot be persisted", async () => {
+    const { repository, provider, service } = harness();
+    repository.transitionSession
+      .mockRejectedValueOnce(new Error("ready write unavailable"))
+      .mockRejectedValueOnce(
+        new Error("raw recovery write access-key-sentinel")
+      );
+    provider.closeSession.mockRejectedValueOnce(
+      new Error("raw compensation access-key-sentinel")
+    );
+
+    const error = await service
+      .createDigitalHumanSession("training-1")
+      .catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      code: "DIGITAL_HUMAN_RECOVERY_IDENTITY_PERSIST_FAILED",
+      status: 500
+    });
+    expect(String(error)).not.toContain("access-key-sentinel");
   });
 
   it("stops a local session idempotently", async () => {

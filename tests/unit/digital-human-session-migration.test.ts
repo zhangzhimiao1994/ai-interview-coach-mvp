@@ -53,6 +53,21 @@ describe("digital human session migration", () => {
             "id" TEXT NOT NULL PRIMARY KEY
           );
           INSERT INTO "TrainingSession" ("id") VALUES ('training-1');
+          INSERT INTO "TrainingSession" ("id") VALUES ('training-2');
+          CREATE TABLE "AiServiceProvider" (
+            "id" TEXT NOT NULL PRIMARY KEY,
+            "displayName" TEXT NOT NULL,
+            "providerType" TEXT NOT NULL,
+            "settingsJson" TEXT NOT NULL DEFAULT '{}',
+            "credentialsCiphertext" TEXT,
+            "credentialsIv" TEXT,
+            "credentialsTag" TEXT
+          );
+          INSERT INTO "AiServiceProvider" (
+            "id", "displayName", "providerType", "settingsJson"
+          ) VALUES (
+            'provider-1', 'Lingmou', 'LINGMOU', '{"region":"cn-beijing"}'
+          );
         `,
         "utf8"
       );
@@ -79,6 +94,7 @@ describe("digital human session migration", () => {
         "mode",
         "providerSessionId",
         "instanceId",
+        "providerConfigVersion",
         "status",
         "lastActivityAt",
         "expiresAt",
@@ -106,15 +122,44 @@ describe("digital human session migration", () => {
         })
       ]);
 
+      const triggers = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+        `SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`
+      );
+      expect(triggers.map((trigger) => trigger.name)).toEqual([
+        "DigitalHumanSession_close_config_claim_guard",
+        "DigitalHumanSession_provider_close_config_delete_guard",
+        "DigitalHumanSession_provider_close_config_update_guard",
+        "DigitalHumanSession_provider_close_config_version"
+      ]);
+
       await prisma.$executeRawUnsafe(`
         INSERT INTO "DigitalHumanSession" (
-          "id", "trainingSessionId", "adapter", "mode", "status",
-          "expiresAt", "updatedAt"
+          "id", "trainingSessionId", "providerId", "adapter", "mode",
+          "instanceId", "providerConfigVersion", "status", "expiresAt", "updatedAt"
         ) VALUES (
-          'active-1', 'training-1', 'LOCAL', 'LOCAL_AVATAR', 'READY',
-          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          'active-1', 'training-1', 'provider-1', 'LINGMOU_OFFICIAL_SDK',
+          'LINGMOU_CLOUD', 'instance-1', 0, 'READY', CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
         )
       `);
+      await expect(
+        prisma.$executeRawUnsafe(`
+          UPDATE "AiServiceProvider" SET "displayName" = 'Safe rename'
+          WHERE "id" = 'provider-1'
+        `)
+      ).resolves.toBe(1);
+      await expect(
+        prisma.$executeRawUnsafe(`
+          UPDATE "AiServiceProvider"
+          SET "settingsJson" = '{"region":"us-west"}'
+          WHERE "id" = 'provider-1'
+        `)
+      ).rejects.toThrow();
+      await expect(
+        prisma.$executeRawUnsafe(`
+          DELETE FROM "AiServiceProvider" WHERE "id" = 'provider-1'
+        `)
+      ).rejects.toThrow();
       await expect(
         prisma.$executeRawUnsafe(`
           INSERT INTO "DigitalHumanSession" (
@@ -132,13 +177,48 @@ describe("digital human session migration", () => {
       `);
       await expect(
         prisma.$executeRawUnsafe(`
+          UPDATE "AiServiceProvider"
+          SET "settingsJson" = '{"region":"us-west"}'
+          WHERE "id" = 'provider-1'
+        `)
+      ).resolves.toBe(1);
+      const providerVersion = await prisma.$queryRawUnsafe<
+        Array<{ closeConfigVersion: number }>
+      >(`SELECT "closeConfigVersion" FROM "AiServiceProvider" WHERE "id" = 'provider-1'`);
+      expect(providerVersion).toEqual([{ closeConfigVersion: 1 }]);
+
+      await expect(
+        prisma.$executeRawUnsafe(`
           INSERT INTO "DigitalHumanSession" (
-            "id", "trainingSessionId", "adapter", "mode", "status",
-            "expiresAt", "updatedAt"
+            "id", "trainingSessionId", "providerId", "adapter", "mode",
+            "instanceId", "providerConfigVersion", "status", "expiresAt", "updatedAt"
           ) VALUES (
-            'active-2', 'training-1', 'LOCAL', 'LOCAL_AVATAR', 'FAILED',
-            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            'active-2', 'training-2', 'provider-1', 'LINGMOU_OFFICIAL_SDK',
+            'LINGMOU_CLOUD', 'instance-2', 0, 'FAILED', CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
           )
+        `)
+      ).rejects.toThrow();
+      await expect(
+        prisma.$executeRawUnsafe(`
+          INSERT INTO "DigitalHumanSession" (
+            "id", "trainingSessionId", "providerId", "adapter", "mode",
+            "instanceId", "providerConfigVersion", "status", "expiresAt", "updatedAt"
+          ) VALUES (
+            'active-2', 'training-2', 'provider-1', 'LINGMOU_OFFICIAL_SDK',
+            'LINGMOU_CLOUD', 'instance-2', 1, 'FAILED', CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+          )
+        `)
+      ).resolves.toBe(1);
+
+      await prisma.$executeRawUnsafe(`
+        UPDATE "DigitalHumanSession" SET "status" = 'STOPPED'
+        WHERE "id" = 'active-2'
+      `);
+      await expect(
+        prisma.$executeRawUnsafe(`
+          DELETE FROM "AiServiceProvider" WHERE "id" = 'provider-1'
         `)
       ).resolves.toBe(1);
 

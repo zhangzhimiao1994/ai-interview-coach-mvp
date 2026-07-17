@@ -38,6 +38,7 @@ type SelectedMediaModel = {
     credentialsCiphertext?: string | null;
     credentialsIv?: string | null;
     credentialsTag?: string | null;
+    closeConfigVersion?: number;
   };
 };
 
@@ -54,6 +55,7 @@ export type ResolvedMediaModel = {
   providerId: string;
   providerName: string;
   providerType: string;
+  providerConfigVersion: number;
   baseUrl: string | null;
   providerSettings: JsonObject;
   modelId: string;
@@ -164,6 +166,7 @@ function resolvedMediaModel(
     providerId: selected.provider.id,
     providerName: selected.provider.displayName,
     providerType: selected.provider.providerType,
+    providerConfigVersion: selected.provider.closeConfigVersion ?? 0,
     baseUrl: selected.provider.baseUrl,
     providerSettings,
     modelId: selected.id,

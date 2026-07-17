@@ -131,6 +131,7 @@ model DigitalHumanSession {
   mode              String
   providerSessionId String?
   instanceId        String?
+  providerConfigVersion Int?
   status            String          @default("CONNECTING")
   lastActivityAt    DateTime        @default(now())
   expiresAt         DateTime
@@ -214,6 +215,7 @@ model AiServiceProvider {
   credentialsTag         String?
   credentialsPreviewJson String?
   settingsJson           String          @default("{}")
+  closeConfigVersion     Int             @default(0)
   enabled                Boolean         @default(true)
   notes                  String?
   createdAt              DateTime        @default(now())
