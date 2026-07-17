@@ -91,6 +91,7 @@ describe("digital human session migration", () => {
         /token|accessKey|rtcParams|audio|nonce|gslb/i
       );
       expect(indexes.map((index) => index.name).sort()).toEqual([
+        "DigitalHumanSession_one_active_per_training_session",
         "DigitalHumanSession_providerSessionId_idx",
         "DigitalHumanSession_status_lastActivityAt_idx",
         "DigitalHumanSession_trainingSessionId_idx",
@@ -104,6 +105,42 @@ describe("digital human session migration", () => {
           on_delete: "CASCADE"
         })
       ]);
+
+      await prisma.$executeRawUnsafe(`
+        INSERT INTO "DigitalHumanSession" (
+          "id", "trainingSessionId", "adapter", "mode", "status",
+          "expiresAt", "updatedAt"
+        ) VALUES (
+          'active-1', 'training-1', 'LOCAL', 'LOCAL_AVATAR', 'READY',
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+      `);
+      await expect(
+        prisma.$executeRawUnsafe(`
+          INSERT INTO "DigitalHumanSession" (
+            "id", "trainingSessionId", "adapter", "mode", "status",
+            "expiresAt", "updatedAt"
+          ) VALUES (
+            'active-2', 'training-1', 'LOCAL', 'LOCAL_AVATAR', 'CONNECTING',
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          )
+        `)
+      ).rejects.toThrow();
+      await prisma.$executeRawUnsafe(`
+        UPDATE "DigitalHumanSession" SET "status" = 'STOPPED'
+        WHERE "id" = 'active-1'
+      `);
+      await expect(
+        prisma.$executeRawUnsafe(`
+          INSERT INTO "DigitalHumanSession" (
+            "id", "trainingSessionId", "adapter", "mode", "status",
+            "expiresAt", "updatedAt"
+          ) VALUES (
+            'active-2', 'training-1', 'LOCAL', 'LOCAL_AVATAR', 'FAILED',
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+          )
+        `)
+      ).resolves.toBe(1);
 
       await expect(
         prisma.$executeRawUnsafe(`

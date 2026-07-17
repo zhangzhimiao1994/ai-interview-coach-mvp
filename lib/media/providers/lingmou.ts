@@ -7,8 +7,10 @@ import { readAiConfigSecret } from "@/lib/domain/aiServices";
 import type { ResolvedMediaModel } from "@/lib/media/config";
 import { MediaProviderError } from "@/lib/media/errors";
 import {
+  resolveLingmouCloseCredentials,
   resolveLingmouCredentials,
-  type LingmouCredentials
+  type LingmouCloseCredentialSource,
+  type LingmouCloseCredentials
 } from "@/lib/media/providers/lingmouCredentials";
 
 export type LingmouRtcConnection = {
@@ -29,6 +31,8 @@ export interface LingmouProvider {
   }>;
   closeSession(providerSessionId: string): Promise<void>;
 }
+
+export type LingmouSessionCloser = Pick<LingmouProvider, "closeSession">;
 
 type LingmouCreateResponse = {
   body?: {
@@ -60,16 +64,48 @@ export interface LingmouSdkClient {
 }
 
 export type LingmouDependencies = {
-  createClient: (credentials: LingmouCredentials) => LingmouSdkClient;
+  createClient: (credentials: LingmouCloseCredentials) => LingmouSdkClient;
   readConfigSecret: () => string;
 };
 
-function createSdkClient(credentials: LingmouCredentials): LingmouSdkClient {
+function createSdkClient(
+  credentials: LingmouCloseCredentials
+): LingmouSdkClient {
   return new LingMouClient(new $OpenApiUtil.Config({
     accessKeyId: credentials.accessKeyId,
     accessKeySecret: credentials.accessKeySecret,
     regionId: credentials.region
   }));
+}
+
+export function createLingmouSessionCloser(
+  source: LingmouCloseCredentialSource,
+  persistedInstanceId: string,
+  dependencyOverrides: Partial<LingmouDependencies> = {}
+): LingmouSessionCloser {
+  const credentials = resolveLingmouCloseCredentials(
+    source,
+    persistedInstanceId,
+    dependencyOverrides.readConfigSecret ?? readAiConfigSecret
+  );
+  const client = (dependencyOverrides.createClient ?? createSdkClient)(
+    credentials
+  );
+
+  return {
+    async closeSession(providerSessionId: string) {
+      try {
+        await client.closeChatInstanceSessions(
+          credentials.instanceId,
+          new CloseChatInstanceSessionsRequest({
+            sessionIds: [providerSessionId]
+          })
+        );
+      } catch (error) {
+        throw providerError(error);
+      }
+    }
+  };
 }
 
 function sdkErrorCode(error: unknown) {

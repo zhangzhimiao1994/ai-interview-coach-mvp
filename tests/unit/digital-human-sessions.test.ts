@@ -74,8 +74,7 @@ function harness(initial: RecordRow[] = []) {
       [...rows.values()].filter(
         (row) =>
           row.trainingSessionId === trainingSessionId &&
-          row.status !== "STOPPED" &&
-          row.status !== "FAILED"
+          row.status !== "STOPPED"
       )
     ),
     findIdleSessions: vi.fn().mockResolvedValue([]),
@@ -104,16 +103,24 @@ function harness(initial: RecordRow[] = []) {
       rows.set(id, { ...existing, lastActivityAt: at });
       return true;
     }),
+    findCloseProvider: vi.fn().mockResolvedValue({
+      id: "lingmou-provider",
+      providerType: "LINGMOU",
+      settingsJson: JSON.stringify({ region: "cn-beijing" }),
+      credentialsCiphertext: "ciphertext",
+      credentialsIv: "iv",
+      credentialsTag: "tag"
+    }),
     failUnrecoverableSessions: vi.fn().mockResolvedValue(0)
   };
   const resolveRealtimeModel = vi.fn().mockResolvedValue(realtimeModel());
-  const resolveRealtimeModelById = vi.fn().mockResolvedValue(realtimeModel());
   const provider = { createSession, closeSession };
+  const createSessionCloser = vi.fn(() => ({ closeSession }));
   const service = createDigitalHumanSessionService({
     repository,
     resolveRealtimeModel,
-    resolveRealtimeModelById,
     createProvider: vi.fn(() => provider),
+    createSessionCloser,
     now: () => now
   });
 
@@ -121,8 +128,8 @@ function harness(initial: RecordRow[] = []) {
     rows,
     repository,
     resolveRealtimeModel,
-    resolveRealtimeModelById,
     provider,
+    createSessionCloser,
     service
   };
 }
@@ -322,6 +329,40 @@ describe("digital human session lifecycle", () => {
       endedAt: now,
       stopReason: "CLIENT_EXIT"
     });
+
+    provider.closeSession.mockResolvedValue(undefined);
+    await service.stopDigitalHumanSession("digital-1", "CLIENT_EXIT_RETRY");
+
+    expect(provider.closeSession).toHaveBeenCalledTimes(2);
+    expect(rows.get("digital-1")).toMatchObject({
+      status: "STOPPED",
+      stopReason: "CLIENT_EXIT_RETRY"
+    });
+  });
+
+  it("closes with the persisted provider and instance identity", async () => {
+    const cloud = row({
+      providerId: "lingmou-provider",
+      modelId: "deleted-or-disabled-model",
+      adapter: "LINGMOU_OFFICIAL_SDK",
+      mode: "LINGMOU_CLOUD",
+      providerSessionId: "provider-session-1",
+      instanceId: "persisted-instance-id"
+    });
+    const { repository, createSessionCloser, service } = harness([cloud]);
+
+    await service.stopDigitalHumanSession("digital-1", "CLIENT_EXIT");
+
+    expect(repository.findCloseProvider).toHaveBeenCalledWith(
+      "lingmou-provider"
+    );
+    expect(createSessionCloser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerType: "LINGMOU",
+        providerSettings: { region: "cn-beijing" }
+      }),
+      "persisted-instance-id"
+    );
   });
 
   it("rejects an ended training session before any provider call", async () => {
@@ -335,6 +376,51 @@ describe("digital human session lifecycle", () => {
       code: "TRAINING_SESSION_INACTIVE"
     });
     expect(resolveRealtimeModel).not.toHaveBeenCalled();
+    expect(provider.createSession).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent creation for the same training session", async () => {
+    const { rows, provider, service } = harness();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let cloudSequence = 0;
+    provider.createSession.mockImplementation(async () => {
+      const sequence = ++cloudSequence;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return {
+        providerSessionId: `provider-session-${sequence}`,
+        connection: {
+          ...connection,
+          sessionId: `provider-session-${sequence}`
+        }
+      };
+    });
+
+    await Promise.all([
+      service.createDigitalHumanSession("training-1"),
+      service.createDigitalHumanSession("training-1")
+    ]);
+
+    expect(maxInFlight).toBe(1);
+    expect(
+      [...rows.values()].filter((session) => session.status !== "STOPPED")
+    ).toHaveLength(1);
+    expect(provider.closeSession).toHaveBeenCalledWith("provider-session-1");
+  });
+
+  it("maps a database active-session claim conflict to a safe response", async () => {
+    const { repository, provider, service } = harness();
+    repository.createSession.mockRejectedValueOnce({ code: "P2002" });
+
+    await expect(
+      service.createDigitalHumanSession("training-1")
+    ).rejects.toMatchObject({
+      code: "DIGITAL_HUMAN_ACTIVE_CONFLICT",
+      status: 409
+    });
     expect(provider.createSession).not.toHaveBeenCalled();
   });
 });

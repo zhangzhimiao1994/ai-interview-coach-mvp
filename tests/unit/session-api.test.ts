@@ -327,6 +327,52 @@ describe("session API routes", () => {
     expect(body.coaching).toEqual(coaching);
   });
 
+  it("preserves the saved parent-turn stage boundary for follow-up questions", async () => {
+    const { prisma, aiOrchestrator, answerRoute } = await loadRoutes();
+    const followUpPrompt = "请补充你在这个项目中的具体职责。";
+    prisma.trainingSession.findUnique.mockResolvedValue({
+      id: "session-1",
+      status: "IN_PROGRESS",
+      task: {
+        id: "task-1",
+        targetRole: "Product Manager",
+        targetCompany: "Acme"
+      },
+      outlineJson: JSON.stringify(outline),
+      turns: [
+        {
+          questionId: "warm-up-1",
+          stage: "FORMAL_INTERVIEW",
+          question: "Introduce yourself.",
+          answer: "I build products.",
+          behaviorSignalsJson: null,
+          feedback: JSON.stringify({ followUpQuestion: followUpPrompt })
+        }
+      ]
+    });
+    prisma.sessionTurn.findUnique.mockResolvedValue(null);
+    aiOrchestrator.generateFollowUpCoaching.mockResolvedValue({
+      instantFeedback: "Clear.",
+      followUpQuestion: "What was the result?",
+      suggestedAnswerStructure: ["action", "result"],
+      riskTags: []
+    });
+    prisma.sessionTurn.create.mockResolvedValue({ id: "turn-follow-up" });
+
+    const response = await answerRoute.POST(
+      jsonRequest({
+        questionId: "warm-up-1::follow-up::1",
+        stage: "FORMAL_INTERVIEW",
+        question: followUpPrompt,
+        answer: "I owned discovery and delivery."
+      }),
+      { params: Promise.resolve({ sessionId: "session-1" }) }
+    );
+
+    expect(response.status).toBe(201);
+    expect(aiOrchestrator.generateFollowUpCoaching).toHaveBeenCalledOnce();
+  });
+
   it("generates and stores a report when completing a session", async () => {
     const { prisma, aiOrchestrator, completeRoute } = await loadRoutes();
     prisma.trainingSession.findUnique.mockResolvedValue({

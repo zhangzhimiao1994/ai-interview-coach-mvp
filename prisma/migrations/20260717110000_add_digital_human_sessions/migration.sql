@@ -26,3 +26,8 @@ CREATE INDEX "DigitalHumanSession_status_lastActivityAt_idx" ON "DigitalHumanSes
 
 -- CreateIndex
 CREATE INDEX "DigitalHumanSession_providerSessionId_idx" ON "DigitalHumanSession"("providerSessionId" ASC);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "DigitalHumanSession_one_active_per_training_session"
+ON "DigitalHumanSession"("trainingSessionId" ASC)
+WHERE "status" IN ('CONNECTING', 'READY', 'SPEAKING', 'STOPPING', 'FAILED');

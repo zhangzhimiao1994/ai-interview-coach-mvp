@@ -1,4 +1,8 @@
 import type { TrainingOutline, TrainingQuestion } from "@/lib/ai";
+import {
+  trainingStageTypes,
+  type TrainingStageType
+} from "@/lib/domain/stages";
 
 type SessionQuestionTurn = {
   questionId: string | null;
@@ -39,7 +43,7 @@ export function resolveSessionQuestion(
   if (
     !parentQuestion ||
     !parentTurn ||
-    parentTurn.stage !== parentQuestion.stage ||
+    !trainingStageTypes.includes(parentTurn.stage as TrainingStageType) ||
     !parentTurn.feedback
   ) {
     return null;
@@ -58,6 +62,7 @@ export function resolveSessionQuestion(
     return {
       ...parentQuestion,
       id: questionId,
+      stage: parentTurn.stage as TrainingStageType,
       prompt: feedback.followUpQuestion,
       followUps: []
     };

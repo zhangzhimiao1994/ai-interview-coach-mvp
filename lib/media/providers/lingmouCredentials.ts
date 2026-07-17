@@ -13,6 +13,13 @@ export type LingmouCredentials = {
   instanceId: string;
 };
 
+export type LingmouCloseCredentials = Omit<LingmouCredentials, "configId">;
+
+export type LingmouCloseCredentialSource = Pick<
+  ResolvedMediaModel,
+  "providerType" | "providerSettings" | "credentialEnvelopes"
+>;
+
 export const lingmouAdapterContract = {
   modelName: "lingmou-2d-cloud-audio-driven",
   renderMode: "cloud",
@@ -25,7 +32,7 @@ function text(value: unknown) {
 }
 
 function configurationError(
-  model: ResolvedMediaModel,
+  model: LingmouCloseCredentialSource,
   code: string,
   message: string
 ) {
@@ -33,6 +40,77 @@ function configurationError(
     provider: model.providerType,
     code
   });
+}
+
+export function resolveLingmouCloseCredentials(
+  source: LingmouCloseCredentialSource,
+  persistedInstanceId: string,
+  readConfigSecret: () => string = readAiConfigSecret
+): LingmouCloseCredentials {
+  if (source.providerType !== "LINGMOU") {
+    throw configurationError(
+      source,
+      "LINGMOU_PROVIDER_REQUIRED",
+      "The digital-human session was not created by Lingmou"
+    );
+  }
+
+  let credentials: Record<string, string> = {};
+  const envelope = source.credentialEnvelopes.structured;
+  if (envelope) {
+    try {
+      credentials = decryptCredentialMap(envelope, readConfigSecret());
+    } catch {
+      throw configurationError(
+        source,
+        "LINGMOU_CREDENTIAL_DECRYPTION_FAILED",
+        "Lingmou credentials could not be decrypted"
+      );
+    }
+  }
+
+  const accessKeyId = text(credentials.accessKeyId);
+  if (!accessKeyId) {
+    throw configurationError(
+      source,
+      "LINGMOU_ACCESS_KEY_ID_REQUIRED",
+      "Lingmou AccessKey ID is required"
+    );
+  }
+
+  const accessKeySecret = text(credentials.accessKeySecret);
+  if (!accessKeySecret) {
+    throw configurationError(
+      source,
+      "LINGMOU_ACCESS_KEY_SECRET_REQUIRED",
+      "Lingmou AccessKey Secret is required"
+    );
+  }
+
+  const region = text(source.providerSettings.region);
+  if (region !== "cn-beijing") {
+    throw configurationError(
+      source,
+      "LINGMOU_REGION_INVALID",
+      "Lingmou region must be cn-beijing"
+    );
+  }
+
+  const instanceId = text(persistedInstanceId);
+  if (!instanceId) {
+    throw configurationError(
+      source,
+      "LINGMOU_INSTANCE_ID_REQUIRED",
+      "Lingmou instance ID is required"
+    );
+  }
+
+  return {
+    accessKeyId,
+    accessKeySecret,
+    region: "cn-beijing",
+    instanceId
+  };
 }
 
 export function resolveLingmouCredentials(
@@ -64,46 +142,11 @@ export function resolveLingmouCredentials(
     );
   }
 
-  let credentials: Record<string, string> = {};
-  const envelope = model.credentialEnvelopes.structured;
-  if (envelope) {
-    try {
-      credentials = decryptCredentialMap(envelope, readConfigSecret());
-    } catch {
-      throw configurationError(
-        model,
-        "LINGMOU_CREDENTIAL_DECRYPTION_FAILED",
-        "Lingmou credentials could not be decrypted"
-      );
-    }
-  }
-
-  const accessKeyId = text(credentials.accessKeyId);
-  if (!accessKeyId) {
-    throw configurationError(
-      model,
-      "LINGMOU_ACCESS_KEY_ID_REQUIRED",
-      "Lingmou AccessKey ID is required"
-    );
-  }
-
-  const accessKeySecret = text(credentials.accessKeySecret);
-  if (!accessKeySecret) {
-    throw configurationError(
-      model,
-      "LINGMOU_ACCESS_KEY_SECRET_REQUIRED",
-      "Lingmou AccessKey Secret is required"
-    );
-  }
-
-  const region = text(model.providerSettings.region);
-  if (region !== "cn-beijing") {
-    throw configurationError(
-      model,
-      "LINGMOU_REGION_INVALID",
-      "Lingmou region must be cn-beijing"
-    );
-  }
+  const closeCredentials = resolveLingmouCloseCredentials(
+    model,
+    text(model.modelSettings.instanceId),
+    readConfigSecret
+  );
 
   const configId = text(model.modelSettings.configId);
   if (!configId) {
@@ -114,20 +157,8 @@ export function resolveLingmouCredentials(
     );
   }
 
-  const instanceId = text(model.modelSettings.instanceId);
-  if (!instanceId) {
-    throw configurationError(
-      model,
-      "LINGMOU_INSTANCE_ID_REQUIRED",
-      "Lingmou instance ID is required"
-    );
-  }
-
   return {
-    accessKeyId,
-    accessKeySecret,
-    region: "cn-beijing",
-    configId,
-    instanceId
+    ...closeCredentials,
+    configId
   };
 }

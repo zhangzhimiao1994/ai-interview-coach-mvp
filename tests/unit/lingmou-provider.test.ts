@@ -9,7 +9,10 @@ import {
   MediaConfigurationError,
   MediaProviderError
 } from "@/lib/media/errors";
-import { createLingmouProvider } from "@/lib/media/providers/lingmou";
+import {
+  createLingmouProvider,
+  createLingmouSessionCloser
+} from "@/lib/media/providers/lingmou";
 import { resolveLingmouCredentials } from "@/lib/media/providers/lingmouCredentials";
 
 const configSecret = "lingmou-test-config-secret";
@@ -134,6 +137,36 @@ describe("Lingmou credentials", () => {
 });
 
 describe("Lingmou OpenAPI adapter", () => {
+  it("closes with persisted provider credentials and instance identity only", async () => {
+    const model = resolvedModel({
+      modelSettings: { instanceId: "edited-instance-id" }
+    });
+    const client = fakeClient();
+    const createClient = vi.fn(() => client);
+    const closer = createLingmouSessionCloser(
+      {
+        providerType: model.providerType,
+        providerSettings: model.providerSettings,
+        credentialEnvelopes: model.credentialEnvelopes
+      },
+      "persisted-instance-id",
+      { createClient, readConfigSecret: () => configSecret }
+    );
+
+    await closer.closeSession("provider-session-id");
+
+    expect(createClient).toHaveBeenCalledWith({
+      accessKeyId: "lingmou-ak-id",
+      accessKeySecret: "lingmou-ak-secret",
+      region: "cn-beijing",
+      instanceId: "persisted-instance-id"
+    });
+    expect(client.closeChatInstanceSessions).toHaveBeenCalledWith(
+      "persisted-instance-id",
+      expect.any(CloseChatInstanceSessionsRequest)
+    );
+  });
+
   it("creates an official request and returns only the RTC white-list DTO", async () => {
     const client = fakeClient();
     const createClient = vi.fn(() => client);

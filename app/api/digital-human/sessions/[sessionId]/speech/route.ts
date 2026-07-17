@@ -193,13 +193,20 @@ export function createDigitalHumanSpeechStreamHandler(
     if (!question || question.prompt !== input.text) {
       return noStoreJson({ error: "Unknown session question" }, 400);
     }
-    if (!(await deps.markSpeaking(digitalHumanSessionId))) {
+    let claimed: boolean;
+    try {
+      claimed = await deps.markSpeaking(digitalHumanSessionId);
+    } catch {
+      return noStoreJson({ error: "Internal server error" }, 500);
+    }
+    if (!claimed) {
       return noStoreJson({ error: "Digital human session is busy" }, 409);
     }
 
     const startedAt = deps.now();
     let model: ResolvedMediaModel | null = null;
     let result: SpeechPcmStreamResult;
+    let iterator: AsyncIterator<Uint8Array>;
     try {
       model = await deps.resolveModel();
       const speechInput: SpeechSynthesisInput = {
@@ -209,6 +216,7 @@ export function createDigitalHumanSpeechStreamHandler(
       result = deps.streamPcm
         ? await deps.streamPcm(speechInput)
         : await createAlibabaTtsProvider(model).streamPcm(speechInput);
+      iterator = result.chunks[Symbol.asyncIterator]();
     } catch (error) {
       await safeFinalize(deps, digitalHumanSessionId, {
         sessionId: session.trainingSessionId,
@@ -226,7 +234,6 @@ export function createDigitalHumanSpeechStreamHandler(
       );
     }
 
-    const iterator = result.chunks[Symbol.asyncIterator]();
     let finalized = false;
     const finalize = async (success: boolean, failureReason: string | null) => {
       if (finalized) return;

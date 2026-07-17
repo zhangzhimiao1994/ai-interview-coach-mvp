@@ -405,6 +405,94 @@ describe("digital human session routes", () => {
     );
   });
 
+  it("returns safe no-store JSON when the SPEAKING claim fails", async () => {
+    const { speechRoute } = await loadRoutes();
+    const markReady = vi.fn();
+    const streamPcm = vi.fn();
+    const logCall = vi.fn();
+    const handler = speechRoute.createDigitalHumanSpeechStreamHandler({
+      findSession: vi.fn().mockResolvedValue(speechSession()),
+      consumeRateLimit: vi.fn().mockReturnValue({ allowed: true }),
+      markSpeaking: vi.fn().mockRejectedValue(
+        new Error("database contained AccessKey sentinel")
+      ),
+      markReady,
+      resolveModel: vi.fn(),
+      streamPcm,
+      logCall
+    });
+
+    const response = await handler(
+      jsonRequest("http://localhost/speech", {
+        questionId: "FORMAL_INTERVIEW-1",
+        text: "请介绍项目经验。"
+      }),
+      routeContext("digital-1")
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(body).toEqual({ error: "Internal server error" });
+    expect(JSON.stringify(body)).not.toContain("AccessKey");
+    expect(markReady).not.toHaveBeenCalled();
+    expect(streamPcm).not.toHaveBeenCalled();
+    expect(logCall).not.toHaveBeenCalled();
+  });
+
+  it("releases a claimed session when stream iterator initialization fails", async () => {
+    const { speechRoute } = await loadRoutes();
+    const markReady = vi.fn().mockResolvedValue(undefined);
+    const logCall = vi.fn().mockResolvedValue(undefined);
+    const handler = speechRoute.createDigitalHumanSpeechStreamHandler({
+      findSession: vi.fn().mockResolvedValue(speechSession()),
+      consumeRateLimit: vi.fn().mockReturnValue({ allowed: true }),
+      markSpeaking: vi.fn().mockResolvedValue(true),
+      markReady,
+      resolveModel: vi.fn().mockResolvedValue(ttsModel()),
+      streamPcm: vi.fn().mockResolvedValue({
+        provider: "Alibaba Bailian",
+        model: "cosyvoice-v3-flash",
+        mode: "ALIBABA_TTS",
+        traceId: "trace-init-failure",
+        fallbackUsed: false,
+        encoding: "pcm_s16le",
+        sampleRate: 48000,
+        channels: 1,
+        chunks: {
+          [Symbol.asyncIterator]() {
+            throw new Error("raw iterator token sentinel");
+          }
+        }
+      }),
+      logCall,
+      now: vi.fn().mockReturnValueOnce(3_000).mockReturnValue(3_050)
+    });
+
+    const response = await handler(
+      jsonRequest("http://localhost/speech", {
+        questionId: "FORMAL_INTERVIEW-1",
+        text: "请介绍项目经验。"
+      }),
+      routeContext("digital-1")
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(body).toEqual({
+      mode: "BROWSER_TTS_FALLBACK",
+      reasonCode: "TTS_UNAVAILABLE"
+    });
+    expect(markReady).toHaveBeenCalledWith("digital-1");
+    expect(logCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        failureReason: "TTS_UNAVAILABLE"
+      })
+    );
+  });
+
   it("returns the upstream iterator when the client cancels the PCM response", async () => {
     const { speechRoute } = await loadRoutes();
     const iterator = {

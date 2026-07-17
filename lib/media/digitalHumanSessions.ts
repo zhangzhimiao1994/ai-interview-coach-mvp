@@ -1,11 +1,14 @@
 import { prisma } from "@/lib/db/prisma";
-import { resolveMediaModel, resolveMediaModelById, type ResolvedMediaModel } from "@/lib/media/config";
+import { resolveMediaModel, type ResolvedMediaModel } from "@/lib/media/config";
 import { MediaConfigurationError, MediaProviderError } from "@/lib/media/errors";
 import {
   createLingmouProvider,
+  createLingmouSessionCloser,
   type LingmouProvider,
-  type LingmouRtcConnection
+  type LingmouRtcConnection,
+  type LingmouSessionCloser
 } from "@/lib/media/providers/lingmou";
+import type { LingmouCloseCredentialSource } from "@/lib/media/providers/lingmouCredentials";
 
 export const digitalHumanSessionStatuses = [
   "CONNECTING",
@@ -61,6 +64,15 @@ type CreateDigitalHumanSessionRecord = Omit<
   "id" | "endedAt" | "stopReason"
 >;
 
+type DigitalHumanCloseProviderRecord = {
+  id: string;
+  providerType: string;
+  settingsJson: string;
+  credentialsCiphertext: string | null;
+  credentialsIv: string | null;
+  credentialsTag: string | null;
+};
+
 export type DigitalHumanSessionRepository = {
   findTrainingSession: (
     id: string
@@ -83,21 +95,28 @@ export type DigitalHumanSessionRepository = {
     statuses: string[],
     at: Date
   ) => Promise<boolean>;
+  findCloseProvider: (
+    providerId: string
+  ) => Promise<DigitalHumanCloseProviderRecord | null>;
   failUnrecoverableSessions: (now: Date) => Promise<number>;
 };
 
 type DigitalHumanSessionServiceDependencies = {
   repository: DigitalHumanSessionRepository;
   resolveRealtimeModel: () => Promise<ResolvedMediaModel>;
-  resolveRealtimeModelById: (modelId: string) => Promise<ResolvedMediaModel>;
   createProvider: (model: ResolvedMediaModel) => LingmouProvider;
+  createSessionCloser: (
+    source: LingmouCloseCredentialSource,
+    persistedInstanceId: string
+  ) => LingmouSessionCloser;
   now: () => Date;
 };
 
-const terminalStatuses = ["STOPPED", "FAILED"] as const;
 const activeStatuses = ["CONNECTING", "READY", "SPEAKING", "STOPPING"] as const;
+const nonStoppedStatuses = [...activeStatuses, "FAILED"] as const;
 const expiresAfterMs = 15 * 60_000;
 const idleAfterMs = 60_000;
+const trainingSessionCreationLocks = new Map<string, Promise<void>>();
 
 const allowedTransitions: Record<
   DigitalHumanSessionStatus,
@@ -108,7 +127,7 @@ const allowedTransitions: Record<
   SPEAKING: ["READY", "STOPPING", "FAILED"],
   STOPPING: ["STOPPED", "FAILED"],
   STOPPED: [],
-  FAILED: []
+  FAILED: ["STOPPING"]
 };
 
 function isStatus(value: string): value is DigitalHumanSessionStatus {
@@ -137,6 +156,39 @@ function safeStopReason(reason: string) {
     : "STOP_REQUESTED";
 }
 
+function isActiveSessionClaimConflict(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2002"
+  );
+}
+
+async function withTrainingSessionCreationLock<T>(
+  trainingSessionId: string,
+  work: () => Promise<T>
+) {
+  const previous =
+    trainingSessionCreationLocks.get(trainingSessionId) ?? Promise.resolve();
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => gate);
+  trainingSessionCreationLocks.set(trainingSessionId, tail);
+
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (trainingSessionCreationLocks.get(trainingSessionId) === tail) {
+      trainingSessionCreationLocks.delete(trainingSessionId);
+    }
+  }
+}
+
 function requiredRecordStatus(value: string) {
   if (!isStatus(value)) {
     throw new DigitalHumanSessionError(
@@ -146,6 +198,57 @@ function requiredRecordStatus(value: string) {
     );
   }
   return value;
+}
+
+function closeCredentialSource(
+  provider: DigitalHumanCloseProviderRecord
+): LingmouCloseCredentialSource {
+  let providerSettings: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(provider.settingsJson || "{}");
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      throw new Error("Invalid provider settings");
+    }
+    providerSettings = parsed as Record<string, unknown>;
+  } catch {
+    throw new DigitalHumanSessionError(
+      "Digital human close configuration is unavailable",
+      "DIGITAL_HUMAN_CLOSE_CONFIG_UNAVAILABLE",
+      503
+    );
+  }
+
+  const envelopeParts = [
+    provider.credentialsCiphertext,
+    provider.credentialsIv,
+    provider.credentialsTag
+  ];
+  const hasAny = envelopeParts.some((part) => part !== null);
+  const hasAll = envelopeParts.every(
+    (part) => typeof part === "string" && part.length > 0
+  );
+  if (hasAny && !hasAll) {
+    throw new DigitalHumanSessionError(
+      "Digital human close configuration is unavailable",
+      "DIGITAL_HUMAN_CLOSE_CONFIG_UNAVAILABLE",
+      503
+    );
+  }
+
+  return {
+    providerType: provider.providerType,
+    providerSettings,
+    credentialEnvelopes: {
+      apiKey: null,
+      structured: hasAll
+        ? {
+            ciphertext: provider.credentialsCiphertext!,
+            iv: provider.credentialsIv!,
+            tag: provider.credentialsTag!
+          }
+        : null
+    }
+  };
 }
 
 function createDefaultRepository(): DigitalHumanSessionRepository {
@@ -161,7 +264,7 @@ function createDefaultRepository(): DigitalHumanSessionRepository {
       prisma.digitalHumanSession.findMany({
         where: {
           trainingSessionId,
-          status: { in: [...activeStatuses] }
+          status: { in: [...nonStoppedStatuses] }
         },
         orderBy: { createdAt: "asc" }
       }),
@@ -206,6 +309,18 @@ function createDefaultRepository(): DigitalHumanSessionRepository {
       });
       return update.count === 1;
     },
+    findCloseProvider: (providerId) =>
+      prisma.aiServiceProvider.findUnique({
+        where: { id: providerId },
+        select: {
+          id: true,
+          providerType: true,
+          settingsJson: true,
+          credentialsCiphertext: true,
+          credentialsIv: true,
+          credentialsTag: true
+        }
+      }),
     async failUnrecoverableSessions(now) {
       const update = await prisma.digitalHumanSession.updateMany({
         where: { status: { in: [...activeStatuses] } },
@@ -224,9 +339,8 @@ function defaultDependencies(): DigitalHumanSessionServiceDependencies {
   return {
     repository: createDefaultRepository(),
     resolveRealtimeModel: () => resolveMediaModel("DIGITAL_HUMAN_REALTIME"),
-    resolveRealtimeModelById: (modelId) =>
-      resolveMediaModelById(modelId, "DIGITAL_HUMAN_REALTIME"),
     createProvider: createLingmouProvider,
+    createSessionCloser: createLingmouSessionCloser,
     now: () => new Date()
   };
 }
@@ -260,7 +374,7 @@ export function createDigitalHumanSessionService(
     reasonCode: string
   ): Promise<PublicDigitalHumanSession> {
     const createdAt = deps.now();
-    const record = await deps.repository.createSession({
+    const record = await createClaimedSession({
       trainingSessionId,
       providerId: null,
       modelId: null,
@@ -282,6 +396,21 @@ export function createDigitalHumanSessionService(
     };
   }
 
+  async function createClaimedSession(data: CreateDigitalHumanSessionRecord) {
+    try {
+      return await deps.repository.createSession(data);
+    } catch (error) {
+      if (isActiveSessionClaimConflict(error)) {
+        throw new DigitalHumanSessionError(
+          "Another digital human session is already active",
+          "DIGITAL_HUMAN_ACTIVE_CONFLICT",
+          409
+        );
+      }
+      throw error;
+    }
+  }
+
   async function stopDigitalHumanSession(id: string, reason: string) {
     const normalizedReason = safeStopReason(reason);
     const record = await deps.repository.findSession(id);
@@ -292,7 +421,7 @@ export function createDigitalHumanSessionService(
         404
       );
     }
-    if (terminalStatuses.includes(record.status as (typeof terminalStatuses)[number])) {
+    if (record.status === "STOPPED") {
       return;
     }
 
@@ -303,9 +432,7 @@ export function createDigitalHumanSessionService(
       const current = await deps.repository.findSession(id);
       if (
         current &&
-        terminalStatuses.includes(
-          current.status as (typeof terminalStatuses)[number]
-        )
+        current.status === "STOPPED"
       ) {
         return;
       }
@@ -318,11 +445,23 @@ export function createDigitalHumanSessionService(
 
     try {
       if (stopping.mode === "LINGMOU_CLOUD") {
-        if (!stopping.modelId || !stopping.providerSessionId) {
+        if (
+          !stopping.providerId ||
+          !stopping.providerSessionId ||
+          !stopping.instanceId
+        ) {
           throw new Error("Cloud session metadata is incomplete");
         }
-        const model = await deps.resolveRealtimeModelById(stopping.modelId);
-        await deps.createProvider(model).closeSession(stopping.providerSessionId);
+        const provider = await deps.repository.findCloseProvider(
+          stopping.providerId
+        );
+        if (!provider) throw new Error("Close provider is unavailable");
+        await deps
+          .createSessionCloser(
+            closeCredentialSource(provider),
+            stopping.instanceId
+          )
+          .closeSession(stopping.providerSessionId);
       }
       const stopped = await transition(stopping, "STOPPED", {
         endedAt: deps.now(),
@@ -375,7 +514,7 @@ export function createDigitalHumanSessionService(
     }
   }
 
-  async function createDigitalHumanSession(
+  async function createDigitalHumanSessionUnlocked(
     trainingSessionId: string
   ): Promise<PublicDigitalHumanSession> {
     const training = await deps.repository.findTrainingSession(trainingSessionId);
@@ -410,7 +549,7 @@ export function createDigitalHumanSessionService(
     }
 
     const createdAt = deps.now();
-    const connecting = await deps.repository.createSession({
+    const connecting = await createClaimedSession({
       trainingSessionId,
       providerId: model.providerId,
       modelId: model.modelId,
@@ -487,6 +626,12 @@ export function createDigitalHumanSessionService(
         500
       );
     }
+  }
+
+  async function createDigitalHumanSession(trainingSessionId: string) {
+    return withTrainingSessionCreationLock(trainingSessionId, () =>
+      createDigitalHumanSessionUnlocked(trainingSessionId)
+    );
   }
 
   async function heartbeatDigitalHumanSession(id: string) {
