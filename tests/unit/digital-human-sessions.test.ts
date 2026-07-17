@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MediaConfigurationError, MediaProviderError } from "@/lib/media/errors";
 import type { ResolvedMediaModel } from "@/lib/media/config";
+import { LingmouSessionRecoveryError } from "@/lib/media/providers/lingmou";
 import {
   createDigitalHumanSessionService,
   isValidDigitalHumanSessionTransition,
@@ -23,6 +24,7 @@ type RecordRow = {
   expiresAt: Date;
   endedAt: Date | null;
   stopReason: string | null;
+  updatedAt: Date;
 };
 
 const now = new Date("2026-07-17T03:00:00.000Z");
@@ -87,13 +89,17 @@ function harness(initial: RecordRow[] = []) {
           record.mode === "LINGMOU_CLOUD" && record.status !== "STOPPED"
       )
     ),
-    findIdleSessions: vi.fn().mockResolvedValue([]),
-    createSession: vi.fn(async (data: Omit<RecordRow, "id" | "endedAt" | "stopReason">) => {
+    findReapableSessions: vi.fn().mockResolvedValue([]),
+    createSession: vi.fn(async (data: Omit<
+      RecordRow,
+      "id" | "endedAt" | "stopReason" | "updatedAt"
+    >) => {
       const row: RecordRow = {
         ...data,
         id: `digital-${++sequence}`,
         endedAt: null,
-        stopReason: null
+        stopReason: null,
+        updatedAt: now
       };
       rows.set(row.id, row);
       return row;
@@ -127,11 +133,13 @@ function harness(initial: RecordRow[] = []) {
   const provider = { createSession, closeSession };
   const createProvider = vi.fn(() => provider);
   const createSessionCloser = vi.fn(() => ({ closeSession }));
+  const enqueueRecovery = vi.fn().mockResolvedValue(undefined);
   const serviceDependencies = {
     repository,
     resolveRealtimeModel,
     createProvider,
     createSessionCloser,
+    enqueueRecovery,
     now: () => now
   };
   const service = createDigitalHumanSessionService(serviceDependencies);
@@ -142,6 +150,7 @@ function harness(initial: RecordRow[] = []) {
     resolveRealtimeModel,
     provider,
     createSessionCloser,
+    enqueueRecovery,
     serviceDependencies,
     service
   };
@@ -163,6 +172,7 @@ function row(overrides: Partial<RecordRow> = {}): RecordRow {
     expiresAt: new Date(now.getTime() + 15 * 60_000),
     endedAt: null,
     stopReason: null,
+    updatedAt: now,
     ...overrides
   };
 }
@@ -174,7 +184,7 @@ describe("digital human session lifecycle", () => {
     expect(isValidDigitalHumanSessionTransition("SPEAKING", "READY")).toBe(true);
     expect(isValidDigitalHumanSessionTransition("READY", "STOPPING")).toBe(true);
     expect(isValidDigitalHumanSessionTransition("STOPPING", "STOPPED")).toBe(true);
-    expect(isValidDigitalHumanSessionTransition("STOPPING", "READY")).toBe(false);
+    expect(isValidDigitalHumanSessionTransition("STOPPING", "READY")).toBe(true);
     expect(isValidDigitalHumanSessionTransition("STOPPED", "READY")).toBe(false);
     expect(isValidDigitalHumanSessionTransition("FAILED", "CONNECTING")).toBe(false);
   });
@@ -227,6 +237,54 @@ describe("digital human session lifecycle", () => {
       status: "READY",
       providerSessionId: null
     });
+  });
+
+  it("queues invalid-RTC recovery and preserves the upstream identity as FAILED", async () => {
+    const { rows, provider, enqueueRecovery, service } = harness();
+    provider.createSession.mockRejectedValue(
+      new LingmouSessionRecoveryError("orphan-upstream-1", "instance-id")
+    );
+
+    await expect(
+      service.createDigitalHumanSession("training-1")
+    ).rejects.toMatchObject({
+      code: "DIGITAL_HUMAN_UPSTREAM_RECOVERY_PENDING",
+      status: 503
+    });
+
+    expect(enqueueRecovery).toHaveBeenCalledWith({
+      providerId: "lingmou-provider",
+      providerSessionId: "orphan-upstream-1",
+      instanceId: "instance-id",
+      providerConfigVersion: 0,
+      reasonCode: "CREATE_COMPENSATION_FAILED"
+    });
+    expect(rows.get("digital-1")).toMatchObject({
+      mode: "LINGMOU_CLOUD",
+      status: "FAILED",
+      providerId: "lingmou-provider",
+      providerSessionId: "orphan-upstream-1",
+      instanceId: "instance-id",
+      stopReason: "CREATE_COMPENSATION_FAILED"
+    });
+  });
+
+  it("uses a fixed operational code when invalid-RTC recovery cannot be queued", async () => {
+    const { provider, enqueueRecovery, service } = harness();
+    provider.createSession.mockRejectedValue(
+      new LingmouSessionRecoveryError("orphan-upstream-1", "instance-id")
+    );
+    enqueueRecovery.mockRejectedValue(new Error("raw database secret sentinel"));
+
+    const error = await service
+      .createDigitalHumanSession("training-1")
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED",
+      status: 500
+    });
+    expect(String(error)).not.toContain("database secret sentinel");
   });
 
   it("falls back locally without claiming cloud success when upstream creation fails", async () => {
@@ -410,6 +468,109 @@ describe("digital human session lifecycle", () => {
     });
   });
 
+  it("atomically downgrades the same cloud lifecycle row only after upstream close succeeds", async () => {
+    const cloud = row({
+      mode: "LINGMOU_CLOUD",
+      adapter: "LINGMOU_OFFICIAL_SDK",
+      providerId: "lingmou-provider",
+      modelId: "lingmou-model",
+      providerSessionId: "provider-session-1",
+      instanceId: "instance-id",
+      providerConfigVersion: 0
+    });
+    const { rows, provider, service } = harness([cloud]);
+
+    const result = await service.downgradeDigitalHumanSession(
+      "digital-1",
+      "CLIENT_SDK_INIT_FAILED"
+    );
+
+    expect(provider.closeSession).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      id: "digital-1",
+      mode: "LOCAL_AVATAR",
+      status: "READY",
+      reasonCode: "CLIENT_SDK_INIT_FAILED",
+      connection: null
+    });
+    expect(rows.get("digital-1")).toMatchObject({
+      mode: "LOCAL_AVATAR",
+      adapter: "LOCAL",
+      status: "READY",
+      providerId: null,
+      modelId: null,
+      providerSessionId: null,
+      instanceId: null,
+      providerConfigVersion: null
+    });
+  });
+
+  it("keeps cloud recovery identity FAILED when atomic downgrade close fails", async () => {
+    const cloud = row({
+      mode: "LINGMOU_CLOUD",
+      adapter: "LINGMOU_OFFICIAL_SDK",
+      providerId: "lingmou-provider",
+      modelId: "lingmou-model",
+      providerSessionId: "provider-session-1",
+      instanceId: "instance-id",
+      providerConfigVersion: 0
+    });
+    const { rows, provider, service } = harness([cloud]);
+    provider.closeSession.mockRejectedValue(new Error("raw close secret"));
+
+    await expect(
+      service.downgradeDigitalHumanSession(
+        "digital-1",
+        "CLIENT_PCM_PUSH_FAILED"
+      )
+    ).rejects.toMatchObject({
+      code: "DIGITAL_HUMAN_DOWNGRADE_FAILED",
+      status: 503
+    });
+    expect(rows.get("digital-1")).toMatchObject({
+      mode: "LINGMOU_CLOUD",
+      status: "FAILED",
+      providerId: "lingmou-provider",
+      modelId: "lingmou-model",
+      providerSessionId: "provider-session-1",
+      instanceId: "instance-id",
+      providerConfigVersion: 0
+    });
+  });
+
+  it("coalesces concurrent atomic downgrade requests into exactly one upstream close", async () => {
+    const cloud = row({
+      mode: "LINGMOU_CLOUD",
+      adapter: "LINGMOU_OFFICIAL_SDK",
+      providerId: "lingmou-provider",
+      modelId: "lingmou-model",
+      providerSessionId: "provider-session-1",
+      instanceId: "instance-id",
+      providerConfigVersion: 0
+    });
+    const { provider, service, serviceDependencies } = harness([cloud]);
+    const other = createDigitalHumanSessionService(serviceDependencies);
+    let release: () => void = () => undefined;
+    provider.closeSession.mockImplementation(
+      () => new Promise<void>((resolve) => { release = resolve; })
+    );
+
+    const first = service.downgradeDigitalHumanSession(
+      "digital-1",
+      "CLIENT_PCM_PUSH_FAILED"
+    );
+    await vi.waitFor(() => expect(provider.closeSession).toHaveBeenCalledOnce());
+    const second = other.downgradeDigitalHumanSession(
+      "digital-1",
+      "CLIENT_PCM_PUSH_FAILED"
+    );
+    release();
+
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(provider.closeSession).toHaveBeenCalledOnce();
+    expect(second).toBe(first);
+  });
+
   it("closes with the persisted provider and instance identity", async () => {
     const cloud = row({
       providerId: "lingmou-provider",
@@ -527,6 +688,72 @@ describe("digital human session lifecycle", () => {
     expect(rows.get("local-ready")).toMatchObject({ status: "READY" });
   });
 
+  it("reaps idle, hard-expired, and backoff-due FAILED cloud sessions", async () => {
+    const idle = row({
+      id: "cloud-idle",
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-idle",
+      instanceId: "instance-id",
+      lastActivityAt: new Date(now.getTime() - 120_000)
+    });
+    const expired = row({
+      id: "cloud-expired",
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-expired",
+      instanceId: "instance-id",
+      expiresAt: new Date(now.getTime() - 1),
+      lastActivityAt: now
+    });
+    const failed = row({
+      id: "cloud-failed",
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-failed",
+      instanceId: "instance-id",
+      status: "FAILED",
+      updatedAt: new Date(now.getTime() - 31_000)
+    });
+    const { rows, repository, provider, service } = harness([
+      idle,
+      expired,
+      failed
+    ]);
+    repository.findReapableSessions.mockResolvedValue([idle, expired, failed]);
+
+    await expect(service.reapDigitalHumanSessions(now)).resolves.toBe(3);
+
+    expect(repository.findReapableSessions).toHaveBeenCalledWith(
+      now,
+      new Date(now.getTime() - 60_000),
+      new Date(now.getTime() - 30_000)
+    );
+    expect(provider.closeSession).toHaveBeenCalledTimes(3);
+    expect(rows.get("cloud-idle")?.stopReason).toBe("IDLE_TIMEOUT");
+    expect(rows.get("cloud-expired")?.stopReason).toBe("SESSION_EXPIRED");
+    expect(rows.get("cloud-failed")?.stopReason).toBe("RECOVERY_RETRY");
+  });
+
+  it("immediately closes recoverable cloud sessions after startup recovery", async () => {
+    const cloud = row({
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-session-1",
+      instanceId: "instance-id",
+      status: "FAILED"
+    });
+    const { repository, provider, service } = harness([cloud]);
+    repository.failUnrecoverableSessions.mockResolvedValue(1);
+
+    await expect(
+      service.recoverDigitalHumanSessionsAfterStartup(now)
+    ).resolves.toBe(1);
+
+    expect(repository.failUnrecoverableSessions).toHaveBeenCalledWith(now);
+    expect(provider.closeSession).toHaveBeenCalledWith("provider-session-1");
+  });
+
   it("starts one unref'ed 30-second reaper and stops it idempotently", () => {
     const unref = vi.fn();
     const interval = { unref } as unknown as ReturnType<typeof setInterval>;
@@ -639,7 +866,7 @@ describe("digital human session lifecycle", () => {
       service,
       serviceDependencies
     } = harness([cloud]);
-    repository.findIdleSessions.mockResolvedValue([cloud]);
+    repository.findReapableSessions.mockResolvedValue([cloud]);
     const shutdownService = createDigitalHumanSessionService(
       serviceDependencies
     );
@@ -647,7 +874,7 @@ describe("digital human session lifecycle", () => {
     provider.closeSession.mockImplementation(
       () => new Promise<void>((resolve) => { releaseClose = resolve; })
     );
-    const reaperTick = service.stopIdleDigitalHumanSessions(now);
+    const reaperTick = service.reapDigitalHumanSessions(now);
     await vi.advanceTimersByTimeAsync(0);
     const closeApp = vi.fn().mockResolvedValue(undefined);
     const shutdown = createServerShutdown({

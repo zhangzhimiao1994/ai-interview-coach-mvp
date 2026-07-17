@@ -272,6 +272,9 @@ export function createAlibabaTtsProvider(
     }
 
     if (!response?.body) {
+      if (streamTimeout) clearTimeout(streamTimeout);
+      streamController?.abort();
+      await response?.body?.cancel().catch(() => undefined);
       throw providerError("ALIBABA_TTS_RESPONSE_INVALID");
     }
 

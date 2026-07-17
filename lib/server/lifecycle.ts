@@ -3,6 +3,7 @@ type ShutdownStep =
   | "WEBSOCKET_CLOSE"
   | "HTTP_CLOSE"
   | "CLOUD_SESSION_CLOSE"
+  | "RECOVERY_QUEUE_DRAIN"
   | "APP_CLOSE";
 
 export type ServerShutdownDependencies = {
@@ -10,6 +11,7 @@ export type ServerShutdownDependencies = {
   closeWebSockets: () => void | Promise<void>;
   stopHttpAccept: () => void | Promise<void>;
   stopCloudSessions: () => void | Promise<void>;
+  drainPendingCloses?: () => void | Promise<void>;
   closeApp: () => void | Promise<void>;
   warn: (code: string) => void;
   timeoutMs?: number;
@@ -121,6 +123,14 @@ export function createServerShutdown(deps: ServerShutdownDependencies) {
         timeoutMs,
         deps.warn
       );
+      if (deps.drainPendingCloses) {
+        await runBoundedStep(
+          "RECOVERY_QUEUE_DRAIN",
+          deps.drainPendingCloses,
+          timeoutMs,
+          deps.warn
+        );
+      }
       await runBoundedStep(
         "APP_CLOSE",
         deps.closeApp,

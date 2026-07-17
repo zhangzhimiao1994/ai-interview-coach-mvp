@@ -58,6 +58,8 @@ type DigitalHumanSessionOwnership = {
   lease: number;
   finalized: boolean;
   deleteRequested: boolean;
+  recoveryOwnedByServer: boolean;
+  downgradePromise: Promise<PublicDigitalHumanSession> | null;
 };
 
 const statusText = {
@@ -150,7 +152,11 @@ function deleteDigitalHumanSession(id: string) {
 }
 
 function deleteOwnedDigitalHumanSession(owner: DigitalHumanSessionOwnership) {
-  if (!owner.session || owner.deleteRequested) return;
+  if (
+    !owner.session ||
+    owner.deleteRequested ||
+    owner.recoveryOwnedByServer
+  ) return;
   owner.deleteRequested = true;
   deleteDigitalHumanSession(owner.session.id);
 }
@@ -194,6 +200,7 @@ export function DigitalInterviewerVideo({
   const sessionOwnershipRef = useRef<DigitalHumanSessionOwnership | null>(null);
   const avatarModeRef = useRef<AvatarMode>(avatarMode);
   const abortRef = useRef<AbortController | null>(null);
+  const heartbeatStopRef = useRef<(() => void) | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const providerAudioActiveRef = useRef(false);
@@ -233,6 +240,55 @@ export function DigitalInterviewerVideo({
       return generation;
     },
     [playbackGuard]
+  );
+
+  const requestOwnedDowngrade = useCallback(
+    (
+      owner: DigitalHumanSessionOwnership,
+      reasonCode: "CLIENT_SDK_INIT_FAILED" | "CLIENT_PCM_PUSH_FAILED"
+    ) => {
+      if (owner.downgradePromise) return owner.downgradePromise;
+      heartbeatStopRef.current?.();
+      owner.recoveryOwnedByServer = true;
+      owner.avatarClient?.interrupt();
+      owner.avatarClient?.exit();
+      owner.avatarClient = null;
+
+      const cloudSession = owner.session;
+      if (!cloudSession) {
+        return Promise.reject(new Error("DIGITAL_HUMAN_SESSION_UNAVAILABLE"));
+      }
+      const pending = (async () => {
+        const response = await fetch(
+          `/api/digital-human/sessions/${encodeURIComponent(cloudSession.id)}/downgrade`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reasonCode })
+          }
+        );
+        const payload = (await response.json().catch(() => null)) as {
+          session?: unknown;
+        } | null;
+        if (
+          !response.ok ||
+          !isDigitalHumanSession(payload?.session) ||
+          payload.session.id !== cloudSession.id ||
+          payload.session.mode !== "LOCAL_AVATAR"
+        ) {
+          throw new Error("DIGITAL_HUMAN_DOWNGRADE_FAILED");
+        }
+        owner.session = payload.session;
+        owner.recoveryOwnedByServer = false;
+        return payload.session;
+      })();
+      owner.downgradePromise = pending.catch((error) => {
+        owner.session = null;
+        throw error;
+      });
+      return owner.downgradePromise;
+    },
+    []
   );
 
   const speakWithBrowser = useCallback(
@@ -338,7 +394,9 @@ export function DigitalInterviewerVideo({
         avatarClient: null,
         lease: 0,
         finalized: false,
-        deleteRequested: false
+        deleteRequested: false,
+        recoveryOwnedByServer: false,
+        downgradePromise: null
       };
       const createdOwner = owner;
       const root = avatarRootRef.current;
@@ -389,10 +447,12 @@ export function DigitalInterviewerVideo({
             ) {
               throw error;
             }
-            createdOwner.avatarClient?.exit();
-            createdOwner.avatarClient = null;
+            const localSession = await requestOwnedDowngrade(
+              createdOwner,
+              "CLIENT_SDK_INIT_FAILED"
+            );
             return {
-              session: createdSession,
+              session: localSession,
               avatarClient: null,
               avatarMode: "LOCAL_AVATAR",
               avatarMessage: "数字人画面已降级"
@@ -465,10 +525,10 @@ export function DigitalInterviewerVideo({
         }
       });
     };
-  }, [sessionId, setActiveAvatarMode, stopSpeech]);
+  }, [requestOwnedDowngrade, sessionId, setActiveAvatarMode, stopSpeech]);
 
   useEffect(() => {
-    if (!digitalSession) return;
+    if (!digitalSession || digitalSession.mode !== "LINGMOU_CLOUD") return;
     const heartbeat = () => {
       void fetch(
         `/api/digital-human/sessions/${encodeURIComponent(digitalSession.id)}/heartbeat`,
@@ -476,7 +536,15 @@ export function DigitalInterviewerVideo({
       ).catch(() => undefined);
     };
     const interval = globalThis.setInterval(heartbeat, 20_000);
-    return () => globalThis.clearInterval(interval);
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      globalThis.clearInterval(interval);
+      if (heartbeatStopRef.current === stop) heartbeatStopRef.current = null;
+    };
+    heartbeatStopRef.current = stop;
+    return stop;
   }, [digitalSession]);
 
   useEffect(() => {
@@ -623,11 +691,36 @@ export function DigitalInterviewerVideo({
           ) {
             return;
           }
-          avatarClientRef.current?.interrupt();
-          setActiveAvatarMode("LOCAL_AVATAR");
-          setAvatarMessage("数字人画面已降级");
-          setSpeechState("idle");
-          setSpeechMessage("数字人画面已降级，请点击重播完整问题。");
+          stopSpeech(false);
+          const owner = sessionOwnershipRef.current;
+          try {
+            if (!owner || owner.session !== digitalSession) {
+              throw new Error("DIGITAL_HUMAN_SESSION_UNAVAILABLE");
+            }
+            const localSession = await requestOwnedDowngrade(
+              owner,
+              "CLIENT_PCM_PUSH_FAILED"
+            );
+            avatarClientRef.current = null;
+            digitalSessionRef.current = localSession;
+            setDigitalSession(localSession);
+            setSessionUnavailable(false);
+            setActiveAvatarMode("LOCAL_AVATAR");
+            setAvatarMessage("数字人画面已降级");
+            setSpeechState("idle");
+            setSpeechMessage("");
+            lastAutoPlayedRef.current = null;
+          } catch {
+            avatarClientRef.current = null;
+            digitalSessionRef.current = null;
+            setDigitalSession(null);
+            setSessionUnavailable(true);
+            setActiveAvatarMode("LOCAL_AVATAR");
+            setAvatarMessage("数字人画面已降级");
+            speakWithBrowser(
+              "CosyVoice is unavailable; browser speech fallback is active."
+            );
+          }
           return;
         }
         return;
@@ -697,6 +790,7 @@ export function DigitalInterviewerVideo({
     playbackGuard,
     prompt,
     questionId,
+    requestOwnedDowngrade,
     sessionUnavailable,
     sessionId,
     speakWithBrowser,

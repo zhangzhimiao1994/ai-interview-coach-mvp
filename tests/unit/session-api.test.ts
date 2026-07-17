@@ -558,7 +558,16 @@ describe("session API routes", () => {
   });
 
   it("returns an existing report when completing an already completed session", async () => {
-    const { prisma, aiOrchestrator, completeRoute } = await loadRoutes();
+    const {
+      prisma,
+      aiOrchestrator,
+      stopDigitalHumanSessionsForTrainingSession,
+      completeRoute
+    } = await loadRoutes();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    stopDigitalHumanSessionsForTrainingSession
+      .mockRejectedValueOnce(new Error("raw cleanup secret sentinel"))
+      .mockResolvedValueOnce(undefined);
     const storedReport = {
       id: "report-1",
       sessionId: "session-1",
@@ -591,12 +600,27 @@ describe("session API routes", () => {
       params: Promise.resolve({ sessionId: "session-1" })
     });
     const body = await response.json();
+    const retryResponse = await completeRoute.POST(jsonRequest({}), {
+      params: Promise.resolve({ sessionId: "session-1" })
+    });
 
     expect(response.status).toBe(200);
+    expect(retryResponse.status).toBe(200);
     expect(body).toEqual({ report });
     expect(aiOrchestrator.generateCoachingReport).not.toHaveBeenCalled();
     expect(prisma.coachingReport.upsert).not.toHaveBeenCalled();
     expect(prisma.trainingSession.update).not.toHaveBeenCalled();
     expect(prisma.aiCallLog.create).not.toHaveBeenCalled();
+    expect(stopDigitalHumanSessionsForTrainingSession).toHaveBeenCalledTimes(2);
+    expect(stopDigitalHumanSessionsForTrainingSession).toHaveBeenNthCalledWith(
+      1,
+      "session-1",
+      "TRAINING_COMPLETED"
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "DIGITAL_HUMAN_TRAINING_CLEANUP_FAILED"
+    );
+    expect(warn.mock.calls.flat().join(" ")).not.toContain("secret sentinel");
+    warn.mockRestore();
   });
 });

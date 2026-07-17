@@ -4,10 +4,11 @@ import { WebSocketServer } from "ws";
 import { handleAsrConnection } from "@/lib/realtime/asrGateway";
 import { createRealtimeUpgradeHandler } from "@/lib/realtime/upgradeRouter";
 import {
-  failUnrecoverableDigitalHumanSessions,
+  recoverDigitalHumanSessionsAfterStartup,
   startDigitalHumanSessionReaper,
   stopAllActiveDigitalHumanSessions
 } from "@/lib/media/digitalHumanSessions";
+import { drainProviderSessionCloseRecoveries } from "@/lib/media/providerSessionCloseRecoveries";
 import {
   createServerShutdown,
   registerServerShutdownSignals
@@ -30,8 +31,11 @@ async function main() {
   const app = next({ dev, hostname, port });
 
   await app.prepare();
-  await failUnrecoverableDigitalHumanSessions().catch(() => {
+  await recoverDigitalHumanSessionsAfterStartup().catch(() => {
     console.warn("DIGITAL_HUMAN_RECOVERY_FAILED");
+  });
+  await drainProviderSessionCloseRecoveries().catch(() => {
+    console.warn("DIGITAL_HUMAN_RECOVERY_QUEUE_DRAIN_FAILED");
   });
   const stopReaper = startDigitalHumanSessionReaper();
 
@@ -84,6 +88,9 @@ async function main() {
       }),
     stopCloudSessions: () =>
       stopAllActiveDigitalHumanSessions("SERVER_SHUTDOWN"),
+    drainPendingCloses: async () => {
+      await drainProviderSessionCloseRecoveries();
+    },
     closeApp: () => app.close(),
     warn: (code) => console.warn(code)
   });

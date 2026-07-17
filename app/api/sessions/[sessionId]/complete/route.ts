@@ -17,6 +17,15 @@ type RouteContext = {
   }>;
 };
 
+async function safelyCleanupDigitalHumanSessions(trainingSessionId: string) {
+  await stopDigitalHumanSessionsForTrainingSession(
+    trainingSessionId,
+    "TRAINING_COMPLETED"
+  ).catch(() => {
+    console.warn("DIGITAL_HUMAN_TRAINING_CLEANUP_FAILED");
+  });
+}
+
 export async function POST(_request: Request, context: RouteContext) {
   const startedAt = Date.now();
   const { sessionId } = await context.params;
@@ -44,6 +53,7 @@ export async function POST(_request: Request, context: RouteContext) {
     }
 
     if (session.status === "COMPLETED" && session.report) {
+      await safelyCleanupDigitalHumanSessions(session.id);
       return NextResponse.json({ report: deserializeStoredCoachingReport(session.report) });
     }
 
@@ -112,13 +122,8 @@ export async function POST(_request: Request, context: RouteContext) {
           success: true
         }
       });
-      await stopDigitalHumanSessionsForTrainingSession(
-        session.id,
-        "TRAINING_COMPLETED"
-      ).catch(() => {
-        console.warn("DIGITAL_HUMAN_TRAINING_CLEANUP_FAILED");
-      });
     }
+    await safelyCleanupDigitalHumanSessions(session.id);
 
     return NextResponse.json({ report: completion.report });
   } catch (error) {

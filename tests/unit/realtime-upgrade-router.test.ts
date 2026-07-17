@@ -50,12 +50,17 @@ describe("realtime WebSocket upgrade routing", () => {
 });
 
 describe("server shutdown lifecycle", () => {
-  it("reaps only cloud sessions idle for 60 seconds on a 30-second interval", async () => {
+  it("recovers startup sessions and reaps idle, expired, and due FAILED cloud sessions", async () => {
     vi.resetModules();
     const findMany = vi.fn().mockResolvedValue([]);
     const updateMany = vi.fn().mockResolvedValue({ count: 4 });
+    const drainProviderSessionCloseRecoveries = vi.fn().mockResolvedValue(0);
     vi.doMock("@/lib/db/prisma", () => ({
       prisma: { digitalHumanSession: { findMany, updateMany } }
+    }));
+    vi.doMock("@/lib/media/providerSessionCloseRecoveries", () => ({
+      drainProviderSessionCloseRecoveries,
+      enqueueProviderSessionCloseRecovery: vi.fn()
     }));
     const unref = vi.fn();
     const interval = { unref } as unknown as ReturnType<typeof setInterval>;
@@ -67,15 +72,16 @@ describe("server shutdown lifecycle", () => {
       .mockImplementation(() => undefined);
     const now = new Date("2026-07-18T02:00:00.000Z");
     const {
-      failUnrecoverableDigitalHumanSessions,
+      recoverDigitalHumanSessionsAfterStartup,
       startDigitalHumanSessionReaper
     } = await import(
       "@/lib/media/digitalHumanSessions"
     );
 
-    await expect(failUnrecoverableDigitalHumanSessions(now)).resolves.toBe(4);
+    await expect(recoverDigitalHumanSessionsAfterStartup(now)).resolves.toBe(4);
     expect(updateMany).toHaveBeenCalledWith({
       where: {
+        mode: "LINGMOU_CLOUD",
         status: { in: ["CONNECTING", "READY", "SPEAKING", "STOPPING"] }
       },
       data: {
@@ -88,22 +94,39 @@ describe("server shutdown lifecycle", () => {
     const stop = startDigitalHumanSessionReaper({ now: () => now });
     const tick = setIntervalSpy.mock.calls[0]?.[0] as () => void;
     tick();
-    await vi.waitFor(() => expect(findMany).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(findMany).toHaveBeenCalledTimes(2));
 
     expect(setIntervalSpy.mock.calls[0]?.[1]).toBe(30_000);
-    expect(findMany).toHaveBeenCalledWith({
+    expect(findMany).toHaveBeenNthCalledWith(2, {
       where: {
         mode: "LINGMOU_CLOUD",
-        status: { in: ["READY", "SPEAKING"] },
-        lastActivityAt: { lt: new Date(now.getTime() - 60_000) }
+        status: {
+          in: ["CONNECTING", "READY", "SPEAKING", "STOPPING", "FAILED"]
+        },
+        providerId: { not: null },
+        providerSessionId: { not: null },
+        instanceId: { not: null },
+        OR: [
+          {
+            status: { in: ["READY", "SPEAKING"] },
+            lastActivityAt: { lt: new Date(now.getTime() - 60_000) }
+          },
+          { expiresAt: { lte: now } },
+          {
+            status: "FAILED",
+            updatedAt: { lte: new Date(now.getTime() - 30_000) }
+          }
+        ]
       },
-      orderBy: { lastActivityAt: "asc" }
+      orderBy: { updatedAt: "asc" }
     });
+    expect(drainProviderSessionCloseRecoveries).toHaveBeenCalledWith(now);
     expect(unref).toHaveBeenCalledOnce();
     await stop();
     setIntervalSpy.mockRestore();
     clearIntervalSpy.mockRestore();
     vi.doUnmock("@/lib/db/prisma");
+    vi.doUnmock("@/lib/media/providerSessionCloseRecoveries");
   });
 
   it("drains an active reaper tick before permitting a restarted interval", async () => {
@@ -129,11 +152,12 @@ describe("server shutdown lifecycle", () => {
       "@/lib/media/digitalHumanSessions"
     );
 
-    const stopFirst = startDigitalHumanSessionReaper();
+    const drainRecoveries = vi.fn().mockResolvedValue(0);
+    const stopFirst = startDigitalHumanSessionReaper({ drainRecoveries });
     intervalCallbacks[0]?.();
     await vi.waitFor(() => expect(findMany).toHaveBeenCalledOnce());
     const drain = stopFirst();
-    const stopDuringDrain = startDigitalHumanSessionReaper();
+    const stopDuringDrain = startDigitalHumanSessionReaper({ drainRecoveries });
     const restartWasCoalesced = stopDuringDrain === stopFirst;
     const intervalsBeforeRelease = intervalCallbacks.length;
     let drainSettled = false;
@@ -146,7 +170,7 @@ describe("server shutdown lifecycle", () => {
 
     finishFind([]);
     await trackedDrain;
-    const stopAfterDrain = startDigitalHumanSessionReaper();
+    const stopAfterDrain = startDigitalHumanSessionReaper({ drainRecoveries });
     const restartAfterDrainWasNew = stopAfterDrain !== stopFirst;
     await stopAfterDrain();
     setIntervalSpy.mockRestore();
@@ -162,14 +186,17 @@ describe("server shutdown lifecycle", () => {
 
   it("wires startup recovery and the reaper before accepting HTTP traffic", () => {
     const source = readFileSync(join(process.cwd(), "server.ts"), "utf8");
-    const recovery = source.indexOf("failUnrecoverableDigitalHumanSessions(");
+    const recovery = source.indexOf("recoverDigitalHumanSessionsAfterStartup(");
+    const queueDrain = source.indexOf("drainProviderSessionCloseRecoveries(");
     const reaper = source.indexOf("startDigitalHumanSessionReaper(");
     const listen = source.indexOf("server.listen(");
 
     expect(recovery).toBeGreaterThan(-1);
-    expect(reaper).toBeGreaterThan(recovery);
+    expect(queueDrain).toBeGreaterThan(recovery);
+    expect(reaper).toBeGreaterThan(queueDrain);
     expect(listen).toBeGreaterThan(reaper);
     expect(source).toContain("stopAllActiveDigitalHumanSessions(\"SERVER_SHUTDOWN\")");
+    expect(source).toContain("drainPendingCloses");
   });
 
   it("stops the reaper before WebSocket, HTTP, cloud-session, and app cleanup", async () => {
@@ -179,6 +206,7 @@ describe("server shutdown lifecycle", () => {
       closeWebSockets: async () => { order.push("websocket"); },
       stopHttpAccept: async () => { order.push("http"); },
       stopCloudSessions: async () => { order.push("cloud"); },
+      drainPendingCloses: async () => { order.push("recovery"); },
       closeApp: async () => { order.push("app"); },
       warn: vi.fn(),
       timeoutMs: 100
@@ -186,7 +214,14 @@ describe("server shutdown lifecycle", () => {
 
     await Promise.all([shutdown(), shutdown()]);
 
-    expect(order).toEqual(["reaper", "websocket", "http", "cloud", "app"]);
+    expect(order).toEqual([
+      "reaper",
+      "websocket",
+      "http",
+      "cloud",
+      "recovery",
+      "app"
+    ]);
   });
 
   it("keeps both signal handlers installed and reuses cleanup across repeated signals", async () => {

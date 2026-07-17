@@ -4,12 +4,19 @@ import {
   encryptSecret
 } from "@/lib/domain/aiServices";
 
-const { findFirst, createLingmouProvider, createSession, closeSession } =
+const {
+  findFirst,
+  createLingmouProvider,
+  createSession,
+  closeSession,
+  enqueueProviderSessionCloseRecovery
+} =
   vi.hoisted(() => ({
     findFirst: vi.fn(),
     createLingmouProvider: vi.fn(),
     createSession: vi.fn(),
-    closeSession: vi.fn()
+    closeSession: vi.fn(),
+    enqueueProviderSessionCloseRecovery: vi.fn()
   }));
 
 vi.mock("@/lib/db/prisma", () => ({
@@ -17,7 +24,15 @@ vi.mock("@/lib/db/prisma", () => ({
     aiModelConfig: { findFirst }
   }
 }));
-vi.mock("@/lib/media/providers/lingmou", () => ({ createLingmouProvider }));
+vi.mock("@/lib/media/providers/lingmou", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/lib/media/providers/lingmou")
+  >();
+  return { ...actual, createLingmouProvider };
+});
+vi.mock("@/lib/media/providerSessionCloseRecoveries", () => ({
+  enqueueProviderSessionCloseRecovery
+}));
 
 import {
   diagnoseAiCapability,
@@ -27,6 +42,7 @@ import {
 } from "@/lib/ai/diagnostics";
 import { aiCapabilities, type AiCapability } from "@/lib/domain/aiServiceConstants";
 import type { ResolvedMediaModel } from "@/lib/media/config";
+import { LingmouSessionRecoveryError } from "@/lib/media/providers/lingmou";
 
 const configSecret = "unit-test-ai-config-secret";
 
@@ -36,8 +52,10 @@ describe("AI configuration diagnostics", () => {
     createSession.mockReset();
     closeSession.mockReset();
     createLingmouProvider.mockReset();
+    enqueueProviderSessionCloseRecovery.mockReset();
     createLingmouProvider.mockReturnValue({ createSession, closeSession });
     closeSession.mockResolvedValue(undefined);
+    enqueueProviderSessionCloseRecovery.mockResolvedValue(undefined);
   });
 
   it("queries only the current selection and never the recommendation flag", async () => {
@@ -622,9 +640,56 @@ describe("AI configuration diagnostics", () => {
       ok: false,
       code: "LINGMOU_LIVE_CLOSE_FAILED"
     });
+    expect(enqueueProviderSessionCloseRecovery).toHaveBeenCalledWith({
+      providerId: "provider-1",
+      providerSessionId: "provider-session-id",
+      instanceId: "instance-id",
+      providerConfigVersion: 1,
+      reasonCode: "DIAGNOSTIC_CLOSE_FAILED"
+    });
     expect(JSON.stringify([createFailure, closeFailure])).not.toContain(
       "secret sentinel"
     );
+  });
+
+  it("queues the upstream identity when invalid RTC compensation close fails", async () => {
+    createSession.mockRejectedValue(
+      new LingmouSessionRecoveryError("orphan-provider-session", "instance-id")
+    );
+
+    const result = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "LINGMOU_CREATE_COMPENSATION_CLOSE_FAILED"
+    });
+    expect(enqueueProviderSessionCloseRecovery).toHaveBeenCalledWith({
+      providerId: "provider-1",
+      providerSessionId: "orphan-provider-session",
+      instanceId: "instance-id",
+      providerConfigVersion: 1,
+      reasonCode: "DIAGNOSTIC_CREATE_COMPENSATION_FAILED"
+    });
+    expect(JSON.stringify(result)).not.toContain("orphan-provider-session");
+  });
+
+  it("returns a fixed operations code when diagnostic recovery cannot be queued", async () => {
+    createSession.mockResolvedValue({
+      providerSessionId: "provider-session-id",
+      connection: lingmouConnection()
+    });
+    closeSession.mockRejectedValue(new Error("raw close secret sentinel"));
+    enqueueProviderSessionCloseRecovery.mockRejectedValue(
+      new Error("raw database secret sentinel")
+    );
+
+    const result = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED"
+    });
+    expect(JSON.stringify(result)).not.toContain("secret sentinel");
   });
 
   it("validates Alibaba observable-behavior sampling ranges", async () => {

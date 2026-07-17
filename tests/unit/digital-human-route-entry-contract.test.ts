@@ -6,6 +6,7 @@ const routeEntries = [
   "app/api/digital-human/sessions/route.ts",
   "app/api/digital-human/sessions/[sessionId]/route.ts",
   "app/api/digital-human/sessions/[sessionId]/heartbeat/route.ts",
+  "app/api/digital-human/sessions/[sessionId]/downgrade/route.ts",
   "app/api/digital-human/sessions/[sessionId]/speech/route.ts"
 ] as const;
 

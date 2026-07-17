@@ -221,9 +221,29 @@ model AiServiceProvider {
   createdAt              DateTime        @default(now())
   updatedAt              DateTime        @updatedAt
   models                 AiModelConfig[]
+  closeRecoveries        ProviderSessionCloseRecovery[]
 
   @@index([providerType])
   @@index([enabled])
+}
+
+model ProviderSessionCloseRecovery {
+  id                    String            @id @default(cuid())
+  providerId            String
+  provider              AiServiceProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  providerSessionId     String
+  instanceId            String
+  providerConfigVersion Int
+  reasonCode            String
+  attemptCount          Int               @default(0)
+  nextAttemptAt         DateTime          @default(now())
+  lastErrorCode         String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@unique([providerId, providerSessionId, instanceId])
+  @@index([nextAttemptAt])
+  @@index([providerId])
 }
 
 model AiModelConfig {

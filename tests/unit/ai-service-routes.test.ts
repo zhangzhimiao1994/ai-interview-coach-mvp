@@ -390,7 +390,8 @@ describe("AI service API routes", () => {
           ...data
         })))
       },
-      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) }
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) },
+      providerSessionCloseRecovery: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = {
       $transaction: transactionMock(tx),
@@ -502,7 +503,8 @@ describe("AI service API routes", () => {
           ...data
         })))
       },
-      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) }
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) },
+      providerSessionCloseRecovery: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = {
       $transaction: transactionMock(tx),
@@ -635,6 +637,35 @@ describe("AI service API routes", () => {
     expect(tx.aiServiceProvider.delete).not.toHaveBeenCalled();
   });
 
+  it("rejects close-critical mutation while a durable provider close is pending", async () => {
+    const existing = providerRow();
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue(existing),
+        update: vi.fn()
+      },
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) },
+      providerSessionCloseRecovery: { count: vi.fn().mockResolvedValue(1) }
+    };
+    const prisma = { $transaction: transactionMock(tx) };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/providers/[providerId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/providers/provider-1", {
+        method: "PATCH",
+        body: JSON.stringify({ settings: { region: "us-west" } })
+      }),
+      { params: Promise.resolve({ providerId: "provider-1" }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(tx.providerSessionCloseRecovery.count).toHaveBeenCalledWith({
+      where: { providerId: "provider-1" }
+    });
+    expect(tx.aiServiceProvider.update).not.toHaveBeenCalled();
+  });
+
   it("maps the database provider-in-use race guard to a bounded 409", async () => {
     const prisma = {
       $transaction: vi
@@ -668,7 +699,8 @@ describe("AI service API routes", () => {
         findUnique: vi.fn().mockResolvedValue(existing),
         delete: vi.fn().mockResolvedValue(existing)
       },
-      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) }
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) },
+      providerSessionCloseRecovery: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = { $transaction: transactionMock(tx) };
     vi.doMock("@/lib/db/prisma", () => ({ prisma }));
@@ -774,7 +806,8 @@ describe("AI service API routes", () => {
           ...data
         })))
       },
-      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) }
+      digitalHumanSession: { count: vi.fn().mockResolvedValue(0) },
+      providerSessionCloseRecovery: { count: vi.fn().mockResolvedValue(0) }
     };
     const prisma = {
       $transaction: transactionMock(tx),

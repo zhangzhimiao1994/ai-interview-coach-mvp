@@ -90,6 +90,19 @@ function sessionResponse(mode: "LINGMOU_CLOUD" | "LOCAL_AVATAR") {
   );
 }
 
+function downgradeResponse() {
+  return Response.json({
+    session: {
+      id: "digital-session-1",
+      mode: "LOCAL_AVATAR",
+      status: "READY",
+      reasonCode: "CLIENT_RUNTIME_FAILED",
+      connection: null,
+      expiresAt: "2026-07-18T01:00:00.000Z"
+    }
+  });
+}
+
 function pcmResponse(chunks: number[][]) {
   return new Response(
     new ReadableStream<Uint8Array>({
@@ -132,6 +145,9 @@ function createFetchRouter(options: {
     }
     if (url.endsWith("/heartbeat") && init?.method === "POST") {
       return Response.json({ ok: true });
+    }
+    if (url.endsWith("/downgrade") && init?.method === "POST") {
+      return downgradeResponse();
     }
     if (url === "/api/digital-human/sessions/digital-session-1" && init?.method === "DELETE") {
       return Response.json({ ok: true });
@@ -494,6 +510,100 @@ describe("DigitalInterviewerVideo", () => {
     expect(audio.play).toHaveBeenCalledOnce();
     expect(lingmou.client.pushPcm).not.toHaveBeenCalled();
     expect(text).toContain("数字人画面已降级");
+  });
+
+  it("stops cloud ownership and calls atomic downgrade exactly once when SDK startup fails", async () => {
+    vi.useFakeTimers();
+    const { audio } = setupInteractiveBrowser();
+    lingmou.client.start.mockRejectedValueOnce(new Error("SDK unavailable"));
+    const fetchMock = createFetchRouter({ mode: "LINGMOU_CLOUD" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await renderInteractive(audio);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+    const downgradeCalls = fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url).endsWith("/downgrade") &&
+        (init as RequestInit | undefined)?.method === "POST"
+    );
+    const heartbeatCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/heartbeat")
+    );
+
+    expect(downgradeCalls).toHaveLength(1);
+    expect(JSON.parse(String(downgradeCalls[0]?.[1]?.body))).toEqual({
+      reasonCode: "CLIENT_SDK_INIT_FAILED"
+    });
+    expect(heartbeatCalls).toHaveLength(0);
+    expect(lingmou.client.exit).toHaveBeenCalledOnce();
+    expect(audio.play).toHaveBeenCalledOnce();
+  });
+
+  it("atomically downgrades once after PCM push fails and replays locally with the same session id", async () => {
+    vi.useFakeTimers();
+    const { audio } = setupInteractiveBrowser();
+    lingmou.client.pushPcm.mockImplementationOnce(() => {
+      throw new Error("runtime push failed");
+    });
+    const fetchMock = createFetchRouter({ mode: "LINGMOU_CLOUD" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await renderInteractive(audio);
+    await flushEffects();
+    const downgradeCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/downgrade")
+    );
+    const speechCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/speech")
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+    const heartbeatCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/heartbeat")
+    );
+
+    expect(downgradeCalls).toHaveLength(1);
+    expect(speechCalls).toHaveLength(2);
+    expect(speechCalls.every(([url]) =>
+      String(url).includes("digital-session-1")
+    )).toBe(true);
+    expect(audio.play).toHaveBeenCalledOnce();
+    expect(heartbeatCalls).toHaveLength(0);
+  });
+
+  it("uses browser speech and leaves recovery to the server when atomic downgrade fails", async () => {
+    vi.useFakeTimers();
+    const { audio, speechSynthesis } = setupInteractiveBrowser();
+    lingmou.client.start.mockRejectedValueOnce(new Error("SDK unavailable"));
+    const fallbackRouter = createFetchRouter({ mode: "LINGMOU_CLOUD" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/downgrade")) {
+        return Response.json(
+          { reasonCode: "DIGITAL_HUMAN_DOWNGRADE_FAILED" },
+          { status: 503 }
+        );
+      }
+      return fallbackRouter(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await renderInteractive(audio);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+
+    expect(fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/downgrade")
+    )).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/heartbeat")
+    )).toHaveLength(0);
+    expect(audio.play).not.toHaveBeenCalled();
+    expect(speechSynthesis.speak).toHaveBeenCalledOnce();
   });
 
   it("uses browser speech only after the speech route explicitly falls back", async () => {

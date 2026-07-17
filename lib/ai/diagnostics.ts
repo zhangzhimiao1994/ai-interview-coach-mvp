@@ -30,7 +30,11 @@ import { lingmouAdapterContract } from "@/lib/media/providers/lingmouCredentials
 import { MediaConfigurationError } from "@/lib/media/errors";
 import { MediaProviderError } from "@/lib/media/errors";
 import type { ResolvedMediaModel } from "@/lib/media/config";
-import { createLingmouProvider } from "@/lib/media/providers/lingmou";
+import {
+  createLingmouProvider,
+  LingmouSessionRecoveryError
+} from "@/lib/media/providers/lingmou";
+import { enqueueProviderSessionCloseRecovery } from "@/lib/media/providerSessionCloseRecoveries";
 
 type JsonObject = Record<string, unknown>;
 
@@ -393,6 +397,25 @@ function isValidLingmouProbeConnection(
   );
 }
 
+async function enqueueLingmouProbeRecovery(
+  model: ResolvedMediaModel,
+  identity: { providerSessionId: string; instanceId: string },
+  reasonCode: string
+) {
+  try {
+    await enqueueProviderSessionCloseRecovery({
+      providerId: model.providerId,
+      providerSessionId: identity.providerSessionId,
+      instanceId: identity.instanceId,
+      providerConfigVersion: model.providerConfigVersion,
+      reasonCode
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function probeLingmouModel(model: ResolvedMediaModel): Promise<{
   ok: boolean;
   code: string;
@@ -424,19 +447,40 @@ export async function probeLingmouModel(model: ResolvedMediaModel): Promise<{
       failureCode = "LINGMOU_LIVE_INVALID_RESPONSE";
     }
   } catch (error) {
-    failureCode = safeLingmouProbeCode(
-      error,
-      "LINGMOU_LIVE_CREATE_FAILED"
-    );
+    if (error instanceof LingmouSessionRecoveryError) {
+      const queued = await enqueueLingmouProbeRecovery(
+        model,
+        error.recoveryIdentity(),
+        "DIAGNOSTIC_CREATE_COMPENSATION_FAILED"
+      );
+      failureCode = queued
+        ? safeLingmouProbeCode(error, "LINGMOU_LIVE_CREATE_FAILED")
+        : "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
+    } else {
+      failureCode = safeLingmouProbeCode(
+        error,
+        "LINGMOU_LIVE_CREATE_FAILED"
+      );
+    }
   } finally {
     if (providerSessionId) {
       try {
         await provider.closeSession(providerSessionId);
       } catch (error) {
-        failureCode = safeLingmouProbeCode(
-          error,
-          "LINGMOU_LIVE_CLOSE_FAILED"
+        const queued = await enqueueLingmouProbeRecovery(
+          model,
+          {
+            providerSessionId,
+            instanceId:
+              typeof model.modelSettings.instanceId === "string"
+                ? model.modelSettings.instanceId
+                : ""
+          },
+          "DIAGNOSTIC_CLOSE_FAILED"
         );
+        failureCode = queued
+          ? safeLingmouProbeCode(error, "LINGMOU_LIVE_CLOSE_FAILED")
+          : "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
       }
     }
   }

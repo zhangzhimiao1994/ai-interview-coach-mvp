@@ -11,7 +11,8 @@ import {
 } from "@/lib/media/errors";
 import {
   createLingmouProvider,
-  createLingmouSessionCloser
+  createLingmouSessionCloser,
+  LingmouSessionRecoveryError
 } from "@/lib/media/providers/lingmou";
 import { resolveLingmouCredentials } from "@/lib/media/providers/lingmouCredentials";
 
@@ -242,6 +243,63 @@ describe("Lingmou OpenAPI adapter", () => {
     });
   });
 
+  it.each([
+    "sessionId",
+    "appId",
+    "avatarUserId",
+    "channel",
+    "clientUserId",
+    "serverUserId",
+    "token"
+  ])("rejects a whitespace-only required RTC field %s", async (field) => {
+    const response = successfulResponse();
+    if (field === "sessionId") {
+      response.body.data.sessionId = "   ";
+    } else {
+      response.body.data.rtcParams[
+        field as keyof typeof response.body.data.rtcParams
+      ] = "   " as never;
+    }
+    const client = fakeClient(response);
+    const provider = createLingmouProvider(resolvedModel(), {
+      createClient: () => client,
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.createSession()).rejects.toMatchObject({
+      name: "MediaProviderError",
+      code: "LINGMOU_UPSTREAM_FAILED"
+    });
+  });
+
+  it("trims every required RTC string before returning the public DTO", async () => {
+    const response = successfulResponse();
+    response.body.data.sessionId = "  provider-session-id  ";
+    response.body.data.rtcParams = Object.fromEntries(
+      Object.entries(response.body.data.rtcParams).map(([key, value]) => [
+        key,
+        typeof value === "string" ? `  ${value}  ` : value
+      ])
+    ) as typeof response.body.data.rtcParams;
+    const provider = createLingmouProvider(resolvedModel(), {
+      createClient: () => fakeClient(response),
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.createSession()).resolves.toMatchObject({
+      providerSessionId: "provider-session-id",
+      connection: {
+        appId: "rtc-app",
+        avatarUserId: "avatar-user",
+        channel: "rtc-channel",
+        clientUserId: "client-user",
+        serverUserId: "server-user",
+        token: "short-lived-rtc-token",
+        sessionId: "provider-session-id"
+      }
+    });
+  });
+
   it("compensating-closes a real session id when the RTC DTO is invalid", async () => {
     const response = successfulResponse();
     Reflect.deleteProperty(response.body.data.rtcParams, "token");
@@ -277,11 +335,17 @@ describe("Lingmou OpenAPI adapter", () => {
     const caught = await provider.createSession().catch((error: unknown) => error);
 
     expect(caught).toMatchObject({
-      name: "MediaProviderError",
+      name: "LingmouSessionRecoveryError",
       code: "LINGMOU_CREATE_COMPENSATION_CLOSE_FAILED"
+    });
+    expect((caught as LingmouSessionRecoveryError).recoveryIdentity()).toEqual({
+      providerSessionId: "provider-session-id",
+      instanceId: "paid-instance-id"
     });
     expect(String(caught)).not.toContain("raw-compensation-close-secret");
     expect(JSON.stringify(caught)).not.toContain("raw-compensation-close-secret");
+    expect(JSON.stringify(caught)).not.toContain("provider-session-id");
+    expect(JSON.stringify(caught)).not.toContain("paid-instance-id");
   });
 
   it("closes exactly the requested provider session once per adapter call", async () => {

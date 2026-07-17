@@ -91,13 +91,58 @@ async function loadRoutes() {
   const deleteRoute = await import(
     "@/app/api/digital-human/sessions/[sessionId]/handler"
   );
+  const downgradeRoute = await import(
+    "@/app/api/digital-human/sessions/[sessionId]/downgrade/handler"
+  );
   const speechRoute = await import(
     "@/app/api/digital-human/sessions/[sessionId]/speech/handler"
   );
-  return { createRoute, heartbeatRoute, deleteRoute, speechRoute };
+  return {
+    createRoute,
+    heartbeatRoute,
+    deleteRoute,
+    downgradeRoute,
+    speechRoute
+  };
 }
 
 describe("digital human session routes", () => {
+  it("calls the atomic downgrade operation exactly once and returns the same local session id", async () => {
+    const { downgradeRoute } = await loadRoutes();
+    const downgrade = vi.fn().mockResolvedValue({
+      ...publicSession,
+      mode: "LOCAL_AVATAR",
+      reasonCode: "CLIENT_SDK_INIT_FAILED",
+      connection: null
+    });
+    const handler = downgradeRoute.createDigitalHumanSessionDowngradeHandler({
+      downgrade
+    });
+
+    const response = await handler(
+      jsonRequest("http://localhost/downgrade", {
+        reasonCode: "CLIENT_SDK_INIT_FAILED"
+      }),
+      routeContext("digital-1")
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    await expect(response.json()).resolves.toMatchObject({
+      session: {
+        id: "digital-1",
+        mode: "LOCAL_AVATAR",
+        status: "READY",
+        connection: null
+      }
+    });
+    expect(downgrade).toHaveBeenCalledOnce();
+    expect(downgrade).toHaveBeenCalledWith(
+      "digital-1",
+      "CLIENT_SDK_INIT_FAILED"
+    );
+  });
+
   it("creates a session using only the public RTC whitelist", async () => {
     const { createRoute } = await loadRoutes();
     const createSession = vi.fn().mockResolvedValue(publicSession);

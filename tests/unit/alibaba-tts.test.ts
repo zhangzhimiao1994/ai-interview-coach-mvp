@@ -412,6 +412,31 @@ describe("Alibaba CosyVoice HTTP TTS provider", () => {
     }
   });
 
+  it("cancels an ok response and clears its timeout before rejecting a null body", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = resolvedTtsModel();
+      model.timeoutMs = 10;
+      const requestSignals: AbortSignal[] = [];
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        if (init?.signal) requestSignals.push(init.signal);
+        return Promise.resolve(new Response(null, { status: 200 }));
+      });
+      const provider = createAlibabaTtsProvider(model, {
+        fetch: fetchMock as typeof fetch,
+        readConfigSecret: () => configSecret
+      });
+
+      await expect(provider.streamPcm({ text: "Hello" })).rejects.toMatchObject({
+        code: "ALIBABA_TTS_RESPONSE_INVALID"
+      });
+      expect(requestSignals[0]?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels the SSE reader when the consumer stops early", async () => {
     let cancelled = false;
     const body = new ReadableStream<Uint8Array>({

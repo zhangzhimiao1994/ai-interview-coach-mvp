@@ -23,6 +23,11 @@ type DigitalHumanSessionCounter = {
       };
     }) => Promise<number>;
   };
+  providerSessionCloseRecovery: {
+    count: (args: {
+      where: { providerId: string };
+    }) => Promise<number>;
+  };
 };
 
 const providerInUseMessage =
@@ -51,6 +56,12 @@ export async function assertProviderCloseConfigurationMutable(
     }
   });
   if (dependentSessions > 0) {
+    throw new ApiConflictError(providerInUseMessage);
+  }
+  const pendingRecoveries = await store.providerSessionCloseRecovery.count({
+    where: { providerId }
+  });
+  if (pendingRecoveries > 0) {
     throw new ApiConflictError(providerInUseMessage);
   }
 }

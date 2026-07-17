@@ -26,6 +26,24 @@ export interface LingmouProvider {
 
 export type LingmouSessionCloser = Pick<LingmouProvider, "closeSession">;
 
+export class LingmouSessionRecoveryError extends MediaProviderError {
+  readonly #identity: { providerSessionId: string; instanceId: string };
+
+  constructor(providerSessionId: string, instanceId: string) {
+    super(
+      "Lingmou invalid session cleanup failed",
+      "LINGMOU",
+      "LINGMOU_CREATE_COMPENSATION_CLOSE_FAILED"
+    );
+    this.name = "LingmouSessionRecoveryError";
+    this.#identity = { providerSessionId, instanceId };
+  }
+
+  recoveryIdentity() {
+    return { ...this.#identity };
+  }
+}
+
 type LingmouCreateResponse = {
   body?: {
     success?: boolean;
@@ -137,21 +155,24 @@ function providerError(error: unknown) {
   );
 }
 
-function requiredText(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+function requiredText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
 }
 
 function providerSessionId(response: LingmouCreateResponse): string {
   const data = response.body?.data;
+  const sessionId = requiredText(data?.sessionId);
 
   if (
     response.body?.success !== true ||
-    !requiredText(data?.sessionId)
+    !sessionId
   ) {
     throw providerError(undefined);
   }
 
-  return data.sessionId;
+  return sessionId;
 }
 
 function rtcConnection(
@@ -159,28 +180,35 @@ function rtcConnection(
   sessionId: string
 ): LingmouRtcConnection {
   const rtc = response.body?.data?.rtcParams;
+  const appId = requiredText(rtc?.appId);
+  const avatarUserId = requiredText(rtc?.avatarUserId);
+  const channel = requiredText(rtc?.channel);
+  const clientUserId = requiredText(rtc?.clientUserId);
+  const serverUserId = requiredText(rtc?.serverUserId);
+  const timestamp = rtc?.timestamp;
+  const token = requiredText(rtc?.token);
 
   if (
-    !requiredText(rtc?.appId) ||
-    !requiredText(rtc.avatarUserId) ||
-    !requiredText(rtc.channel) ||
-    !requiredText(rtc.clientUserId) ||
-    !requiredText(rtc.serverUserId) ||
-    typeof rtc.timestamp !== "number" ||
-    !Number.isFinite(rtc.timestamp) ||
-    !requiredText(rtc.token)
+    !appId ||
+    !avatarUserId ||
+    !channel ||
+    !clientUserId ||
+    !serverUserId ||
+    typeof timestamp !== "number" ||
+    !Number.isFinite(timestamp) ||
+    !token
   ) {
     throw providerError(undefined);
   }
 
   return {
-    appId: rtc.appId,
-    avatarUserId: rtc.avatarUserId,
-    channel: rtc.channel,
-    clientUserId: rtc.clientUserId,
-    serverUserId: rtc.serverUserId,
-    timestamp: rtc.timestamp,
-    token: rtc.token,
+    appId,
+    avatarUserId,
+    channel,
+    clientUserId,
+    serverUserId,
+    timestamp,
+    token,
     sessionId
   };
 }
@@ -218,10 +246,9 @@ export function createLingmouProvider(
             new CloseChatInstanceSessionsRequest({ sessionIds: [sessionId] })
           );
         } catch {
-          throw new MediaProviderError(
-            "Lingmou invalid session cleanup failed",
-            "LINGMOU",
-            "LINGMOU_CREATE_COMPENSATION_CLOSE_FAILED"
+          throw new LingmouSessionRecoveryError(
+            sessionId,
+            credentials.instanceId
           );
         }
         throw providerError(undefined);
