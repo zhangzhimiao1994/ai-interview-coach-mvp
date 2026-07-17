@@ -56,9 +56,20 @@ export type SpeechSynthesisResult = MediaExecutionMetadata & SpeechAudioLocation
   expiresAt?: string;
 };
 
+export type SpeechPcmStreamResult = MediaExecutionMetadata & {
+  encoding: "pcm_s16le";
+  sampleRate: 48000;
+  channels: 1;
+  chunks: AsyncIterable<Uint8Array>;
+};
+
 export interface TextToSpeechProvider {
   synthesize(input: SpeechSynthesisInput): Promise<SpeechSynthesisResult>;
   checkConnection(): Promise<CapabilityCheckResult>;
+}
+
+export interface StreamingTextToSpeechProvider extends TextToSpeechProvider {
+  streamPcm(input: SpeechSynthesisInput): Promise<SpeechPcmStreamResult>;
 }
 
 export type DigitalHumanSessionInput = {

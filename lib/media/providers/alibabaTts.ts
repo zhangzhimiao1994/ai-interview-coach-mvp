@@ -12,109 +12,46 @@ import {
   MediaProviderError
 } from "@/lib/media/errors";
 import type {
+  SpeechPcmStreamResult,
   SpeechSynthesisInput,
-  SpeechSynthesisResult
+  SpeechSynthesisResult,
+  StreamingTextToSpeechProvider
 } from "@/lib/media/types";
 
+const COSYVOICE_MODELS = new Set([
+  "cosyvoice-v3.5-plus",
+  "cosyvoice-v3.5-flash",
+  "cosyvoice-v3-plus",
+  "cosyvoice-v3-flash",
+  "cosyvoice-v2"
+]);
+const DEFAULT_VOICE = "longanhuan";
+const DEFAULT_INSTRUCTION = "你说话的情感是 neutral.";
+const PCM_SAMPLE_RATE = 48_000 as const;
+const MAX_PCM_CHUNK_BYTES = 1024 * 1024;
+const MAX_PCM_TOTAL_BYTES = 10 * 1024 * 1024;
 const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+const base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
 const ttsInputSchema = z.object({
   text: z.string().trim().min(1).max(600),
   voice: z.string().trim().min(1).max(100),
-  instructions: z.string().trim().min(1).max(1600).optional()
+  instruction: z.string().trim().min(1).max(1600),
+  speed: z.number().finite().min(0.5).max(2)
 });
-const alibabaTtsResponseSchema = z
-  .object({
-    status_code: z.number().int().optional(),
-    request_id: z.string().trim().min(1).max(200),
-    output: z
-      .object({
-        audio: z
-          .object({
-            url: z.string().trim().min(1).max(16_000),
-            expires_at: z.number().int().positive()
-          })
-          .passthrough()
-      })
-      .passthrough()
-  })
-  .passthrough();
 
 type AlibabaTtsUrlInput = {
   workspaceId: string;
   region: AlibabaRealtimeRegion | string;
 };
 
-type AlibabaTtsDependencies = {
+export type AlibabaTtsDependencies = {
   fetch: typeof fetch;
   readConfigSecret: () => string;
 };
 
-const languageTypes: Record<string, string> = {
-  zh: "Chinese",
-  en: "English",
-  de: "German",
-  it: "Italian",
-  pt: "Portuguese",
-  es: "Spanish",
-  ja: "Japanese",
-  ko: "Korean",
-  fr: "French",
-  ru: "Russian"
-};
-
 function textSetting(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function languageType(language: string | undefined) {
-  const normalized = language?.trim().toLowerCase() || "zh-cn";
-  return languageTypes[normalized.split("-")[0]] ?? "Auto";
-}
-
-export function validateAlibabaHttpTtsModelName(modelName: string) {
-  const normalized = modelName.trim();
-
-  if (!normalized || normalized.length > 200) {
-    throw new MediaConfigurationError("Alibaba TTS model name is invalid", {
-      code: "ALIBABA_TTS_MODEL_INVALID"
-    });
-  }
-
-  if (/(?:^|-)realtime(?:-|$)/i.test(normalized)) {
-    throw new MediaConfigurationError(
-      "The selected Alibaba TTS model requires WebSocket transport",
-      { code: "ALIBABA_TTS_HTTP_MODEL_REQUIRED" }
-    );
-  }
-
-  if (!/^qwen3-tts-(?:flash|instruct-flash)(?:-\d{4}-\d{2}-\d{2})?$/i.test(normalized)) {
-    throw new MediaConfigurationError("Alibaba TTS model name is invalid", {
-      code: "ALIBABA_TTS_MODEL_INVALID"
-    });
-  }
-
-  return normalized;
-}
-
-function playableAudioUrl(value: string) {
-  try {
-    const url = new URL(value);
-    const trustedHost =
-      url.hostname === "aliyuncs.com" || url.hostname.endsWith(".aliyuncs.com");
-
-    if (!trustedHost || (url.protocol !== "http:" && url.protocol !== "https:")) {
-      throw new Error("Unsupported audio URL");
-    }
-
-    url.protocol = "https:";
-    return url.toString();
-  } catch {
-    throw new MediaProviderError(
-      "Alibaba TTS returned an invalid audio URL",
-      "TONGYI",
-      "ALIBABA_TTS_AUDIO_URL_INVALID"
-    );
-  }
 }
 
 function providerErrorForStatus(status: number) {
@@ -126,10 +63,76 @@ function providerErrorForStatus(status: number) {
   );
 }
 
+function providerError(code: string, retryable = false) {
+  return new MediaProviderError(
+    "Alibaba TTS streaming response is invalid",
+    "TONGYI",
+    code,
+    retryable
+  );
+}
+
+function decodePcmBase64(value: unknown) {
+  if (typeof value !== "string" || !value || !base64Pattern.test(value)) {
+    throw providerError("ALIBABA_TTS_PCM_BASE64_INVALID");
+  }
+
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64") !== value) {
+    throw providerError("ALIBABA_TTS_PCM_BASE64_INVALID");
+  }
+
+  if (decoded.byteLength % 2 !== 0) {
+    throw providerError("ALIBABA_TTS_PCM_INVALID");
+  }
+
+  if (decoded.byteLength > MAX_PCM_CHUNK_BYTES) {
+    throw providerError("ALIBABA_TTS_PCM_CHUNK_TOO_LARGE");
+  }
+
+  return Uint8Array.from(decoded);
+}
+
+function parseSseData(frame: string) {
+  const data = frame
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n");
+
+  if (!data || data === "[DONE]") {
+    return null;
+  }
+
+  try {
+    return JSON.parse(data) as {
+      request_id?: unknown;
+      output?: {
+        type?: unknown;
+        finish_reason?: unknown;
+        audio?: { data?: unknown };
+      };
+    };
+  } catch {
+    throw providerError("ALIBABA_TTS_SSE_INVALID");
+  }
+}
+
+export function validateAlibabaHttpTtsModelName(modelName: string): string {
+  const normalized = modelName.trim();
+  if (!COSYVOICE_MODELS.has(normalized)) {
+    throw new MediaConfigurationError(
+      "The selected speech pipeline supports only CosyVoice HTTP models.",
+      { code: "ALIBABA_TTS_MODEL_INVALID" }
+    );
+  }
+  return normalized;
+}
+
 export function buildAlibabaTtsUrl({
   workspaceId,
   region
-}: AlibabaTtsUrlInput) {
+}: AlibabaTtsUrlInput): string {
   if (!isAlibabaWorkspaceId(workspaceId)) {
     throw new MediaConfigurationError("Alibaba workspace ID is invalid", {
       code: "ALIBABA_WORKSPACE_INVALID"
@@ -142,141 +145,222 @@ export function buildAlibabaTtsUrl({
     });
   }
 
-  return `https://${workspaceId}.${region}.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation`;
+  return `https://${workspaceId}.${region}.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer`;
 }
 
 export function createAlibabaTtsProvider(
   model: ResolvedMediaModel,
   dependencyOverrides: Partial<AlibabaTtsDependencies> = {}
-) {
+): StreamingTextToSpeechProvider {
   const deps: AlibabaTtsDependencies = {
     fetch,
     readConfigSecret: readAiConfigSecret,
     ...dependencyOverrides
   };
 
-  return {
-    async synthesize(
-      input: SpeechSynthesisInput
-    ): Promise<SpeechSynthesisResult> {
-      const modelName = validateAlibabaHttpTtsModelName(model.modelName);
-      const voice =
+  async function streamPcm(
+    input: SpeechSynthesisInput
+  ): Promise<SpeechPcmStreamResult> {
+    const modelName = validateAlibabaHttpTtsModelName(model.modelName);
+    const inputResult = ttsInputSchema.safeParse({
+      text: input.text,
+      voice:
         textSetting(input.voice) ||
         textSetting(model.modelSettings.voice) ||
-        "Cherry";
-      const supportsInstructions = /(?:^|-)instruct(?:-|$)/i.test(modelName);
-      const configuredInstructions =
+        DEFAULT_VOICE,
+      instruction:
         textSetting(input.instructions) ||
-        textSetting(model.modelSettings.instructions);
-      const inputResult = ttsInputSchema.safeParse({
-        text: input.text,
-        voice,
-        ...(supportsInstructions && configuredInstructions
-          ? { instructions: configuredInstructions }
-          : {})
+        textSetting(model.modelSettings.instruction) ||
+        textSetting(model.modelSettings.instructions) ||
+        DEFAULT_INSTRUCTION,
+      speed: input.speed ?? 1
+    });
+
+    if (!inputResult.success) {
+      throw new MediaConfigurationError("Alibaba TTS input is invalid", {
+        provider: model.providerType,
+        code: "ALIBABA_TTS_INPUT_INVALID"
       });
+    }
 
-      if (!inputResult.success) {
-        throw new MediaConfigurationError("Alibaba TTS input is invalid", {
-          provider: model.providerType,
-          code: "ALIBABA_TTS_INPUT_INVALID"
+    const credentials = resolveAlibabaTtsCredentials(
+      model,
+      deps.readConfigSecret
+    );
+    const endpoint = buildAlibabaTtsUrl(credentials);
+    const body = {
+      model: modelName,
+      input: {
+        text: inputResult.data.text,
+        voice: inputResult.data.voice,
+        format: "pcm",
+        sample_rate: PCM_SAMPLE_RATE,
+        rate: inputResult.data.speed,
+        instruction: inputResult.data.instruction
+      }
+    };
+
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), model.timeoutMs);
+      try {
+        response = await deps.fetch(endpoint, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${credentials.apiKey}`,
+            "Content-Type": "application/json",
+            "X-DashScope-SSE": "enable"
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
         });
+      } catch {
+        throw new MediaProviderError(
+          "Alibaba TTS request could not be completed",
+          "TONGYI",
+          controller.signal.aborted
+            ? "ALIBABA_TTS_TIMEOUT"
+            : "ALIBABA_TTS_NETWORK_ERROR",
+          true
+        );
+      } finally {
+        clearTimeout(timeout);
       }
 
-      const credentials = resolveAlibabaTtsCredentials(
-        model,
-        deps.readConfigSecret
-      );
-      const endpoint = buildAlibabaTtsUrl(credentials);
-      const body = {
-        model: modelName,
-        input: {
-          text: inputResult.data.text,
-          voice: inputResult.data.voice,
-          language_type: languageType(input.language),
-          ...(inputResult.data.instructions
-            ? { instructions: inputResult.data.instructions }
-            : {})
-        }
-      };
+      if (response.ok) {
+        break;
+      }
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), model.timeoutMs);
-        let response: Response;
+      if (attempt === 0 && retryableStatuses.has(response.status)) {
+        await response.body?.cancel().catch(() => undefined);
+        response = undefined;
+        continue;
+      }
 
-        try {
-          response = await deps.fetch(endpoint, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${credentials.apiKey}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(body),
-            signal: controller.signal
-          });
-        } catch {
-          throw new MediaProviderError(
-            "Alibaba TTS request could not be completed",
-            "TONGYI",
-            controller.signal.aborted
-              ? "ALIBABA_TTS_TIMEOUT"
-              : "ALIBABA_TTS_NETWORK_ERROR",
-            true
-          );
-        } finally {
-          clearTimeout(timeout);
-        }
+      throw providerErrorForStatus(response.status);
+    }
 
-        if (!response.ok) {
-          if (attempt === 0 && retryableStatuses.has(response.status)) {
-            await response.body?.cancel().catch(() => undefined);
-            continue;
+    if (!response?.body) {
+      throw providerError("ALIBABA_TTS_RESPONSE_INVALID");
+    }
+
+    const result: SpeechPcmStreamResult = {
+      provider: model.providerName,
+      model: modelName,
+      mode: "ALIBABA_TTS",
+      traceId: response.headers.get("x-dashscope-request-id") ?? "unknown",
+      fallbackUsed: false,
+      encoding: "pcm_s16le",
+      sampleRate: PCM_SAMPLE_RATE,
+      channels: 1,
+      chunks: undefined as unknown as AsyncIterable<Uint8Array>
+    };
+
+    result.chunks = (async function* () {
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      let totalBytes = 0;
+      let completed = false;
+
+      try {
+        while (true) {
+          const read = await reader.read();
+          if (read.done) break;
+          buffered += decoder.decode(read.value, { stream: true });
+          buffered = buffered.replace(/\r\n/g, "\n");
+
+          let boundary: number;
+          while ((boundary = buffered.indexOf("\n\n")) >= 0) {
+            const frame = buffered.slice(0, boundary);
+            buffered = buffered.slice(boundary + 2);
+            const event = parseSseData(frame);
+            if (!event) continue;
+
+            if (typeof event.request_id === "string" && event.request_id.trim()) {
+              result.traceId = event.request_id.trim();
+            }
+
+            if (event.output?.finish_reason === "stop") {
+              completed = true;
+              continue;
+            }
+
+            if (event.output?.type !== "sentence-synthesis") continue;
+            const pcm = decodePcmBase64(event.output.audio?.data);
+            totalBytes += pcm.byteLength;
+            if (totalBytes > MAX_PCM_TOTAL_BYTES) {
+              throw providerError("ALIBABA_TTS_PCM_TOTAL_TOO_LARGE");
+            }
+            yield pcm;
           }
-
-          throw providerErrorForStatus(response.status);
         }
 
-        let payload: unknown;
-        try {
-          payload = await response.json();
-        } catch {
-          throw new MediaProviderError(
-            "Alibaba TTS returned invalid JSON",
-            "TONGYI",
-            "ALIBABA_TTS_RESPONSE_INVALID"
-          );
+        buffered += decoder.decode();
+        if (buffered.trim()) {
+          throw providerError("ALIBABA_TTS_SSE_INVALID");
         }
-
-        const parsed = alibabaTtsResponseSchema.safeParse(payload);
-        if (!parsed.success || (parsed.data.status_code ?? 200) !== 200) {
-          throw new MediaProviderError(
-            "Alibaba TTS returned an invalid response",
-            "TONGYI",
-            "ALIBABA_TTS_RESPONSE_INVALID"
-          );
+        if (!completed) {
+          throw providerError("ALIBABA_TTS_STREAM_INCOMPLETE");
         }
+      } catch (error) {
+        if (error instanceof MediaProviderError) throw error;
+        throw new MediaProviderError(
+          "Alibaba TTS stream was interrupted",
+          "TONGYI",
+          "ALIBABA_TTS_STREAM_INTERRUPTED",
+          true
+        );
+      } finally {
+        reader.releaseLock();
+      }
+    })();
 
-        return {
-          provider: model.providerName,
-          model: modelName,
-          mode: "ALIBABA_TTS",
-          traceId: parsed.data.request_id,
-          fallbackUsed: false,
-          audioUrl: playableAudioUrl(parsed.data.output.audio.url),
-          mimeType: "audio/wav",
-          expiresAt: new Date(
-            parsed.data.output.audio.expires_at * 1000
-          ).toISOString()
-        };
+    return result;
+  }
+
+  return {
+    streamPcm,
+    async synthesize(input: SpeechSynthesisInput): Promise<SpeechSynthesisResult> {
+      const streamed = await streamPcm(input);
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      for await (const chunk of streamed.chunks) {
+        chunks.push(chunk);
+        totalBytes += chunk.byteLength;
+      }
+      const pcm = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        pcm.set(chunk, offset);
+        offset += chunk.byteLength;
       }
 
-      throw new MediaProviderError(
-        "Alibaba TTS retry limit reached",
-        "TONGYI",
-        "ALIBABA_TTS_RETRY_EXHAUSTED",
-        true
-      );
+      return {
+        provider: streamed.provider,
+        model: streamed.model,
+        mode: streamed.mode,
+        traceId: streamed.traceId,
+        fallbackUsed: false,
+        audioBase64: Buffer.from(pcm).toString("base64"),
+        mimeType: "audio/pcm",
+        sampleRate: PCM_SAMPLE_RATE
+      };
+    },
+    async checkConnection() {
+      const modelName = validateAlibabaHttpTtsModelName(model.modelName);
+      resolveAlibabaTtsCredentials(model, deps.readConfigSecret);
+      return {
+        provider: model.providerName,
+        model: modelName,
+        mode: "ALIBABA_TTS",
+        traceId: "local-configuration-check",
+        fallbackUsed: false,
+        available: true,
+        latencyMs: 0,
+        checkedAt: new Date().toISOString()
+      };
     }
   };
 }

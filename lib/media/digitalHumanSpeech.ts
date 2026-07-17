@@ -230,9 +230,9 @@ export function createDigitalHumanSpeechHandler(
         language: input.language,
         voice: configuredVoice(model, input.voice),
         speed: input.speed,
-        audioUrl: "audioUrl" in result ? result.audioUrl : null,
         audioBase64: "audioBase64" in result ? result.audioBase64 : null,
         mimeType: result.mimeType,
+        sampleRate: result.sampleRate ?? null,
         expiresAt: result.expiresAt ?? null
       }
     });

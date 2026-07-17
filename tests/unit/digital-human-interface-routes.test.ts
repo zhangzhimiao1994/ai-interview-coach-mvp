@@ -12,8 +12,8 @@ function resolvedTtsModel(): ResolvedMediaModel {
     providerSettings: { workspaceId: "ws-main", region: "cn-beijing" },
     modelId: "model-tts",
     modelDisplayName: "阿里面试官语音",
-    modelName: "qwen3-tts-instruct-flash",
-    modelSettings: { voice: "Cherry" },
+    modelName: "cosyvoice-v3-flash",
+    modelSettings: { voice: "longanhuan", format: "pcm", sampleRate: 48000, channels: 1 },
     temperature: 0.2,
     maxTokens: 1000,
     timeoutMs: 30_000,
@@ -38,13 +38,13 @@ describe("digital human provider-ready API routes", () => {
       resolveModel: vi.fn().mockResolvedValue(resolvedTtsModel()),
       synthesize: vi.fn().mockResolvedValue({
         provider: "阿里百炼",
-        model: "qwen3-tts-instruct-flash",
+        model: "cosyvoice-v3-flash",
         mode: "ALIBABA_TTS",
         traceId: "request-tts-1",
         fallbackUsed: false,
-        audioUrl: "https://example.aliyuncs.com/interviewer.wav",
-        mimeType: "audio/wav",
-        expiresAt: "2026-07-17T00:00:00.000Z"
+        audioBase64: "AQACAAMABAA=",
+        mimeType: "audio/pcm",
+        sampleRate: 48000
       }),
       logCall,
       now: vi.fn().mockReturnValueOnce(1_000).mockReturnValue(1_125)
@@ -68,7 +68,9 @@ describe("digital human provider-ready API routes", () => {
     expect(payload.mode).toBe("ALIBABA_TTS");
     expect(payload.fallbackUsed).toBe(false);
     expect(payload.providerCapability).toBe("TEXT_TO_SPEECH");
-    expect(payload.speech.audioUrl).toContain("interviewer.wav");
+    expect(payload.speech.audioBase64).toBe("AQACAAMABAA=");
+    expect(payload.speech.mimeType).toBe("audio/pcm");
+    expect(payload.speech.sampleRate).toBe(48000);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(logCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -234,12 +236,13 @@ describe("digital human provider-ready API routes", () => {
       resolveModel: vi.fn().mockResolvedValue(resolvedTtsModel()),
       synthesize: vi.fn().mockResolvedValue({
         provider: "阿里百炼",
-        model: "qwen3-tts-instruct-flash",
+        model: "cosyvoice-v3-flash",
         mode: "ALIBABA_TTS",
         traceId: "request-tts-2",
         fallbackUsed: false,
-        audioUrl: "https://example.aliyuncs.com/interviewer.wav",
-        mimeType: "audio/wav"
+        audioBase64: "AQACAAMABAA=",
+        mimeType: "audio/pcm",
+        sampleRate: 48000
       }),
       logCall: vi.fn().mockRejectedValue(new Error("database unavailable"))
     });

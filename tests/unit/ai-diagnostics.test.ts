@@ -323,7 +323,7 @@ describe("AI configuration diagnostics", () => {
       dependencies: dependencies(selectedModel({
         capability: "TEXT_TO_SPEECH",
         modelSettings: { sampleRate: 24000, format: "pcm" },
-        modelOverrides: { modelName: "qwen3-tts-instruct-flash" }
+        modelOverrides: { modelName: "cosyvoice-v3-flash" }
       }))
     });
 
@@ -343,8 +343,8 @@ describe("AI configuration diagnostics", () => {
         workspaceId: "ws-main",
         region: "cn-beijing"
       },
-      modelSettings: { voice: "Cherry" },
-      modelOverrides: { modelName: "qwen3-tts-instruct-flash" },
+      modelSettings: { voice: "longanhuan", format: "pcm", sampleRate: 48000, channels: 1 },
+      modelOverrides: { modelName: "cosyvoice-v3-flash" },
       providerOverrides: { baseUrl: null }
     }));
 
@@ -361,7 +361,7 @@ describe("AI configuration diagnostics", () => {
     expect(JSON.stringify(result)).not.toContain("tts-secret-sentinel");
   });
 
-  it("rejects WebSocket-only TTS models for the HTTP playback adapter", async () => {
+  it("rejects non-CosyVoice models for the HTTP playback adapter", async () => {
     const result = await diagnoseAiCapability("TEXT_TO_SPEECH", {
       liveCheck: false,
       dependencies: dependencies(selectedModel({
@@ -370,7 +370,7 @@ describe("AI configuration diagnostics", () => {
           workspaceId: "ws-main",
           region: "cn-beijing"
         },
-        modelSettings: { voice: "Cherry" },
+        modelSettings: { voice: "longanhuan", format: "pcm", sampleRate: 48000, channels: 1 },
         modelOverrides: {
           modelName: "qwen3-tts-instruct-flash-realtime"
         },
@@ -380,9 +380,9 @@ describe("AI configuration diagnostics", () => {
 
     expect(result).toMatchObject({
       status: "MISCONFIGURED",
-      code: "ALIBABA_TTS_HTTP_MODEL_REQUIRED"
+      code: "ALIBABA_TTS_MODEL_INVALID"
     });
-    expect(result.message).toContain("HTTP");
+    expect(result.message).toContain("模型名称无效");
   });
 
   it("uses the runtime Workspace ID validation in Alibaba TTS diagnostics", async () => {
@@ -394,8 +394,8 @@ describe("AI configuration diagnostics", () => {
           workspaceId: "invalid.workspace.example.com",
           region: "cn-beijing"
         },
-        modelSettings: { voice: "Cherry" },
-        modelOverrides: { modelName: "qwen3-tts-instruct-flash" },
+        modelSettings: { voice: "longanhuan", format: "pcm", sampleRate: 48000, channels: 1 },
+        modelOverrides: { modelName: "cosyvoice-v3-flash" },
         providerOverrides: { baseUrl: null }
       }))
     });
