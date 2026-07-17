@@ -13,6 +13,13 @@ export type LingmouCredentials = {
   instanceId: string;
 };
 
+export const lingmouAdapterContract = {
+  modelName: "lingmou-2d-cloud-audio-driven",
+  renderMode: "cloud",
+  integrationMode: "audio-driven",
+  client: "web"
+} as const;
+
 function text(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -40,6 +47,20 @@ export function resolveLingmouCredentials(
       model,
       "LINGMOU_PROVIDER_REQUIRED",
       "The selected digital-human model is not a Lingmou model"
+    );
+  }
+
+  if (
+    model.modelName !== lingmouAdapterContract.modelName ||
+    model.modelSettings.renderMode !== lingmouAdapterContract.renderMode ||
+    model.modelSettings.integrationMode !==
+      lingmouAdapterContract.integrationMode ||
+    model.modelSettings.client !== lingmouAdapterContract.client
+  ) {
+    throw configurationError(
+      model,
+      "LINGMOU_ADAPTER_CONFIG_INVALID",
+      "The selected Lingmou adapter configuration is unsupported"
     );
   }
 

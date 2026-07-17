@@ -26,6 +26,7 @@ import {
   isAlibabaWorkspaceId
 } from "@/lib/media/providers/alibabaCredentials";
 import { validateAlibabaHttpTtsModelName } from "@/lib/media/providers/alibabaTts";
+import { lingmouAdapterContract } from "@/lib/media/providers/lingmouCredentials";
 import { MediaConfigurationError } from "@/lib/media/errors";
 
 type JsonObject = Record<string, unknown>;
@@ -342,19 +343,21 @@ function requiredConfiguration(
 }
 
 function hasCompleteLingmouConfiguration(
+  modelName: string,
   providerSettings: JsonObject,
   modelSettings: JsonObject,
   credentials: CredentialMap
 ) {
   return (
+    modelName === lingmouAdapterContract.modelName &&
     hasText(credentials.accessKeyId) &&
     hasText(credentials.accessKeySecret) &&
     providerSettings.region === "cn-beijing" &&
     hasText(modelSettings.configId) &&
     hasText(modelSettings.instanceId) &&
-    modelSettings.renderMode === "cloud" &&
-    modelSettings.integrationMode === "audio-driven" &&
-    modelSettings.client === "web"
+    modelSettings.renderMode === lingmouAdapterContract.renderMode &&
+    modelSettings.integrationMode === lingmouAdapterContract.integrationMode &&
+    modelSettings.client === lingmouAdapterContract.client
   );
 }
 
@@ -479,6 +482,7 @@ export async function diagnoseAiCapability(
     if (
       capability === "DIGITAL_HUMAN_REALTIME" &&
       !hasCompleteLingmouConfiguration(
+        model.modelName,
         providerSettings,
         modelSettings,
         credentials

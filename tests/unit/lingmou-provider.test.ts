@@ -40,6 +40,16 @@ const invalidCredentialCases: Array<[
   ["instanceId", {}, {}, "LINGMOU_INSTANCE_ID_REQUIRED", { instanceId: "" }]
 ];
 
+const invalidAdapterContractCases: Array<[
+  string,
+  { modelName?: string; modelSettings?: Record<string, unknown> }
+]> = [
+  ["model name", { modelName: "another-lingmou-model" }],
+  ["render mode", { modelSettings: { renderMode: "client" } }],
+  ["integration mode", { modelSettings: { integrationMode: "text-driven" } }],
+  ["client", { modelSettings: { client: "native" } }]
+];
+
 describe("Lingmou credentials", () => {
   it("rejects a model that is not provided by LINGMOU", () => {
     expect(() => resolveLingmouCredentials(
@@ -70,6 +80,7 @@ describe("Lingmou credentials", () => {
         instanceId: "paid-instance-id",
         renderMode: "cloud",
         integrationMode: "audio-driven",
+        client: "web",
         ...modelSettings
       }
     });
@@ -95,6 +106,31 @@ describe("Lingmou credentials", () => {
       instanceId: "paid-instance-id"
     });
   });
+
+  it.each(invalidAdapterContractCases)(
+    "rejects an unsupported Lingmou adapter %s before SDK construction",
+    (_field, modelOverrides) => {
+      const createClient = vi.fn();
+      let caught: unknown;
+
+      try {
+        createLingmouProvider(resolvedModel(modelOverrides), {
+          createClient,
+          readConfigSecret: () => configSecret
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toMatchObject({
+        name: "MediaConfigurationError",
+        code: "LINGMOU_ADAPTER_CONFIG_INVALID"
+      });
+      expect(createClient).not.toHaveBeenCalled();
+      expect(JSON.stringify(caught)).not.toContain("lingmou-ak-secret");
+      expect((caught as Error).message).not.toContain("lingmou-ak-secret");
+    }
+  );
 });
 
 describe("Lingmou OpenAPI adapter", () => {
@@ -257,6 +293,7 @@ function fakeClient(response = successfulResponse()) {
 
 function resolvedModel(overrides: {
   providerType?: string;
+  modelName?: string;
   credentials?: Record<string, string>;
   providerSettings?: Record<string, unknown>;
   modelSettings?: Record<string, unknown>;
@@ -278,12 +315,14 @@ function resolvedModel(overrides: {
     providerSettings: overrides.providerSettings ?? { region: "cn-beijing" },
     modelId: "lingmou-model",
     modelDisplayName: "灵眸云渲染数字人",
-    modelName: "lingmou-2d-cloud-audio-driven",
-    modelSettings: overrides.modelSettings ?? {
+    modelName: overrides.modelName ?? "lingmou-2d-cloud-audio-driven",
+    modelSettings: {
       configId: "chat-config-id",
       instanceId: "paid-instance-id",
       renderMode: "cloud",
-      integrationMode: "audio-driven"
+      integrationMode: "audio-driven",
+      client: "web",
+      ...overrides.modelSettings
     },
     temperature: 0.4,
     maxTokens: 1200,

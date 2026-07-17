@@ -454,13 +454,14 @@ describe("AI configuration diagnostics", () => {
     providerSettings,
     modelSettings
   ) => {
+    const deps = dependencies(selectedLingmouModel({
+      credentials,
+      providerSettings,
+      modelSettings
+    }));
     const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
       liveCheck: false,
-      dependencies: dependencies(selectedLingmouModel({
-        credentials,
-        providerSettings,
-        modelSettings
-      }))
+      dependencies: deps
     });
 
     expect(result).toMatchObject({
@@ -468,6 +469,26 @@ describe("AI configuration diagnostics", () => {
       code: "LINGMOU_NOT_CONFIGURED",
       message: "灵眸未配置，当前使用本地数字人"
     });
+    expect(deps.probeTextModel).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("lingmou-ak-secret");
+  });
+
+  it("reports the wrong Lingmou adapter model as not configured without a probe", async () => {
+    const deps = dependencies(selectedLingmouModel({
+      modelName: "another-lingmou-model"
+    }));
+
+    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
+      liveCheck: true,
+      dependencies: deps
+    });
+
+    expect(result).toMatchObject({
+      status: "NOT_CONFIGURED",
+      code: "LINGMOU_NOT_CONFIGURED",
+      message: "灵眸未配置，当前使用本地数字人"
+    });
+    expect(deps.probeTextModel).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain("lingmou-ak-secret");
   });
 
@@ -613,11 +634,13 @@ function completeLingmouCredentials() {
 function selectedLingmouModel({
   credentials = completeLingmouCredentials(),
   providerSettings = {},
-  modelSettings = {}
+  modelSettings = {},
+  modelName = "lingmou-2d-cloud-audio-driven"
 }: {
   credentials?: Record<string, string>;
   providerSettings?: Record<string, unknown>;
   modelSettings?: Record<string, unknown>;
+  modelName?: string;
 } = {}) {
   return selectedModel({
     capability: "DIGITAL_HUMAN_REALTIME",
@@ -634,7 +657,7 @@ function selectedLingmouModel({
     },
     modelOverrides: {
       displayName: "灵眸 2D 云渲染音频驱动数字人",
-      modelName: "lingmou-2d-cloud-audio-driven"
+      modelName
     },
     providerOverrides: {
       displayName: "灵眸数字人",
