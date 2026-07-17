@@ -8,7 +8,10 @@ import {
   startDigitalHumanSessionReaper,
   stopAllActiveDigitalHumanSessions
 } from "@/lib/media/digitalHumanSessions";
-import { createServerShutdown } from "@/lib/server/lifecycle";
+import {
+  createServerShutdown,
+  registerServerShutdownSignals
+} from "@/lib/server/lifecycle";
 
 function readPort(value: string | undefined) {
   const port = Number(value ?? "3000");
@@ -85,11 +88,9 @@ async function main() {
     warn: (code) => console.warn(code)
   });
 
-  process.once("SIGINT", () => {
-    void shutdown().finally(() => process.exit(0));
-  });
-  process.once("SIGTERM", () => {
-    void shutdown().finally(() => process.exit(0));
+  registerServerShutdownSignals({
+    shutdown,
+    exit: (code) => process.exit(code)
   });
 
   server.listen(port, hostname, () => {

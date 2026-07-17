@@ -119,6 +119,7 @@ const nonStoppedStatuses = [...activeStatuses, "FAILED"] as const;
 const expiresAfterMs = 15 * 60_000;
 const idleAfterMs = 60_000;
 const trainingSessionCreationLocks = new Map<string, Promise<void>>();
+const inFlightSessionStops = new Map<string, Promise<void>>();
 
 const allowedTransitions: Record<
   DigitalHumanSessionStatus,
@@ -365,29 +366,6 @@ export function createDigitalHumanSessionService(
 ) {
   const deps = { ...defaultDependencies(), ...overrides };
 
-  async function waitForConcurrentStop(
-    id: string,
-    reason: string
-  ): Promise<void> {
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      const current = await deps.repository.findSession(id);
-      if (current?.status === "STOPPED") return;
-      if (current?.status === "FAILED") {
-        return stopDigitalHumanSession(id, reason);
-      }
-      if (!current || current.status !== "STOPPING") break;
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 10);
-        timer.unref?.();
-      });
-    }
-    throw new DigitalHumanSessionError(
-      "Digital human session is changing state",
-      "DIGITAL_HUMAN_STATE_CONFLICT",
-      409
-    );
-  }
-
   async function transition(
     record: DigitalHumanSessionRecord,
     to: DigitalHumanSessionStatus,
@@ -450,7 +428,7 @@ export function createDigitalHumanSessionService(
     }
   }
 
-  async function stopDigitalHumanSession(
+  async function stopDigitalHumanSessionWork(
     id: string,
     reason: string
   ): Promise<void> {
@@ -467,7 +445,11 @@ export function createDigitalHumanSessionService(
       return;
     }
     if (record.status === "STOPPING") {
-      return waitForConcurrentStop(id, normalizedReason);
+      throw new DigitalHumanSessionError(
+        "Digital human session is changing state",
+        "DIGITAL_HUMAN_STATE_CONFLICT",
+        409
+      );
     }
 
     const stopping = await transition(record, "STOPPING", {
@@ -482,7 +464,11 @@ export function createDigitalHumanSessionService(
         return;
       }
       if (current?.status === "STOPPING") {
-        return waitForConcurrentStop(id, normalizedReason);
+        throw new DigitalHumanSessionError(
+          "Digital human session is changing state",
+          "DIGITAL_HUMAN_STATE_CONFLICT",
+          409
+        );
       }
       throw new DigitalHumanSessionError(
         "Digital human session is changing state",
@@ -536,6 +522,27 @@ export function createDigitalHumanSessionService(
         503
       );
     }
+  }
+
+  function stopDigitalHumanSession(id: string, reason: string): Promise<void> {
+    const existing = inFlightSessionStops.get(id);
+    if (existing) return existing;
+
+    const pending = stopDigitalHumanSessionWork(id, reason);
+    inFlightSessionStops.set(id, pending);
+    void pending.then(
+      () => {
+        if (inFlightSessionStops.get(id) === pending) {
+          inFlightSessionStops.delete(id);
+        }
+      },
+      () => {
+        if (inFlightSessionStops.get(id) === pending) {
+          inFlightSessionStops.delete(id);
+        }
+      }
+    );
+    return pending;
   }
 
   async function stopDigitalHumanSessionsForTrainingSession(
@@ -832,7 +839,9 @@ export async function failUnrecoverableDigitalHumanSessions(now?: Date) {
   return defaultService().failUnrecoverableDigitalHumanSessions(now);
 }
 
-let activeReaperStop: (() => void) | null = null;
+type DigitalHumanSessionReaperStop = () => Promise<void>;
+
+let activeReaperStop: DigitalHumanSessionReaperStop | null = null;
 
 export function startDigitalHumanSessionReaper(options: {
   intervalMs?: number;
@@ -840,26 +849,36 @@ export function startDigitalHumanSessionReaper(options: {
 } = {}) {
   if (activeReaperStop) return activeReaperStop;
 
-  let running = false;
+  let activeTick: Promise<void> | null = null;
   let stopped = false;
   const interval = setInterval(() => {
-    if (running || stopped) return;
-    running = true;
-    void stopIdleDigitalHumanSessions(options.now?.())
+    if (activeTick || stopped) return;
+    const tick = stopIdleDigitalHumanSessions(options.now?.())
+      .then(() => undefined)
       .catch(() => {
         console.warn("DIGITAL_HUMAN_REAPER_FAILED");
       })
       .finally(() => {
-        running = false;
+        if (activeTick === tick) activeTick = null;
       });
+    activeTick = tick;
   }, options.intervalMs ?? 30_000);
   interval.unref?.();
 
+  let drain: Promise<void> | null = null;
   const stop = () => {
-    if (stopped) return;
+    if (drain) return drain;
     stopped = true;
     clearInterval(interval);
-    if (activeReaperStop === stop) activeReaperStop = null;
+    if (!activeTick) {
+      if (activeReaperStop === stop) activeReaperStop = null;
+      drain = Promise.resolve();
+      return drain;
+    }
+    drain = activeTick.finally(() => {
+      if (activeReaperStop === stop) activeReaperStop = null;
+    });
+    return drain;
   };
   activeReaperStop = stop;
   return stop;

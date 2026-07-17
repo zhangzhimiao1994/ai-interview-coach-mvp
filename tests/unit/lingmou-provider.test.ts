@@ -242,6 +242,48 @@ describe("Lingmou OpenAPI adapter", () => {
     });
   });
 
+  it("compensating-closes a real session id when the RTC DTO is invalid", async () => {
+    const response = successfulResponse();
+    Reflect.deleteProperty(response.body.data.rtcParams, "token");
+    const client = fakeClient(response);
+    const provider = createLingmouProvider(resolvedModel(), {
+      createClient: () => client,
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.createSession()).rejects.toMatchObject({
+      name: "MediaProviderError",
+      code: "LINGMOU_UPSTREAM_FAILED"
+    });
+    expect(client.closeChatInstanceSessions).toHaveBeenCalledWith(
+      "paid-instance-id",
+      expect.objectContaining({ sessionIds: ["provider-session-id"] })
+    );
+  });
+
+  it("reports a safe operational code when invalid-RTC compensation close fails", async () => {
+    const response = successfulResponse();
+    Reflect.deleteProperty(response.body.data.rtcParams, "token");
+    const client = fakeClient(response);
+    client.closeChatInstanceSessions.mockRejectedValue({
+      statusCode: 403,
+      message: "raw-compensation-close-secret"
+    });
+    const provider = createLingmouProvider(resolvedModel(), {
+      createClient: () => client,
+      readConfigSecret: () => configSecret
+    });
+
+    const caught = await provider.createSession().catch((error: unknown) => error);
+
+    expect(caught).toMatchObject({
+      name: "MediaProviderError",
+      code: "LINGMOU_CREATE_COMPENSATION_CLOSE_FAILED"
+    });
+    expect(String(caught)).not.toContain("raw-compensation-close-secret");
+    expect(JSON.stringify(caught)).not.toContain("raw-compensation-close-secret");
+  });
+
   it("closes exactly the requested provider session once per adapter call", async () => {
     const client = fakeClient();
     const provider = createLingmouProvider(resolvedModel(), {

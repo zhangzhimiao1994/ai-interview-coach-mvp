@@ -6,6 +6,7 @@ import {
   isValidDigitalHumanSessionTransition,
   startDigitalHumanSessionReaper
 } from "@/lib/media/digitalHumanSessions";
+import { createServerShutdown } from "@/lib/server/lifecycle";
 
 type RecordRow = {
   id: string;
@@ -124,14 +125,16 @@ function harness(initial: RecordRow[] = []) {
   };
   const resolveRealtimeModel = vi.fn().mockResolvedValue(realtimeModel());
   const provider = { createSession, closeSession };
+  const createProvider = vi.fn(() => provider);
   const createSessionCloser = vi.fn(() => ({ closeSession }));
-  const service = createDigitalHumanSessionService({
+  const serviceDependencies = {
     repository,
     resolveRealtimeModel,
-    createProvider: vi.fn(() => provider),
+    createProvider,
     createSessionCloser,
     now: () => now
-  });
+  };
+  const service = createDigitalHumanSessionService(serviceDependencies);
 
   return {
     rows,
@@ -139,6 +142,7 @@ function harness(initial: RecordRow[] = []) {
     resolveRealtimeModel,
     provider,
     createSessionCloser,
+    serviceDependencies,
     service
   };
 }
@@ -576,5 +580,97 @@ describe("digital human session lifecycle", () => {
     ]);
     expect(provider.closeSession).toHaveBeenCalledOnce();
     expect(rows.get("digital-1")?.status).toBe("STOPPED");
+  });
+
+  it("shares the actual in-flight close promise across service instances beyond 500ms", async () => {
+    vi.useFakeTimers();
+    const cloud = row({
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-session-1",
+      instanceId: "instance-id"
+    });
+    const { rows, provider, service, serviceDependencies } = harness([cloud]);
+    const otherService = createDigitalHumanSessionService(serviceDependencies);
+    let releaseClose: () => void = () => undefined;
+    provider.closeSession.mockImplementation(
+      () => new Promise<void>((resolve) => { releaseClose = resolve; })
+    );
+
+    const first = service.stopDigitalHumanSession("digital-1", "IDLE_TIMEOUT");
+    await vi.advanceTimersByTimeAsync(0);
+    const second = otherService.stopDigitalHumanSession(
+      "digital-1",
+      "SERVER_SHUTDOWN"
+    );
+    const samePromise = second === first;
+    let secondOutcome = "pending";
+    const trackedSecond = second.then(
+      () => { secondOutcome = "fulfilled"; },
+      () => { secondOutcome = "rejected"; }
+    );
+
+    await vi.advanceTimersByTimeAsync(600);
+    const outcomeBeforeRelease = secondOutcome;
+    releaseClose();
+    await vi.advanceTimersByTimeAsync(0);
+    await first;
+    await trackedSecond;
+    vi.useRealTimers();
+
+    expect(samePromise).toBe(true);
+    expect(outcomeBeforeRelease).toBe("pending");
+    expect(provider.closeSession).toHaveBeenCalledOnce();
+    expect(rows.get("digital-1")?.status).toBe("STOPPED");
+  });
+
+  it("does not close the app while a reaper-owned SDK close is still draining", async () => {
+    vi.useFakeTimers();
+    const cloud = row({
+      mode: "LINGMOU_CLOUD",
+      providerId: "lingmou-provider",
+      providerSessionId: "provider-session-1",
+      instanceId: "instance-id",
+      lastActivityAt: new Date(now.getTime() - 120_000)
+    });
+    const {
+      repository,
+      provider,
+      service,
+      serviceDependencies
+    } = harness([cloud]);
+    repository.findIdleSessions.mockResolvedValue([cloud]);
+    const shutdownService = createDigitalHumanSessionService(
+      serviceDependencies
+    );
+    let releaseClose: () => void = () => undefined;
+    provider.closeSession.mockImplementation(
+      () => new Promise<void>((resolve) => { releaseClose = resolve; })
+    );
+    const reaperTick = service.stopIdleDigitalHumanSessions(now);
+    await vi.advanceTimersByTimeAsync(0);
+    const closeApp = vi.fn().mockResolvedValue(undefined);
+    const shutdown = createServerShutdown({
+      stopReaper: () => reaperTick,
+      closeWebSockets: vi.fn().mockResolvedValue(undefined),
+      stopHttpAccept: vi.fn().mockResolvedValue(undefined),
+      stopCloudSessions: () =>
+        shutdownService.stopAllActiveDigitalHumanSessions("SERVER_SHUTDOWN"),
+      closeApp,
+      warn: vi.fn(),
+      timeoutMs: 2_000
+    });
+
+    const pendingShutdown = shutdown();
+    await vi.advanceTimersByTimeAsync(600);
+    const appClosedBeforeRelease = closeApp.mock.calls.length > 0;
+    releaseClose();
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all([reaperTick, pendingShutdown]);
+    vi.useRealTimers();
+
+    expect(appClosedBeforeRelease).toBe(false);
+    expect(provider.closeSession).toHaveBeenCalledOnce();
+    expect(closeApp).toHaveBeenCalledOnce();
   });
 });
