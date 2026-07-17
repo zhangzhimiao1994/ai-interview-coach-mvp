@@ -4,7 +4,7 @@ import { Cpu, KeyRound, Plus, Route, Server, Star, Trash2 } from "lucide-react";
 import React from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { AlibabaProviderFields, CapabilitySettings } from "./AiMultimodalConfigFields";
+import { AlibabaProviderFields, CapabilitySettings, LingmouProviderFields } from "./AiMultimodalConfigFields";
 import { modelSettingsFromForm } from "@/lib/domain/aiModelSettings";
 import {
   aiCapabilities,
@@ -67,6 +67,7 @@ const providerTypeLabels: Record<AiProviderType, string> = {
   AZURE_OPENAI: "Azure OpenAI",
   DEEPSEEK: "DeepSeek",
   TONGYI: "通义千问 / 百炼",
+  LINGMOU: "灵眸数字人",
   VOLCANO_ARK: "火山方舟",
   ZHIPU: "智谱",
   MINIMAX: "MiniMax",
@@ -174,21 +175,28 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
     const payload = {
       displayName: String(form.get("displayName") || ""),
       providerType,
-      baseUrl,
-      apiKey: String(form.get("apiKey") || ""),
+      ...(providerType !== "TONGYI" && providerType !== "LINGMOU" ? {
+        baseUrl,
+        apiKey: String(form.get("apiKey") || "")
+      } : {}),
       credentials: providerType === "TONGYI"
-          ? nonEmptyEntries({
+        ? nonEmptyEntries({
             asrApiKey: String(form.get("asrApiKey") || ""),
-            ttsApiKey: String(form.get("ttsApiKey") || ""),
-            rtcAppKey: String(form.get("rtcAppKey") || "")
+            ttsApiKey: String(form.get("ttsApiKey") || "")
           })
+        : providerType === "LINGMOU"
+          ? nonEmptyEntries({
+              accessKeyId: String(form.get("accessKeyId") || ""),
+              accessKeySecret: String(form.get("accessKeySecret") || "")
+            })
         : {},
       settings: providerType === "TONGYI"
         ? nonEmptyEntries({
             region: String(form.get("region") || "cn-beijing"),
-            workspaceId: String(form.get("workspaceId") || ""),
-            rtcAppId: String(form.get("rtcAppId") || "")
+            workspaceId: String(form.get("workspaceId") || "")
           })
+        : providerType === "LINGMOU"
+          ? nonEmptyEntries({ region: String(form.get("region") || "cn-beijing") })
         : {},
       enabled: form.get("enabled") === "on",
       notes: String(form.get("notes") || "")
@@ -440,15 +448,20 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                 ))}
               </select>
             </label>
-            <Field
-              label="Base URL"
-              name="baseUrl"
-              placeholder="https://api.example.com/v1"
-              value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
-            />
-            <Field label="API Key" name="apiKey" type="password" placeholder="保存后仅显示掩码" />
+            {providerType !== "TONGYI" && providerType !== "LINGMOU" ? (
+              <>
+                <Field
+                  label="Base URL"
+                  name="baseUrl"
+                  placeholder="https://api.example.com/v1"
+                  value={baseUrl}
+                  onChange={(event) => setBaseUrl(event.target.value)}
+                />
+                <Field label="API Key" name="apiKey" type="password" placeholder="保存后仅显示掩码" />
+              </>
+            ) : null}
             {providerType === "TONGYI" ? <AlibabaProviderFields /> : null}
+            {providerType === "LINGMOU" ? <LingmouProviderFields /> : null}
             <Field label="备注" name="notes" placeholder="适合报告分析、备用模型等" />
             <label className="flex items-center gap-2 text-sm text-ink">
               <input name="enabled" type="checkbox" defaultChecked />

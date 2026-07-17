@@ -10,14 +10,19 @@ export function modelSettingsFromForm(capability: AiCapability, form: FormData) 
       };
     case "TEXT_TO_SPEECH":
       return {
-        voice: String(form.get("voice") || "Cherry"),
-        instructions: String(form.get("instructions") || "")
+        voice: String(form.get("voice") || "longanhuan"),
+        format: String(form.get("format") || "pcm"),
+        sampleRate: Number(form.get("sampleRate") || 48000),
+        channels: Number(form.get("channels") || 1),
+        instruction: String(form.get("instruction") || "你说话的情感是 neutral.")
       };
     case "DIGITAL_HUMAN_REALTIME":
       return {
-        avatarId: String(form.get("avatarId") || ""),
-        voiceId: String(form.get("voiceId") || ""),
-        rtcMode: String(form.get("rtcMode") || "web")
+        configId: String(form.get("configId") || ""),
+        instanceId: String(form.get("instanceId") || ""),
+        renderMode: "cloud",
+        integrationMode: "audio-driven",
+        client: "web"
       };
     case "VISION_BEHAVIOR_ANALYSIS":
       return {

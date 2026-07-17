@@ -1,17 +1,28 @@
 import React from "react";
 import type { AiCapability } from "@/lib/domain/aiServiceConstants";
 
-export function AlibabaProviderFields() {
+export function AlibabaProviderFields(): React.JSX.Element {
   return (
     <div className="grid gap-4 rounded-md border border-line p-4">
-      <h3 className="text-sm font-medium text-ink">阿里百炼与 Avatar 参数</h3>
+      <h3 className="text-sm font-medium text-ink">阿里百炼专用凭据</h3>
       <div className="grid gap-3 sm:grid-cols-2">
         <ConfigField label="地域" name="region" defaultValue="cn-beijing" />
         <ConfigField label="Workspace ID" name="workspaceId" placeholder="语音识别和合成必填" />
-        <ConfigField label="RTC App ID" name="rtcAppId" placeholder="实时数字人使用" />
-        <ConfigField label="ASR API Key" name="asrApiKey" type="password" placeholder="留空则使用主 API Key" />
-        <ConfigField label="TTS API Key" name="ttsApiKey" type="password" placeholder="留空则使用主 API Key" />
-        <ConfigField label="RTC App Key" name="rtcAppKey" type="password" placeholder="加密保存" />
+        <ConfigField label="ASR API Key" name="asrApiKey" type="password" placeholder="加密保存" />
+        <ConfigField label="TTS API Key" name="ttsApiKey" type="password" placeholder="加密保存" />
+      </div>
+    </div>
+  );
+}
+
+export function LingmouProviderFields(): React.JSX.Element {
+  return (
+    <div className="grid gap-4 rounded-md border border-line p-4">
+      <h3 className="text-sm font-medium text-ink">灵眸 RAM 凭据</h3>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <ConfigField label="地域" name="region" defaultValue="cn-beijing" />
+        <ConfigField label="AccessKey ID" name="accessKeyId" type="password" />
+        <ConfigField label="AccessKey Secret" name="accessKeySecret" type="password" />
       </div>
     </div>
   );
@@ -31,8 +42,11 @@ export function CapabilitySettings({ capability }: { capability: AiCapability })
   if (capability === "TEXT_TO_SPEECH") {
     return (
       <SettingsGrid>
-        <ConfigField label="音色" name="voice" defaultValue="Cherry" />
-        <ConfigField label="默认语气指令（可选）" name="instructions" defaultValue="语气专业、自然、清晰。" />
+        <ConfigField label="音色" name="voice" defaultValue="longanhuan" />
+        <ConfigField label="音频格式" name="format" defaultValue="pcm" readOnly />
+        <ConfigField label="采样率" name="sampleRate" type="number" defaultValue={48000} readOnly />
+        <ConfigField label="声道数" name="channels" type="number" defaultValue={1} readOnly />
+        <ConfigField label="默认情感指令" name="instruction" defaultValue="你说话的情感是 neutral." />
       </SettingsGrid>
     );
   }
@@ -40,9 +54,11 @@ export function CapabilitySettings({ capability }: { capability: AiCapability })
   if (capability === "DIGITAL_HUMAN_REALTIME") {
     return (
       <SettingsGrid>
-        <ConfigField label="Avatar ID" name="avatarId" placeholder="阿里云数字人形象 ID" />
-        <ConfigField label="Voice ID" name="voiceId" placeholder="数字人音色 ID" />
-        <ConfigField label="RTC 模式" name="rtcMode" defaultValue="web" />
+        <ConfigField label="配置 ID" name="configId" placeholder="灵眸数字人配置 ID" />
+        <ConfigField label="实例 ID" name="instanceId" placeholder="灵眸数字人实例 ID" />
+        <ConfigField label="渲染模式" name="renderMode" defaultValue="cloud" readOnly />
+        <ConfigField label="集成模式" name="integrationMode" defaultValue="audio-driven" readOnly />
+        <ConfigField label="客户端" name="client" defaultValue="web" readOnly />
       </SettingsGrid>
     );
   }

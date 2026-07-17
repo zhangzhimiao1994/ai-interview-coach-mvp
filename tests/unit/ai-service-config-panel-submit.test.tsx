@@ -101,6 +101,69 @@ describe("AI service configuration form submissions", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("模型配置已保存。");
     expect(JSON.stringify(renderer.toJSON())).not.toContain("服务不可达，请稍后重试。");
   });
+
+  it("submits only Bailian ASR/TTS credentials and workspace settings for TONGYI", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ provider: { ...provider, id: "tongyi" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await selectProviderType("TONGYI");
+
+    await act(async () => {
+      await renderer.root.findAllByType("form")[0].props.onSubmit(releasedSubmitEvent({
+        displayName: "Bailian",
+        apiKey: "must-not-submit",
+        asrApiKey: "asr-key",
+        ttsApiKey: "tts-key",
+        workspaceId: "workspace-1",
+        region: "cn-beijing",
+        rtcAppId: "must-not-submit",
+        rtcAppKey: "must-not-submit",
+        enabled: "on"
+      }, vi.fn()));
+    });
+
+    expect(requestPayload(fetchMock)).toMatchObject({
+      providerType: "TONGYI",
+      credentials: { asrApiKey: "asr-key", ttsApiKey: "tts-key" },
+      settings: { workspaceId: "workspace-1", region: "cn-beijing" }
+    });
+    expect(requestPayload(fetchMock)).not.toHaveProperty("apiKey");
+    expect(requestPayload(fetchMock).credentials).not.toHaveProperty("rtcAppKey");
+    expect(requestPayload(fetchMock).settings).not.toHaveProperty("rtcAppId");
+  });
+
+  it("submits only Lingmou RAM credentials and region for LINGMOU", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ provider: { ...provider, id: "lingmou" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await selectProviderType("LINGMOU");
+
+    await act(async () => {
+      await renderer.root.findAllByType("form")[0].props.onSubmit(releasedSubmitEvent({
+        displayName: "Lingmou",
+        apiKey: "must-not-submit",
+        accessKeyId: "ak-id",
+        accessKeySecret: "ak-secret",
+        region: "cn-beijing",
+        workspaceId: "must-not-submit",
+        rtcAppKey: "must-not-submit",
+        enabled: "on"
+      }, vi.fn()));
+    });
+
+    expect(requestPayload(fetchMock)).toEqual(expect.objectContaining({
+      providerType: "LINGMOU",
+      credentials: { accessKeyId: "ak-id", accessKeySecret: "ak-secret" },
+      settings: { region: "cn-beijing" }
+    }));
+    expect(requestPayload(fetchMock)).not.toHaveProperty("apiKey");
+    expect(requestPayload(fetchMock).credentials).not.toHaveProperty("asrApiKey");
+    expect(requestPayload(fetchMock).settings).not.toHaveProperty("workspaceId");
+  });
+
+  async function selectProviderType(providerType: "TONGYI" | "LINGMOU") {
+    await act(async () => {
+      renderer.root.findByProps({ name: "providerType" }).props.onChange({ target: { value: providerType } });
+    });
+  }
 });
 
 const provider = {
@@ -131,4 +194,8 @@ function jsonResponse(payload: unknown) {
     status: 201,
     headers: { "Content-Type": "application/json" }
   });
+}
+
+function requestPayload(fetchMock: ReturnType<typeof vi.fn>) {
+  return JSON.parse(fetchMock.mock.calls[0][1].body);
 }

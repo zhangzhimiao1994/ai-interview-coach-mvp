@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { aiCapabilities } from "@/lib/domain/aiServiceConstants";
+import { aiCapabilities, aiProviderTypes } from "@/lib/domain/aiServiceConstants";
 import { modelRecommendationGroups } from "@/lib/domain/modelRecommendations";
 
 describe("model recommendation matrix", () => {
@@ -48,7 +48,7 @@ describe("model recommendation matrix", () => {
     expect(source).toContain("添加参考");
   });
 
-  it("uses the agreed editable Alibaba media model references", () => {
+  it("uses separate Bailian CosyVoice and Lingmou digital-human references", () => {
     const recommendations = modelRecommendationGroups.flatMap((group) => group.recommendations);
 
     expect(recommendations).toEqual(expect.arrayContaining([
@@ -60,12 +60,12 @@ describe("model recommendation matrix", () => {
       expect.objectContaining({
         capability: "TEXT_TO_SPEECH",
         providerType: "TONGYI",
-        modelName: "qwen3-tts-instruct-flash"
+        modelName: "cosyvoice-v3-flash"
       }),
       expect.objectContaining({
         capability: "DIGITAL_HUMAN_REALTIME",
-        providerType: "TONGYI",
-        modelName: "avatar-dialog"
+        providerType: "LINGMOU",
+        modelName: "lingmou-2d-cloud-audio-driven"
       }),
       expect.objectContaining({
         capability: "VISION_BEHAVIOR_ANALYSIS",
@@ -75,7 +75,7 @@ describe("model recommendation matrix", () => {
     ]));
   });
 
-  it("exposes Alibaba provider and capability-specific settings in the admin form", () => {
+  it("exposes separate Bailian, Lingmou, and runtime-aligned capability settings", () => {
     const source = [
       "components/admin/AiServiceConfigPanel.tsx",
       "components/admin/AiMultimodalConfigFields.tsx",
@@ -84,13 +84,19 @@ describe("model recommendation matrix", () => {
 
     for (const field of [
       "workspaceId",
-      "rtcAppId",
       "asrApiKey",
       "ttsApiKey",
-      "rtcAppKey",
+      "accessKeyId",
+      "accessKeySecret",
       "sampleRate",
-      "instructions",
-      "avatarId",
+      "format",
+      "channels",
+      "instruction",
+      "configId",
+      "instanceId",
+      "renderMode",
+      "integrationMode",
+      "client",
       "minimumConfidence",
       "frameIntervalMs"
     ]) {
@@ -98,5 +104,6 @@ describe("model recommendation matrix", () => {
     }
     expect(source).toContain("credentials:");
     expect(source).toContain("settings:");
+    expect(aiProviderTypes).toContain("LINGMOU");
   });
 });

@@ -5,7 +5,7 @@ type SeedAiModelClient = {
   };
 };
 
-type SeedAlibabaMediaClient = {
+export type SeedAlibabaMediaClient = {
   aiServiceProvider: {
     findFirst(args: unknown): Promise<{ id: string } | null>;
   };
@@ -14,6 +14,8 @@ type SeedAlibabaMediaClient = {
     create(args: unknown): Promise<unknown>;
   };
 };
+
+export type SeedLingmouMediaClient = SeedAlibabaMediaClient;
 
 const mockCapabilities = [
   ["mock-outline", "面试提纲 Mock", "mock-outline", "INTERVIEW_OUTLINE"],
@@ -31,17 +33,16 @@ const alibabaMediaReferences = [
   },
   {
     seedKey: "text-to-speech",
-    displayName: "阿里百炼 非实时语音合成",
-    modelName: "qwen3-tts-instruct-flash",
+    displayName: "阿里百炼 CosyVoice 语音合成",
+    modelName: "cosyvoice-v3-flash",
     capability: "TEXT_TO_SPEECH",
-    settings: { voice: "Cherry", instructions: "语气专业、自然、清晰。" }
-  },
-  {
-    seedKey: "digital-human-realtime",
-    displayName: "阿里云 Avatar 实时数字人",
-    modelName: "avatar-dialog",
-    capability: "DIGITAL_HUMAN_REALTIME",
-    settings: { avatarId: "", voiceId: "", rtcMode: "web" }
+    settings: {
+      voice: "longanhuan",
+      format: "pcm",
+      sampleRate: 48000,
+      channels: 1,
+      instruction: "你说话的情感是 neutral."
+    }
   },
   {
     seedKey: "behavior-analysis",
@@ -51,6 +52,20 @@ const alibabaMediaReferences = [
     settings: { minimumConfidence: 0.6, frameIntervalMs: 1000, maxFrames: 12 }
   }
 ] as const;
+
+const lingmouReference = {
+  seedKey: "digital-human-realtime",
+  displayName: "灵眸 2D 云渲染音频驱动数字人",
+  modelName: "lingmou-2d-cloud-audio-driven",
+  capability: "DIGITAL_HUMAN_REALTIME",
+  settings: {
+    configId: "",
+    instanceId: "",
+    renderMode: "cloud",
+    integrationMode: "audio-driven",
+    client: "web"
+  }
+} as const;
 
 export async function seedMockAiModels(prisma: SeedAiModelClient) {
   for (const [id, displayName, modelName, capability] of mockCapabilities) {
@@ -91,7 +106,7 @@ export async function seedMockAiModels(prisma: SeedAiModelClient) {
   }
 }
 
-export async function seedAlibabaMediaModels(prisma: SeedAlibabaMediaClient) {
+export async function seedAlibabaMediaModels(prisma: SeedAlibabaMediaClient): Promise<void> {
   const provider = await prisma.aiServiceProvider.findFirst({
     where: { providerType: "TONGYI", enabled: true },
     orderBy: { createdAt: "asc" },
@@ -126,7 +141,7 @@ export async function seedAlibabaMediaModels(prisma: SeedAlibabaMediaClient) {
         capability: reference.capability,
         temperature: 0.2,
         maxTokens: 1200,
-        timeoutMs: reference.capability === "DIGITAL_HUMAN_REALTIME" ? 60000 : 45000,
+        timeoutMs: 45000,
         settingsJson: JSON.stringify(reference.settings),
         enabled: true,
         isDefault: recommended === null,
@@ -134,4 +149,47 @@ export async function seedAlibabaMediaModels(prisma: SeedAlibabaMediaClient) {
       }
     });
   }
+}
+
+export async function seedLingmouDigitalHumanModels(prisma: SeedLingmouMediaClient): Promise<void> {
+  const provider = await prisma.aiServiceProvider.findFirst({
+    where: { providerType: "LINGMOU", enabled: true },
+    orderBy: { createdAt: "asc" },
+    select: { id: true }
+  });
+
+  if (!provider) {
+    return;
+  }
+
+  const existing = await prisma.aiModelConfig.findFirst({
+    where: { id: `lingmou-media-${provider.id}-${lingmouReference.seedKey}` },
+    select: { id: true }
+  });
+
+  if (existing) {
+    return;
+  }
+
+  const recommended = await prisma.aiModelConfig.findFirst({
+    where: { capability: lingmouReference.capability, isDefault: true },
+    select: { id: true }
+  });
+
+  await prisma.aiModelConfig.create({
+    data: {
+      id: `lingmou-media-${provider.id}-${lingmouReference.seedKey}`,
+      providerId: provider.id,
+      displayName: lingmouReference.displayName,
+      modelName: lingmouReference.modelName,
+      capability: lingmouReference.capability,
+      temperature: 0.2,
+      maxTokens: 1200,
+      timeoutMs: 60000,
+      settingsJson: JSON.stringify(lingmouReference.settings),
+      enabled: true,
+      isDefault: recommended === null,
+      isSelected: false
+    }
+  });
 }

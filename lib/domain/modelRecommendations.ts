@@ -19,7 +19,7 @@ export type ModelRecommendationGroup = {
   recommendations: ModelRecommendation[];
 };
 
-export const modelRecommendationLastUpdated = "2026-07-16";
+export const modelRecommendationLastUpdated = "2026-07-17";
 
 export const modelRecommendationGroups: ModelRecommendationGroup[] = [
   {
@@ -114,22 +114,22 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         capability: "TEXT_TO_SPEECH",
         providerType: "TONGYI",
         providerName: "阿里百炼",
-        modelName: "qwen3-tts-instruct-flash",
-        fit: "中文面试官非实时语音合成参考模型，可配置音色和自然语言语气指令。",
+        modelName: "cosyvoice-v3-flash",
+        fit: "中文面试官 CosyVoice 语音合成参考模型，使用 48k PCM 单声道输出。",
         priceNote: "约 0.8 元/万字符；以阿里百炼价格页为准。",
-        howToUse: "添加后设为语音合成的当前使用模型，由 /api/digital-human/speech 通过 HTTP 返回可播放音频。",
+        howToUse: "添加后设为语音合成的当前使用模型，并配置音色、格式、采样率、声道和情感指令。",
         suggestedTemperature: 0.2,
         suggestedMaxTokens: 1000,
         suggestedTimeoutMs: 30000
       },
       {
         capability: "DIGITAL_HUMAN_REALTIME",
-        providerType: "TONGYI",
-        providerName: "阿里云 Avatar",
-        modelName: "avatar-dialog",
-        fit: "阿里云实时数字人对话参考能力，可配置数字人形象、音色和 RTC 模式。",
-        priceNote: "按阿里云数字人及 RTC 实际开通规格计费，以阿里云控制台为准。",
-        howToUse: "配置为实时数字人的当前使用模型，并填写 Avatar ID、RTC App ID 与 RTC App Key。",
+        providerType: "LINGMOU",
+        providerName: "灵眸",
+        modelName: "lingmou-2d-cloud-audio-driven",
+        fit: "2D 云渲染音频驱动数字人参考能力，使用灵眸 RAM 凭据。",
+        priceNote: "按灵眸数字人实际开通规格计费，以阿里云控制台为准。",
+        howToUse: "配置为实时数字人的当前使用模型，并填写配置 ID 和实例 ID。",
         suggestedTemperature: 0.3,
         suggestedMaxTokens: 1200,
         suggestedTimeoutMs: 60000
