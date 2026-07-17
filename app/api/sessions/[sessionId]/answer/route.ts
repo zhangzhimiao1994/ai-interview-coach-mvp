@@ -5,6 +5,10 @@ import { resolveAiProviderLabel } from "@/lib/ai/configResolver";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { behaviorSignalsSchema } from "@/lib/domain/behaviorSignals";
+import {
+  parseSavedOutline,
+  resolveSessionQuestion
+} from "@/lib/domain/trainingQuestions";
 import { trainingStageTypes } from "@/lib/domain/stages";
 import type { SessionTurnInput, TrainingOutline } from "@/lib/ai";
 
@@ -29,51 +33,20 @@ const answerSchema = z
   })
   .strict();
 
-function parseSavedOutline(outlineJson: string | null): TrainingOutline | null {
-  if (!outlineJson) {
-    return null;
-  }
-
-  try {
-    const outline = JSON.parse(outlineJson) as TrainingOutline;
-
-    return Array.isArray(outline.questions) ? outline : null;
-  } catch {
-    return null;
-  }
-}
-
 function matchesSavedQuestion(
   input: z.infer<typeof answerSchema>,
   outline: TrainingOutline,
   turns: Array<{ questionId: string | null; stage: string; feedback: string | null }>
 ) {
-  const savedQuestion = outline.questions.find((question) => question.id === input.questionId);
-
-  if (savedQuestion) {
-    return savedQuestion.stage === input.stage && savedQuestion.prompt === input.question;
-  }
-
-  const match = input.questionId.match(/^(.*)::follow-up::1$/);
-
-  if (!match) {
-    return false;
-  }
-
-  const parentQuestion = outline.questions.find((question) => question.id === match[1]);
-  const parentTurn = turns.find((turn) => turn.questionId === match[1]);
-
-  if (!parentQuestion || !parentTurn || parentTurn.stage !== input.stage || !parentTurn.feedback) {
-    return false;
-  }
-
-  try {
-    const feedback = JSON.parse(parentTurn.feedback) as { followUpQuestion?: unknown };
-
-    return typeof feedback.followUpQuestion === "string" && feedback.followUpQuestion === input.question;
-  } catch {
-    return false;
-  }
+  const savedQuestion = resolveSessionQuestion(
+    outline,
+    input.questionId,
+    turns
+  );
+  return (
+    savedQuestion?.stage === input.stage &&
+    savedQuestion.prompt === input.question
+  );
 }
 
 export async function POST(request: Request, context: RouteContext) {

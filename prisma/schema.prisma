@@ -115,9 +115,33 @@ model TrainingSession {
   turns        SessionTurn[]
   report       CoachingReport?
   aiCalls      AiCallLog[]
+  digitalHumanSessions DigitalHumanSession[]
 
   @@index([taskId])
   @@index([candidateId])
+}
+
+model DigitalHumanSession {
+  id                String          @id @default(cuid())
+  trainingSessionId String
+  trainingSession   TrainingSession @relation(fields: [trainingSessionId], references: [id], onDelete: Cascade)
+  providerId        String?
+  modelId           String?
+  adapter           String
+  mode              String
+  providerSessionId String?
+  instanceId        String?
+  status            String          @default("CONNECTING")
+  lastActivityAt    DateTime        @default(now())
+  expiresAt         DateTime
+  endedAt           DateTime?
+  stopReason        String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([trainingSessionId])
+  @@index([status, lastActivityAt])
+  @@index([providerSessionId])
 }
 
 model SessionTurn {
