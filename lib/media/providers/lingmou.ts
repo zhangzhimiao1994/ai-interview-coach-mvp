@@ -3,6 +3,7 @@ import LingMouClient, {
   CreateChatSessionRequest
 } from "@alicloud/lingmou20250527";
 import { $OpenApiUtil } from "@alicloud/openapi-core";
+import type { LingmouRtcConnection } from "@/lib/client/lingmouRtcConnection";
 import { readAiConfigSecret } from "@/lib/domain/aiServices";
 import type { ResolvedMediaModel } from "@/lib/media/config";
 import { MediaProviderError } from "@/lib/media/errors";
@@ -13,16 +14,7 @@ import {
   type LingmouCloseCredentials
 } from "@/lib/media/providers/lingmouCredentials";
 
-export type LingmouRtcConnection = {
-  appId: string;
-  avatarUserId: string;
-  channel: string;
-  clientUserId: string;
-  serverUserId: string;
-  timestamp: number;
-  token: string;
-  sessionId: string;
-};
+export type { LingmouRtcConnection } from "@/lib/client/lingmouRtcConnection";
 
 export interface LingmouProvider {
   createSession(): Promise<{
