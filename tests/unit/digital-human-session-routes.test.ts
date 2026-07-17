@@ -84,15 +84,15 @@ function speechSession(overrides: Record<string, unknown> = {}) {
 }
 
 async function loadRoutes() {
-  const createRoute = await import("@/app/api/digital-human/sessions/route");
+  const createRoute = await import("@/app/api/digital-human/sessions/handler");
   const heartbeatRoute = await import(
-    "@/app/api/digital-human/sessions/[sessionId]/heartbeat/route"
+    "@/app/api/digital-human/sessions/[sessionId]/heartbeat/handler"
   );
   const deleteRoute = await import(
-    "@/app/api/digital-human/sessions/[sessionId]/route"
+    "@/app/api/digital-human/sessions/[sessionId]/handler"
   );
   const speechRoute = await import(
-    "@/app/api/digital-human/sessions/[sessionId]/speech/route"
+    "@/app/api/digital-human/sessions/[sessionId]/speech/handler"
   );
   return { createRoute, heartbeatRoute, deleteRoute, speechRoute };
 }
