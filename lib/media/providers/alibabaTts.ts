@@ -30,6 +30,8 @@ const DEFAULT_INSTRUCTION = "你说话的情感是 neutral.";
 const PCM_SAMPLE_RATE = 48_000 as const;
 const MAX_PCM_CHUNK_BYTES = 1024 * 1024;
 const MAX_PCM_TOTAL_BYTES = 10 * 1024 * 1024;
+const MAX_BASE64_PCM_BYTES = Math.ceil(MAX_PCM_CHUNK_BYTES / 3) * 4;
+const MAX_SSE_EVENT_BYTES = MAX_BASE64_PCM_BYTES + 64 * 1024;
 const retryableStatuses = new Set([429, 500, 502, 503, 504]);
 const base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
@@ -72,9 +74,26 @@ function providerError(code: string, retryable = false) {
   );
 }
 
-function decodePcmBase64(value: unknown) {
-  if (typeof value !== "string" || !value || !base64Pattern.test(value)) {
+function decodedBase64ByteLength(value: string) {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return (value.length / 4) * 3 - padding;
+}
+
+function decodePcmBase64(value: unknown, totalBytes: number) {
+  if (typeof value !== "string" || !value) {
     throw providerError("ALIBABA_TTS_PCM_BASE64_INVALID");
+  }
+
+  if (value.length > MAX_BASE64_PCM_BYTES) {
+    throw providerError("ALIBABA_TTS_PCM_CHUNK_TOO_LARGE");
+  }
+
+  if (!base64Pattern.test(value)) {
+    throw providerError("ALIBABA_TTS_PCM_BASE64_INVALID");
+  }
+
+  if (totalBytes + decodedBase64ByteLength(value) > MAX_PCM_TOTAL_BYTES) {
+    throw providerError("ALIBABA_TTS_PCM_TOTAL_TOO_LARGE");
   }
 
   const decoded = Buffer.from(value, "base64");
@@ -91,6 +110,12 @@ function decodePcmBase64(value: unknown) {
   }
 
   return Uint8Array.from(decoded);
+}
+
+function assertSseEventSize(value: string) {
+  if (Buffer.byteLength(value, "utf8") > MAX_SSE_EVENT_BYTES) {
+    throw providerError("ALIBABA_TTS_SSE_EVENT_TOO_LARGE");
+  }
 }
 
 function parseSseData(frame: string) {
@@ -201,6 +226,8 @@ export function createAlibabaTtsProvider(
     };
 
     let response: Response | undefined;
+    let streamController: AbortController | undefined;
+    let streamTimeout: ReturnType<typeof setTimeout> | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), model.timeoutMs);
@@ -216,6 +243,7 @@ export function createAlibabaTtsProvider(
           signal: controller.signal
         });
       } catch {
+        clearTimeout(timeout);
         throw new MediaProviderError(
           "Alibaba TTS request could not be completed",
           "TONGYI",
@@ -224,13 +252,15 @@ export function createAlibabaTtsProvider(
             : "ALIBABA_TTS_NETWORK_ERROR",
           true
         );
-      } finally {
-        clearTimeout(timeout);
       }
 
       if (response.ok) {
+        streamController = controller;
+        streamTimeout = timeout;
         break;
       }
+
+      clearTimeout(timeout);
 
       if (attempt === 0 && retryableStatuses.has(response.status)) {
         await response.body?.cancel().catch(() => undefined);
@@ -262,7 +292,8 @@ export function createAlibabaTtsProvider(
       const decoder = new TextDecoder();
       let buffered = "";
       let totalBytes = 0;
-      let completed = false;
+      let stopReceived = false;
+      let finished = false;
 
       try {
         while (true) {
@@ -275,36 +306,52 @@ export function createAlibabaTtsProvider(
           while ((boundary = buffered.indexOf("\n\n")) >= 0) {
             const frame = buffered.slice(0, boundary);
             buffered = buffered.slice(boundary + 2);
+            assertSseEventSize(frame);
             const event = parseSseData(frame);
             if (!event) continue;
+
+            if (stopReceived) {
+              throw providerError("ALIBABA_TTS_STREAM_AFTER_STOP");
+            }
 
             if (typeof event.request_id === "string" && event.request_id.trim()) {
               result.traceId = event.request_id.trim();
             }
 
             if (event.output?.finish_reason === "stop") {
-              completed = true;
+              stopReceived = true;
               continue;
             }
 
             if (event.output?.type !== "sentence-synthesis") continue;
-            const pcm = decodePcmBase64(event.output.audio?.data);
+            const pcm = decodePcmBase64(event.output.audio?.data, totalBytes);
             totalBytes += pcm.byteLength;
             if (totalBytes > MAX_PCM_TOTAL_BYTES) {
               throw providerError("ALIBABA_TTS_PCM_TOTAL_TOO_LARGE");
             }
             yield pcm;
           }
+          assertSseEventSize(buffered);
         }
 
         buffered += decoder.decode();
+        assertSseEventSize(buffered);
         if (buffered.trim()) {
           throw providerError("ALIBABA_TTS_SSE_INVALID");
         }
-        if (!completed) {
+        if (!stopReceived) {
           throw providerError("ALIBABA_TTS_STREAM_INCOMPLETE");
         }
+        finished = true;
       } catch (error) {
+        if (streamController?.signal.aborted) {
+          throw new MediaProviderError(
+            "Alibaba TTS request timed out",
+            "TONGYI",
+            "ALIBABA_TTS_TIMEOUT",
+            true
+          );
+        }
         if (error instanceof MediaProviderError) throw error;
         throw new MediaProviderError(
           "Alibaba TTS stream was interrupted",
@@ -313,6 +360,10 @@ export function createAlibabaTtsProvider(
           true
         );
       } finally {
+        if (streamTimeout) clearTimeout(streamTimeout);
+        if (!finished) {
+          await reader.cancel().catch(() => undefined);
+        }
         reader.releaseLock();
       }
     })();

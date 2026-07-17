@@ -12,6 +12,7 @@ import type { ResolvedMediaModel } from "@/lib/media/config";
 
 const configSecret = "alibaba-tts-test-config-secret";
 const encoder = new TextEncoder();
+const maxEncodedPcmBytes = Math.ceil((1024 * 1024) / 3) * 4;
 
 function resolvedTtsModel(): ResolvedMediaModel {
   return {
@@ -289,6 +290,50 @@ describe("Alibaba CosyVoice HTTP TTS provider", () => {
     });
   });
 
+  it("rejects oversized encoded PCM before Base64 decoding", async () => {
+    const data = "A".repeat(maxEncodedPcmBytes + 4);
+    const provider = createAlibabaTtsProvider(resolvedTtsModel(), {
+      fetch: vi
+        .fn()
+        .mockResolvedValue(
+          sseResponse([
+            sseEvent({
+              request_id: "request-tts-1",
+              output: { type: "sentence-synthesis", audio: { data } }
+            })
+          ])
+        ) as typeof fetch,
+      readConfigSecret: () => configSecret
+    });
+
+    const result = await provider.streamPcm({ text: "Hello" });
+    await expect(collect(result.chunks)).rejects.toMatchObject({
+      code: "ALIBABA_TTS_PCM_CHUNK_TOO_LARGE"
+    });
+  });
+
+  it.each([
+    [
+      "ignored",
+      sseEvent({
+        request_id: "request-tts-1",
+        output: { type: "sentence-begin" },
+        filler: "x".repeat(maxEncodedPcmBytes + 70_000)
+      })
+    ],
+    ["malformed", `data: {${"x".repeat(maxEncodedPcmBytes + 70_000)}`]
+  ])("rejects oversized %s SSE events before parsing", async (_name, event) => {
+    const provider = createAlibabaTtsProvider(resolvedTtsModel(), {
+      fetch: vi.fn().mockResolvedValue(sseResponse([event])) as typeof fetch,
+      readConfigSecret: () => configSecret
+    });
+
+    const result = await provider.streamPcm({ text: "Hello" });
+    await expect(collect(result.chunks)).rejects.toMatchObject({
+      code: "ALIBABA_TTS_SSE_EVENT_TOO_LARGE"
+    });
+  });
+
   it("rejects PCM streams above 10 MiB in total", async () => {
     const data = Buffer.alloc(1024 * 1024).toString("base64");
     const events = Array.from({ length: 11 }, () =>
@@ -306,6 +351,94 @@ describe("Alibaba CosyVoice HTTP TTS provider", () => {
     await expect(collect(result.chunks)).rejects.toMatchObject({
       code: "ALIBABA_TTS_PCM_TOTAL_TOO_LARGE"
     });
+  });
+
+  it("rejects sentence-synthesis events received after stop", async () => {
+    const provider = createAlibabaTtsProvider(resolvedTtsModel(), {
+      fetch: vi
+        .fn()
+        .mockResolvedValue(
+          sseResponse([
+            sseEvent({ request_id: "request-tts-1", output: { finish_reason: "stop" } }),
+            sseEvent({
+              request_id: "request-tts-1",
+              output: { type: "sentence-synthesis", audio: { data: "AQACAA==" } }
+            })
+          ])
+        ) as typeof fetch,
+      readConfigSecret: () => configSecret
+    });
+
+    const result = await provider.streamPcm({ text: "Hello" });
+    await expect(collect(result.chunks)).rejects.toMatchObject({
+      code: "ALIBABA_TTS_STREAM_AFTER_STOP"
+    });
+  });
+
+  it("keeps the timeout active while an SSE body stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = resolvedTtsModel();
+      model.timeoutMs = 1;
+      let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      let aborted = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+        }
+      });
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        init?.signal?.addEventListener("abort", () => {
+          aborted = true;
+          streamController?.error(new Error("aborted"));
+        });
+        return Promise.resolve(new Response(body));
+      });
+      const provider = createAlibabaTtsProvider(model, {
+        fetch: fetchMock as typeof fetch,
+        readConfigSecret: () => configSecret
+      });
+
+      const result = await provider.streamPcm({ text: "Hello" });
+      const pending = expect(collect(result.chunks)).rejects.toMatchObject({
+        code: "ALIBABA_TTS_TIMEOUT"
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(aborted).toBe(true);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels the SSE reader when the consumer stops early", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            sseEvent({
+              request_id: "request-tts-1",
+              output: { type: "sentence-synthesis", audio: { data: "AQACAA==" } }
+            })
+          )
+        );
+      },
+      cancel() {
+        cancelled = true;
+      }
+    });
+    const provider = createAlibabaTtsProvider(resolvedTtsModel(), {
+      fetch: vi.fn().mockResolvedValue(new Response(body)) as typeof fetch,
+      readConfigSecret: () => configSecret
+    });
+
+    const result = await provider.streamPcm({ text: "Hello" });
+    const iterator = result.chunks[Symbol.asyncIterator]();
+    await iterator.next();
+    await iterator.return?.();
+
+    expect(cancelled).toBe(true);
   });
 
   it("rejects unsupported model names before making an HTTP request", async () => {
