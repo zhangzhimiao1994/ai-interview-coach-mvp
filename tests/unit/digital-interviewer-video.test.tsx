@@ -764,6 +764,173 @@ describe("DigitalInterviewerVideo", () => {
     expect(deleteCalls()).toHaveLength(1);
   });
 
+  it("waits for the new owner before auto-playing after session A changes to B", async () => {
+    const { audio, speechSynthesis } = setupInteractiveBrowser();
+    const clientA = {
+      start: vi.fn(async (): Promise<void> => undefined),
+      pushPcm: vi.fn(),
+      interrupt: vi.fn(),
+      exit: vi.fn()
+    };
+    let resolveClientB: (() => void) | undefined;
+    const clientB = {
+      start: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveClientB = resolve;
+          })
+      ),
+      pushPcm: vi.fn(),
+      interrupt: vi.fn(),
+      exit: vi.fn()
+    };
+    lingmou.createClient
+      .mockResolvedValueOnce(clientA)
+      .mockResolvedValueOnce(clientB);
+
+    let lateAController:
+      | ReadableStreamDefaultController<Uint8Array>
+      | undefined;
+    let aSpeechCount = 0;
+    const sessionFor = (id: "A" | "B") =>
+      Response.json(
+        {
+          session: {
+            id: `digital-session-${id}`,
+            mode: "LINGMOU_CLOUD",
+            status: "READY",
+            reasonCode: null,
+            connection: {
+              ...connection,
+              sessionId: `provider-session-${id}`
+            },
+            expiresAt: "2026-07-18T01:00:00.000Z"
+          }
+        },
+        { status: 201 }
+      );
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/digital-human/sessions" && init?.method === "POST") {
+          const body = JSON.parse(String(init.body)) as {
+            trainingSessionId: string;
+          };
+          return sessionFor(
+            body.trainingSessionId === "training-session-A" ? "A" : "B"
+          );
+        }
+        if (url === "/api/digital-human/sessions/digital-session-A/speech") {
+          aSpeechCount += 1;
+          if (aSpeechCount === 1) {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  lateAController = controller;
+                }
+              })
+            );
+          }
+          return pcmResponse([[1, 0]]);
+        }
+        if (url === "/api/digital-human/sessions/digital-session-B/speech") {
+          return pcmResponse([[2, 0]]);
+        }
+        if (url.endsWith("/heartbeat") && init?.method === "POST") {
+          return Response.json({ ok: true });
+        }
+        if (init?.method === "DELETE") return Response.json({ ok: true });
+        throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+      }
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { renderer } = await renderInteractive(audio, {
+      sessionId: "training-session-A",
+      questionId: "question-A",
+      prompt: "A question"
+    });
+    expect(lateAController).toBeDefined();
+
+    await act(async () => {
+      renderer.update(
+        <DigitalInterviewerVideo
+          interviewerName="AI 面试官"
+          stage="正式面试"
+          prompt="B question"
+          sessionId="training-session-B"
+          questionId="question-B"
+        />
+      );
+    });
+    await flushEffects();
+
+    const speechCallsFor = (id: "A" | "B") =>
+      fetchMock.mock.calls.filter(([url, init]) => {
+        if (
+          String(url) !==
+          `/api/digital-human/sessions/digital-session-${id}/speech`
+        ) {
+          return false;
+        }
+        return (init as RequestInit | undefined)?.method === "POST";
+      });
+    const deleteCallsFor = (id: "A" | "B") =>
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          String(url) ===
+            `/api/digital-human/sessions/digital-session-${id}` &&
+          (init as RequestInit | undefined)?.method === "DELETE"
+      );
+
+    expect(clientB.start).toHaveBeenCalledOnce();
+    expect(speechCallsFor("A")).toHaveLength(1);
+    expect(speechCallsFor("B")).toHaveLength(0);
+    expect(speechSynthesis.speak).not.toHaveBeenCalled();
+    expect(clientA.exit).toHaveBeenCalledOnce();
+    expect(deleteCallsFor("A")).toHaveLength(1);
+
+    await act(async () => {
+      resolveClientB?.();
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(speechCallsFor("A")).toHaveLength(1);
+    expect(speechCallsFor("B")).toHaveLength(1);
+    expect(
+      JSON.parse(String(speechCallsFor("B")[0]?.[1]?.body))
+    ).toMatchObject({ questionId: "question-B", text: "B question" });
+    expect(clientB.pushPcm).toHaveBeenCalledWith(Int16Array.from([2]), true);
+    expect(speechSynthesis.speak).not.toHaveBeenCalled();
+
+    const bInterruptCount = clientB.interrupt.mock.calls.length;
+    await act(async () => {
+      lateAController?.error(new Error("late A stream error"));
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(speechCallsFor("B")).toHaveLength(1);
+    expect(clientB.interrupt).toHaveBeenCalledTimes(bInterruptCount);
+    expect(
+      renderer.root.findAll(
+        (node) => node.props["data-testid"] === "local-avatar-fallback"
+      )
+    ).toHaveLength(0);
+
+    await act(async () => {
+      renderer.unmount();
+      await Promise.resolve();
+    });
+    mountedRenderers.splice(mountedRenderers.indexOf(renderer), 1);
+
+    expect(clientA.exit).toHaveBeenCalledOnce();
+    expect(deleteCallsFor("A")).toHaveLength(1);
+    expect(clientB.exit).toHaveBeenCalledOnce();
+    expect(deleteCallsFor("B")).toHaveLength(1);
+  });
+
   it("does not create a paid session for the waiting-room preview", async () => {
     const { audio } = setupInteractiveBrowser();
     const fetchMock = vi.fn();

@@ -500,7 +500,26 @@ export function DigitalInterviewerVideo({
     [playbackGuard]
   );
 
-  const playPrompt = useCallback(async () => {
+  const hasCurrentSessionOwnership = useCallback(
+    (session: PublicDigitalHumanSession | null) => {
+      if (!sessionId) return true;
+      const owner = sessionOwnershipRef.current;
+      return Boolean(
+        owner &&
+          !owner.finalized &&
+          owner.trainingSessionId === sessionId &&
+          owner.session === session &&
+          digitalSessionRef.current === session
+      );
+    },
+    [sessionId]
+  );
+
+  const playPrompt = useCallback(async (autoKey?: string) => {
+    if (sessionId && !hasCurrentSessionOwnership(digitalSession)) return;
+    const markAutoPlaybackStarted = () => {
+      if (autoKey) lastAutoPlayedRef.current = autoKey;
+    };
     const existingAudio = audioRef.current;
     if (
       speechState === "paused" &&
@@ -508,6 +527,7 @@ export function DigitalInterviewerVideo({
       isCurrentProviderAudio(existingAudio)
     ) {
       try {
+        markAutoPlaybackStarted();
         await existingAudio.play();
         if (isCurrentProviderAudio(existingAudio)) {
           setSpeechState("speaking");
@@ -531,6 +551,8 @@ export function DigitalInterviewerVideo({
     setSpeechMessage("");
 
     if (!sessionId || !digitalSession) {
+      if (sessionId && !sessionUnavailable) return;
+      markAutoPlaybackStarted();
       speakWithBrowser(
         sessionId
           ? "CosyVoice 暂不可用，已切换为浏览器语音降级。"
@@ -539,10 +561,12 @@ export function DigitalInterviewerVideo({
       return;
     }
     if (!questionId || !prompt.trim() || prompt.length > 600) {
+      markAutoPlaybackStarted();
       speakWithBrowser("问题无法生成 CosyVoice，已切换为浏览器语音降级。");
       return;
     }
 
+    markAutoPlaybackStarted();
     const controller = new AbortController();
     abortRef.current = controller;
     setSpeechState("loading");
@@ -668,10 +692,12 @@ export function DigitalInterviewerVideo({
     }
   }, [
     digitalSession,
+    hasCurrentSessionOwnership,
     isCurrentProviderAudio,
     playbackGuard,
     prompt,
     questionId,
+    sessionUnavailable,
     sessionId,
     speakWithBrowser,
     speechState,
@@ -681,11 +707,18 @@ export function DigitalInterviewerVideo({
 
   useEffect(() => {
     if ((!digitalSession && !sessionUnavailable) || !sessionId || !questionId) return;
+    if (!hasCurrentSessionOwnership(digitalSession)) return;
     const autoKey = `${sessionId}:${questionId}`;
     if (lastAutoPlayedRef.current === autoKey) return;
-    lastAutoPlayedRef.current = autoKey;
-    void playPrompt();
-  }, [digitalSession, playPrompt, questionId, sessionId, sessionUnavailable]);
+    void playPrompt(autoKey);
+  }, [
+    digitalSession,
+    hasCurrentSessionOwnership,
+    playPrompt,
+    questionId,
+    sessionId,
+    sessionUnavailable
+  ]);
 
   function pauseSpeech() {
     if (providerAudioActiveRef.current && audioRef.current) {
