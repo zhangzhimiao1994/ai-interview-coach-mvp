@@ -9,14 +9,24 @@ const {
   createLingmouProvider,
   createSession,
   closeSession,
-  enqueueProviderSessionCloseRecovery
+  enqueueProviderSessionCloseRecovery,
+  createProviderSessionCloseRecoveryClaim,
+  renewProviderSessionCloseRecoveryClaim,
+  persistProviderSessionCloseRecoveryIdentity,
+  attachProviderSessionCloseRecovery,
+  releaseProviderSessionCloseRecovery
 } =
   vi.hoisted(() => ({
     findFirst: vi.fn(),
     createLingmouProvider: vi.fn(),
     createSession: vi.fn(),
     closeSession: vi.fn(),
-    enqueueProviderSessionCloseRecovery: vi.fn()
+    enqueueProviderSessionCloseRecovery: vi.fn(),
+    createProviderSessionCloseRecoveryClaim: vi.fn(),
+    renewProviderSessionCloseRecoveryClaim: vi.fn(),
+    persistProviderSessionCloseRecoveryIdentity: vi.fn(),
+    attachProviderSessionCloseRecovery: vi.fn(),
+    releaseProviderSessionCloseRecovery: vi.fn()
   }));
 
 vi.mock("@/lib/db/prisma", () => ({
@@ -30,9 +40,20 @@ vi.mock("@/lib/media/providers/lingmou", async (importOriginal) => {
   >();
   return { ...actual, createLingmouProvider };
 });
-vi.mock("@/lib/media/providerSessionCloseRecoveries", () => ({
-  enqueueProviderSessionCloseRecovery
-}));
+vi.mock("@/lib/media/providerSessionCloseRecoveries", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/lib/media/providerSessionCloseRecoveries")
+  >();
+  return {
+    ...actual,
+    enqueueProviderSessionCloseRecovery,
+    createProviderSessionCloseRecoveryClaim,
+    renewProviderSessionCloseRecoveryClaim,
+    persistProviderSessionCloseRecoveryIdentity,
+    attachProviderSessionCloseRecovery,
+    releaseProviderSessionCloseRecovery
+  };
+});
 
 import {
   diagnoseAiCapability,
@@ -53,9 +74,24 @@ describe("AI configuration diagnostics", () => {
     closeSession.mockReset();
     createLingmouProvider.mockReset();
     enqueueProviderSessionCloseRecovery.mockReset();
+    createProviderSessionCloseRecoveryClaim.mockReset();
+    renewProviderSessionCloseRecoveryClaim.mockReset();
+    persistProviderSessionCloseRecoveryIdentity.mockReset();
+    attachProviderSessionCloseRecovery.mockReset();
+    releaseProviderSessionCloseRecovery.mockReset();
     createLingmouProvider.mockReturnValue({ createSession, closeSession });
     closeSession.mockResolvedValue(undefined);
-    enqueueProviderSessionCloseRecovery.mockResolvedValue(undefined);
+    enqueueProviderSessionCloseRecovery.mockResolvedValue({
+      id: "fallback-recovery-1"
+    });
+    createProviderSessionCloseRecoveryClaim.mockResolvedValue({ id: "claim-1" });
+    renewProviderSessionCloseRecoveryClaim.mockResolvedValue(undefined);
+    persistProviderSessionCloseRecoveryIdentity.mockResolvedValue({
+      owner: "CLAIM",
+      attachFailed: false
+    });
+    attachProviderSessionCloseRecovery.mockResolvedValue(undefined);
+    releaseProviderSessionCloseRecovery.mockResolvedValue(undefined);
   });
 
   it("queries only the current selection and never the recommendation flag", async () => {
@@ -601,6 +637,124 @@ describe("AI configuration diagnostics", () => {
       message: "灵眸真实会话创建并关闭成功。"
     });
     expect(closeSession).toHaveBeenCalledWith("provider-session-id");
+    expect(createProviderSessionCloseRecoveryClaim).toHaveBeenCalledWith({
+      providerId: "provider-1",
+      instanceId: "instance-id",
+      providerConfigVersion: 1,
+      reasonCode: "DIAGNOSTIC_LIVE_OPERATION",
+      leaseMs: 60_000
+    });
+    expect(attachProviderSessionCloseRecovery).toHaveBeenCalledWith(
+      "claim-1",
+      "provider-session-id",
+      "DIAGNOSTIC_LIVE_OPERATION"
+    );
+    expect(releaseProviderSessionCloseRecovery).toHaveBeenCalledWith("claim-1");
+    expect(createProviderSessionCloseRecoveryClaim.mock.invocationCallOrder[0]).toBeLessThan(
+      createSession.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("makes no paid create call when the diagnostic live-operation claim fails", async () => {
+    createProviderSessionCloseRecoveryClaim.mockRejectedValue(
+      new Error("raw database secret sentinel")
+    );
+
+    const result = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED"
+    });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("secret sentinel");
+  });
+
+  it("renews a live-operation claim while paid creation is pending and clears its timer", async () => {
+    vi.useFakeTimers();
+    let finishCreate: ((value: unknown) => void) | undefined;
+    createSession.mockImplementation(
+      () => new Promise((resolve) => { finishCreate = resolve; })
+    );
+
+    try {
+      const pending = probeLingmouModel(resolvedLingmouModel());
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(createSession).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(renewProviderSessionCloseRecoveryClaim).toHaveBeenCalledWith(
+        "claim-1",
+        60_000
+      );
+
+      finishCreate?.({
+        providerSessionId: "provider-session-id",
+        connection: lingmouConnection()
+      });
+      await expect(pending).resolves.toMatchObject({ ok: true });
+      const renewalsAfterSettlement =
+        renewProviderSessionCloseRecoveryClaim.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(renewProviderSessionCloseRecoveryClaim).toHaveBeenCalledTimes(
+        renewalsAfterSettlement
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a settled live diagnostic successful when a boundary renewal rejects", async () => {
+    vi.useFakeTimers();
+    let finishCreate: ((value: unknown) => void) | undefined;
+    let rejectRenewal: ((reason?: unknown) => void) | undefined;
+    createSession.mockImplementation(
+      () => new Promise((resolve) => { finishCreate = resolve; })
+    );
+    renewProviderSessionCloseRecoveryClaim.mockImplementation(
+      () => new Promise<void>((_resolve, reject) => { rejectRenewal = reject; })
+    );
+
+    try {
+      const pending = probeLingmouModel(resolvedLingmouModel());
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(renewProviderSessionCloseRecoveryClaim).toHaveBeenCalledOnce();
+
+      finishCreate?.({
+        providerSessionId: "provider-session-id",
+        connection: lingmouConnection()
+      });
+      await vi.waitFor(() => {
+        expect(attachProviderSessionCloseRecovery).toHaveBeenCalledWith(
+          "claim-1",
+          "provider-session-id",
+          "DIAGNOSTIC_LIVE_OPERATION"
+        );
+      });
+      rejectRenewal?.(new Error("claim already attached"));
+
+      await expect(pending).resolves.toMatchObject({
+        ok: true,
+        code: "LIVE_AVAILABLE"
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases the diagnostic claim when paid creation produces no session", async () => {
+    createSession.mockRejectedValue(new Error("raw create secret sentinel"));
+
+    const result = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(result).toMatchObject({ ok: false, code: "LINGMOU_LIVE_CREATE_FAILED" });
+    expect(releaseProviderSessionCloseRecovery).toHaveBeenCalledWith("claim-1");
+    expect(attachProviderSessionCloseRecovery).not.toHaveBeenCalled();
   });
 
   it("closes an invalid Lingmou probe DTO and returns only a safe failure code", async () => {
@@ -628,6 +782,8 @@ describe("AI configuration diagnostics", () => {
       code: "LINGMOU_LIVE_CREATE_FAILED"
     });
     expect(closeSession).not.toHaveBeenCalled();
+    expect(releaseProviderSessionCloseRecovery).toHaveBeenCalledWith("claim-1");
+    releaseProviderSessionCloseRecovery.mockClear();
 
     createSession.mockResolvedValueOnce({
       providerSessionId: "provider-session-id",
@@ -640,13 +796,12 @@ describe("AI configuration diagnostics", () => {
       ok: false,
       code: "LINGMOU_LIVE_CLOSE_FAILED"
     });
-    expect(enqueueProviderSessionCloseRecovery).toHaveBeenCalledWith({
-      providerId: "provider-1",
-      providerSessionId: "provider-session-id",
-      instanceId: "instance-id",
-      providerConfigVersion: 1,
-      reasonCode: "DIAGNOSTIC_CLOSE_FAILED"
-    });
+    expect(attachProviderSessionCloseRecovery).toHaveBeenLastCalledWith(
+      "claim-1",
+      "provider-session-id",
+      "DIAGNOSTIC_LIVE_OPERATION"
+    );
+    expect(releaseProviderSessionCloseRecovery).not.toHaveBeenCalled();
     expect(JSON.stringify([createFailure, closeFailure])).not.toContain(
       "secret sentinel"
     );
@@ -663,25 +818,29 @@ describe("AI configuration diagnostics", () => {
       ok: false,
       code: "LINGMOU_CREATE_COMPENSATION_CLOSE_FAILED"
     });
-    expect(enqueueProviderSessionCloseRecovery).toHaveBeenCalledWith({
-      providerId: "provider-1",
-      providerSessionId: "orphan-provider-session",
-      instanceId: "instance-id",
-      providerConfigVersion: 1,
-      reasonCode: "DIAGNOSTIC_CREATE_COMPENSATION_FAILED"
-    });
+    expect(persistProviderSessionCloseRecoveryIdentity).toHaveBeenCalledWith(
+      "claim-1",
+      {
+        providerId: "provider-1",
+        providerSessionId: "orphan-provider-session",
+        instanceId: "instance-id",
+        providerConfigVersion: 1,
+        reasonCode: "DIAGNOSTIC_CREATE_COMPENSATION_FAILED"
+      },
+      2
+    );
+    expect(releaseProviderSessionCloseRecovery).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain("orphan-provider-session");
   });
 
-  it("returns a fixed operations code when diagnostic recovery cannot be queued", async () => {
-    createSession.mockResolvedValue({
-      providerSessionId: "provider-session-id",
-      connection: lingmouConnection()
-    });
-    closeSession.mockRejectedValue(new Error("raw close secret sentinel"));
-    enqueueProviderSessionCloseRecovery.mockRejectedValue(
-      new Error("raw database secret sentinel")
+  it("falls back durably when a compensation identity cannot attach twice", async () => {
+    createSession.mockRejectedValue(
+      new LingmouSessionRecoveryError("orphan-provider-session", "instance-id")
     );
+    persistProviderSessionCloseRecoveryIdentity.mockResolvedValue({
+      owner: "FALLBACK",
+      attachFailed: true
+    });
 
     const result = await probeLingmouModel(resolvedLingmouModel());
 
@@ -689,7 +848,77 @@ describe("AI configuration diagnostics", () => {
       ok: false,
       code: "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED"
     });
+    expect(persistProviderSessionCloseRecoveryIdentity).toHaveBeenCalledWith(
+      "claim-1",
+      {
+        providerId: "provider-1",
+        providerSessionId: "orphan-provider-session",
+        instanceId: "instance-id",
+        providerConfigVersion: 1,
+        reasonCode: "DIAGNOSTIC_CREATE_COMPENSATION_FAILED"
+      },
+      2
+    );
+    expect(JSON.stringify(result)).not.toContain("orphan-provider-session");
+  });
+
+  it("persists a durable fallback when attach fails twice and close fails", async () => {
+    createSession.mockResolvedValue({
+      providerSessionId: "provider-session-id",
+      connection: lingmouConnection()
+    });
+    closeSession.mockRejectedValue(new Error("raw close secret sentinel"));
+    attachProviderSessionCloseRecovery.mockRejectedValue(
+      new Error("raw database secret sentinel")
+    );
+    persistProviderSessionCloseRecoveryIdentity.mockResolvedValue({
+      owner: "FALLBACK",
+      attachFailed: true
+    });
+
+    const result = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED"
+    });
+    expect(attachProviderSessionCloseRecovery).toHaveBeenCalledOnce();
+    expect(persistProviderSessionCloseRecoveryIdentity).toHaveBeenCalledWith(
+      "claim-1",
+      {
+        providerId: "provider-1",
+        providerSessionId: "provider-session-id",
+        instanceId: "instance-id",
+        providerConfigVersion: 1,
+        reasonCode: "DIAGNOSTIC_LIVE_CLOSE_FAILED"
+      },
+      1
+    );
     expect(JSON.stringify(result)).not.toContain("secret sentinel");
+  });
+
+  it("does not release the claim when ambiguous attach makes fallback upsert return that claim", async () => {
+    createSession.mockResolvedValue({
+      providerSessionId: "provider-session-id",
+      connection: lingmouConnection()
+    });
+    closeSession.mockRejectedValue(new Error("raw close secret sentinel"));
+    attachProviderSessionCloseRecovery.mockRejectedValue(
+      new Error("commit acknowledged as failed")
+    );
+    persistProviderSessionCloseRecoveryIdentity.mockResolvedValue({
+      owner: "CLAIM",
+      attachFailed: true
+    });
+
+    const result = await probeLingmouModel(resolvedLingmouModel());
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED"
+    });
+    expect(persistProviderSessionCloseRecoveryIdentity).toHaveBeenCalledOnce();
+    expect(releaseProviderSessionCloseRecovery).not.toHaveBeenCalled();
   });
 
   it("validates Alibaba observable-behavior sampling ranges", async () => {

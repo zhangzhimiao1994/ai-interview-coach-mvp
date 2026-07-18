@@ -125,6 +125,7 @@ model DigitalHumanSession {
   id                String          @id @default(cuid())
   trainingSessionId String
   trainingSession   TrainingSession @relation(fields: [trainingSessionId], references: [id], onDelete: Cascade)
+  closeRecovery     ProviderSessionCloseRecovery?
   providerId        String?
   modelId           String?
   adapter           String
@@ -231,12 +232,15 @@ model ProviderSessionCloseRecovery {
   id                    String            @id @default(cuid())
   providerId            String
   provider              AiServiceProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
-  providerSessionId     String
+  digitalHumanSessionId String?           @unique
+  digitalHumanSession   DigitalHumanSession? @relation(fields: [digitalHumanSessionId], references: [id], onDelete: SetNull)
+  providerSessionId     String?
   instanceId            String
   providerConfigVersion Int
   reasonCode            String
   attemptCount          Int               @default(0)
   nextAttemptAt         DateTime          @default(now())
+  claimExpiresAt        DateTime?
   lastErrorCode         String?
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt

@@ -239,8 +239,8 @@ describe("digital human session lifecycle", () => {
     });
   });
 
-  it("queues invalid-RTC recovery and preserves the upstream identity as FAILED", async () => {
-    const { rows, provider, enqueueRecovery, service } = harness();
+  it("gives the linked durable queue sole ownership of invalid-RTC recovery", async () => {
+    const { rows, provider, repository, enqueueRecovery, service } = harness();
     provider.createSession.mockRejectedValue(
       new LingmouSessionRecoveryError("orphan-upstream-1", "instance-id")
     );
@@ -257,20 +257,24 @@ describe("digital human session lifecycle", () => {
       providerSessionId: "orphan-upstream-1",
       instanceId: "instance-id",
       providerConfigVersion: 0,
-      reasonCode: "CREATE_COMPENSATION_FAILED"
+      reasonCode: "CREATE_COMPENSATION_FAILED",
+      digitalHumanSessionId: "digital-1"
     });
     expect(rows.get("digital-1")).toMatchObject({
       mode: "LINGMOU_CLOUD",
       status: "FAILED",
       providerId: "lingmou-provider",
-      providerSessionId: "orphan-upstream-1",
+      providerSessionId: null,
       instanceId: "instance-id",
       stopReason: "CREATE_COMPENSATION_FAILED"
     });
+    expect(enqueueRecovery.mock.invocationCallOrder[0]).toBeLessThan(
+      repository.transitionSession.mock.invocationCallOrder[0]!
+    );
   });
 
-  it("uses a fixed operational code when invalid-RTC recovery cannot be queued", async () => {
-    const { provider, enqueueRecovery, service } = harness();
+  it("keeps lifecycle ownership and lets the reaper close once when linked enqueue is not persisted", async () => {
+    const { rows, provider, repository, enqueueRecovery, service } = harness();
     provider.createSession.mockRejectedValue(
       new LingmouSessionRecoveryError("orphan-upstream-1", "instance-id")
     );
@@ -285,6 +289,28 @@ describe("digital human session lifecycle", () => {
       status: 500
     });
     expect(String(error)).not.toContain("database secret sentinel");
+
+    const fallbackOwner = rows.get("digital-1");
+    expect(fallbackOwner).toMatchObject({
+      mode: "LINGMOU_CLOUD",
+      status: "FAILED",
+      providerId: "lingmou-provider",
+      providerSessionId: "orphan-upstream-1",
+      instanceId: "instance-id",
+      providerConfigVersion: 0,
+      stopReason: "CREATE_COMPENSATION_FAILED"
+    });
+    repository.findReapableSessions.mockResolvedValue([fallbackOwner!]);
+
+    await expect(service.reapDigitalHumanSessions(now)).resolves.toBe(1);
+
+    expect(provider.closeSession).toHaveBeenCalledOnce();
+    expect(provider.closeSession).toHaveBeenCalledWith("orphan-upstream-1");
+    expect(rows.get("digital-1")).toMatchObject({
+      status: "STOPPED",
+      providerSessionId: "orphan-upstream-1",
+      stopReason: "RECOVERY_RETRY"
+    });
   });
 
   it("falls back locally without claiming cloud success when upstream creation fails", async () => {

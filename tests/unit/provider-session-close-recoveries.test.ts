@@ -14,8 +14,10 @@ function recoveryRow(overrides: Record<string, unknown> = {}) {
     instanceId: "instance-1",
     providerConfigVersion: 3,
     reasonCode: "CREATE_COMPENSATION_FAILED",
+    digitalHumanSessionId: "digital-session-1",
     attemptCount: 0,
     nextAttemptAt: now,
+    claimExpiresAt: null,
     lastErrorCode: null,
     createdAt: now,
     updatedAt: now,
@@ -26,6 +28,13 @@ function recoveryRow(overrides: Record<string, unknown> = {}) {
 function harness(rows = [recoveryRow()]) {
   const repository = {
     upsert: vi.fn().mockResolvedValue(recoveryRow()),
+    createClaim: vi.fn().mockResolvedValue(recoveryRow({
+      digitalHumanSessionId: null,
+      providerSessionId: null
+    })),
+    attach: vi.fn().mockResolvedValue(true),
+    renewClaim: vi.fn().mockResolvedValue(true),
+    expireClaims: vi.fn().mockResolvedValue([]),
     findDue: vi.fn().mockResolvedValue(rows),
     findProvider: vi.fn().mockResolvedValue({
       id: "provider-1",
@@ -37,16 +46,25 @@ function harness(rows = [recoveryRow()]) {
       credentialsTag: "tag"
     }),
     delete: vi.fn().mockResolvedValue(undefined),
+    complete: vi.fn().mockResolvedValue(undefined),
     recordFailure: vi.fn().mockResolvedValue(undefined)
   };
   const closeSession = vi.fn().mockResolvedValue(undefined);
   const createSessionCloser = vi.fn(() => ({ closeSession }));
+  const auditUnknownClaim = vi.fn();
   const service = createProviderSessionCloseRecoveryService({
     repository,
     createSessionCloser,
+    auditUnknownClaim,
     now: () => now
   });
-  return { repository, closeSession, createSessionCloser, service };
+  return {
+    repository,
+    closeSession,
+    createSessionCloser,
+    auditUnknownClaim,
+    service
+  };
 }
 
 describe("provider session close recovery queue", () => {
@@ -58,7 +76,8 @@ describe("provider session close recovery queue", () => {
       providerSessionId: " upstream-session-1 ",
       instanceId: " instance-1 ",
       providerConfigVersion: 3,
-      reasonCode: "CREATE_COMPENSATION_FAILED"
+      reasonCode: "CREATE_COMPENSATION_FAILED",
+      digitalHumanSessionId: "digital-session-1"
     });
 
     expect(repository.upsert).toHaveBeenCalledWith({
@@ -67,6 +86,7 @@ describe("provider session close recovery queue", () => {
       instanceId: "instance-1",
       providerConfigVersion: 3,
       reasonCode: "CREATE_COMPENSATION_FAILED",
+      digitalHumanSessionId: "digital-session-1",
       nextAttemptAt: now
     });
     expect(JSON.stringify(repository.upsert.mock.calls[0]?.[0])).not.toMatch(
@@ -93,7 +113,92 @@ describe("provider session close recovery queue", () => {
     expect(String(error)).not.toContain("database secret sentinel");
   });
 
-  it("closes each due upstream session and deletes successful recovery work", async () => {
+  it("creates and renews a bounded null-session claim lease", async () => {
+    const { repository, service } = harness([]);
+
+    await service.createClaim({
+      providerId: "provider-1",
+      instanceId: "instance-1",
+      providerConfigVersion: 3,
+      reasonCode: "DIAGNOSTIC_LIVE_OPERATION",
+      leaseMs: 60_000
+    });
+    await service.renewClaim("recovery-1", 60_000);
+
+    expect(repository.createClaim).toHaveBeenCalledWith({
+      providerId: "provider-1",
+      instanceId: "instance-1",
+      providerConfigVersion: 3,
+      reasonCode: "DIAGNOSTIC_LIVE_OPERATION",
+      nextAttemptAt: now,
+      claimExpiresAt: new Date(now.getTime() + 60_000)
+    });
+    expect(repository.renewClaim).toHaveBeenCalledWith(
+      "recovery-1",
+      new Date(now.getTime() + 60_000)
+    );
+  });
+
+  it("expires abandoned null-session claims with a fixed UNKNOWN_UPSTREAM audit", async () => {
+    const { repository, auditUnknownClaim, service } = harness([]);
+    repository.expireClaims.mockResolvedValue([
+      { id: "claim-expired-1" },
+      { id: "claim-expired-2" }
+    ]);
+
+    await expect(service.drainDue(now)).resolves.toBe(0);
+
+    expect(repository.expireClaims).toHaveBeenCalledWith(now);
+    expect(auditUnknownClaim.mock.calls).toEqual([
+      ["claim-expired-1"],
+      ["claim-expired-2"]
+    ]);
+  });
+
+  it("clears the null-claim lease when an upstream identity attaches", async () => {
+    const { repository, service } = harness([]);
+
+    await service.attach(
+      "recovery-1",
+      "upstream-session-1",
+      "DIAGNOSTIC_LIVE_OPERATION"
+    );
+
+    expect(repository.attach).toHaveBeenCalledWith("recovery-1", {
+      providerSessionId: "upstream-session-1",
+      reasonCode: "DIAGNOSTIC_LIVE_OPERATION",
+      nextAttemptAt: now,
+      claimExpiresAt: null
+    });
+  });
+
+  it("keeps the claim when ambiguous attach commits make fallback upsert return the same row", async () => {
+    const { repository, service } = harness([]);
+    repository.attach.mockRejectedValue(new Error("ambiguous commit"));
+    repository.upsert.mockResolvedValue(recoveryRow({
+      id: "recovery-1",
+      digitalHumanSessionId: null
+    }));
+
+    const result = await service.persistClaimIdentity(
+      "recovery-1",
+      {
+        providerId: "provider-1",
+        providerSessionId: "upstream-session-1",
+        instanceId: "instance-1",
+        providerConfigVersion: 3,
+        reasonCode: "DIAGNOSTIC_LIVE_CLOSE_FAILED"
+      },
+      2
+    );
+
+    expect(result).toEqual({ owner: "CLAIM", attachFailed: true });
+    expect(repository.attach).toHaveBeenCalledTimes(2);
+    expect(repository.upsert).toHaveBeenCalledOnce();
+    expect(repository.delete).not.toHaveBeenCalled();
+  });
+
+  it("closes each due upstream session and terminalizes its linked lifecycle atomically", async () => {
     const { repository, closeSession, createSessionCloser, service } = harness();
 
     await expect(service.drainDue(now)).resolves.toBe(1);
@@ -104,7 +209,12 @@ describe("provider session close recovery queue", () => {
     );
     expect(closeSession).toHaveBeenCalledOnce();
     expect(closeSession).toHaveBeenCalledWith("upstream-session-1");
-    expect(repository.delete).toHaveBeenCalledWith("recovery-1");
+    expect(repository.complete).toHaveBeenCalledWith(
+      "recovery-1",
+      "digital-session-1",
+      now
+    );
+    expect(repository.delete).not.toHaveBeenCalled();
     expect(repository.recordFailure).not.toHaveBeenCalled();
   });
 
@@ -146,6 +256,6 @@ describe("provider session close recovery queue", () => {
 
     await expect(Promise.all([first, second])).resolves.toEqual([1, 1]);
     expect(closeSession).toHaveBeenCalledOnce();
-    expect(repository.delete).toHaveBeenCalledOnce();
+    expect(repository.complete).toHaveBeenCalledOnce();
   });
 });

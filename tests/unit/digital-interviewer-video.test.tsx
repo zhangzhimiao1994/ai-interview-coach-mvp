@@ -1041,6 +1041,208 @@ describe("DigitalInterviewerVideo", () => {
     expect(deleteCallsFor("B")).toHaveLength(1);
   });
 
+  it("ignores a successful downgrade for owner A after owner B replaces it", async () => {
+    const { audio, speechSynthesis } = setupInteractiveBrowser();
+    const clientA = {
+      start: vi.fn(async (): Promise<void> => undefined),
+      pushPcm: vi.fn(() => { throw new Error("A push failed"); }),
+      interrupt: vi.fn(),
+      exit: vi.fn()
+    };
+    const clientB = {
+      start: vi.fn(async (): Promise<void> => undefined),
+      pushPcm: vi.fn(),
+      interrupt: vi.fn(),
+      exit: vi.fn()
+    };
+    lingmou.createClient
+      .mockResolvedValueOnce(clientA)
+      .mockResolvedValueOnce(clientB);
+    let resolveDowngrade!: (response: Response) => void;
+    const pendingDowngrade = new Promise<Response>((resolve) => {
+      resolveDowngrade = resolve;
+    });
+    const speechCalls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/digital-human/sessions" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { trainingSessionId: string };
+        const suffix = body.trainingSessionId.endsWith("A") ? "A" : "B";
+        return Response.json({
+          session: {
+            id: `digital-session-${suffix}`,
+            mode: "LINGMOU_CLOUD",
+            status: "READY",
+            reasonCode: null,
+            connection: { ...connection, sessionId: `provider-session-${suffix}` },
+            expiresAt: "2026-07-18T01:00:00.000Z"
+          }
+        }, { status: 201 });
+      }
+      if (url.endsWith("/speech")) {
+        speechCalls.push(url);
+        return pcmResponse([[1, 0]]);
+      }
+      if (url === "/api/digital-human/sessions/digital-session-A/downgrade") {
+        return pendingDowngrade;
+      }
+      if (url.endsWith("/heartbeat")) return Response.json({ ok: true });
+      if (init?.method === "DELETE") return Response.json({ ok: true });
+      throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { renderer } = await renderInteractive(audio, {
+      sessionId: "training-session-A",
+      questionId: "question-A",
+      prompt: "A question"
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/digital-human/sessions/digital-session-A/downgrade",
+      expect.objectContaining({ method: "POST" })
+    ));
+
+    await act(async () => {
+      renderer.update(
+        <DigitalInterviewerVideo
+          interviewerName="AI 面试官"
+          stage="正式面试"
+          prompt="B question"
+          sessionId="training-session-B"
+          questionId="question-B"
+        />
+      );
+    });
+    await flushEffects();
+    expect(clientB.pushPcm).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolveDowngrade(Response.json({
+        session: {
+          id: "digital-session-A",
+          mode: "LOCAL_AVATAR",
+          status: "READY",
+          reasonCode: "CLIENT_PCM_PUSH_FAILED",
+          connection: null,
+          expiresAt: "2026-07-18T01:00:00.000Z"
+        }
+      }));
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(clientB.pushPcm).toHaveBeenCalledOnce();
+    expect(speechCalls.filter((url) => url.includes("digital-session-A"))).toHaveLength(1);
+    expect(speechCalls.filter((url) => url.includes("digital-session-B"))).toHaveLength(1);
+    expect(speechSynthesis.speak).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url) === "/api/digital-human/sessions/digital-session-A" &&
+        (init as RequestInit | undefined)?.method === "DELETE"
+    )).toHaveLength(1);
+    expect(renderer.root.findAll(
+      (node) => node.props["data-testid"] === "local-avatar-fallback"
+    )).toHaveLength(0);
+  });
+
+  it("ignores a failed downgrade for owner A after owner B replaces it", async () => {
+    const { audio, speechSynthesis } = setupInteractiveBrowser();
+    const clientA = {
+      start: vi.fn(async (): Promise<void> => undefined),
+      pushPcm: vi.fn(() => { throw new Error("A push failed"); }),
+      interrupt: vi.fn(),
+      exit: vi.fn()
+    };
+    const clientB = {
+      start: vi.fn(async (): Promise<void> => undefined),
+      pushPcm: vi.fn(),
+      interrupt: vi.fn(),
+      exit: vi.fn()
+    };
+    lingmou.createClient
+      .mockResolvedValueOnce(clientA)
+      .mockResolvedValueOnce(clientB);
+    let resolveDowngrade!: (response: Response) => void;
+    const pendingDowngrade = new Promise<Response>((resolve) => {
+      resolveDowngrade = resolve;
+    });
+    const speechCalls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/digital-human/sessions" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { trainingSessionId: string };
+        const suffix = body.trainingSessionId.endsWith("A") ? "A" : "B";
+        return Response.json({
+          session: {
+            id: `digital-session-${suffix}`,
+            mode: "LINGMOU_CLOUD",
+            status: "READY",
+            reasonCode: null,
+            connection: { ...connection, sessionId: `provider-session-${suffix}` },
+            expiresAt: "2026-07-18T01:00:00.000Z"
+          }
+        }, { status: 201 });
+      }
+      if (url.endsWith("/speech")) {
+        speechCalls.push(url);
+        return pcmResponse([[2, 0]]);
+      }
+      if (url === "/api/digital-human/sessions/digital-session-A/downgrade") {
+        return pendingDowngrade;
+      }
+      if (url.endsWith("/heartbeat")) return Response.json({ ok: true });
+      if (init?.method === "DELETE") return Response.json({ ok: true });
+      throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { renderer } = await renderInteractive(audio, {
+      sessionId: "training-session-A",
+      questionId: "question-A",
+      prompt: "A question"
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/digital-human/sessions/digital-session-A/downgrade",
+      expect.objectContaining({ method: "POST" })
+    ));
+
+    await act(async () => {
+      renderer.update(
+        <DigitalInterviewerVideo
+          interviewerName="AI 面试官"
+          stage="正式面试"
+          prompt="B question"
+          sessionId="training-session-B"
+          questionId="question-B"
+        />
+      );
+    });
+    await flushEffects();
+    expect(clientB.pushPcm).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolveDowngrade(Response.json(
+        { reasonCode: "DIGITAL_HUMAN_DOWNGRADE_FAILED" },
+        { status: 503 }
+      ));
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(clientB.pushPcm).toHaveBeenCalledOnce();
+    expect(speechCalls.filter((url) => url.includes("digital-session-A"))).toHaveLength(1);
+    expect(speechCalls.filter((url) => url.includes("digital-session-B"))).toHaveLength(1);
+    expect(speechSynthesis.speak).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        String(url) === "/api/digital-human/sessions/digital-session-A" &&
+        (init as RequestInit | undefined)?.method === "DELETE"
+    )).toHaveLength(0);
+    expect(renderer.root.findAll(
+      (node) => node.props["data-testid"] === "local-avatar-fallback"
+    )).toHaveLength(0);
+  });
+
   it("does not create a paid session for the waiting-room preview", async () => {
     const { audio } = setupInteractiveBrowser();
     const fetchMock = vi.fn();

@@ -34,7 +34,15 @@ import {
   createLingmouProvider,
   LingmouSessionRecoveryError
 } from "@/lib/media/providers/lingmou";
-import { enqueueProviderSessionCloseRecovery } from "@/lib/media/providerSessionCloseRecoveries";
+import {
+  attachProviderSessionCloseRecovery,
+  createProviderSessionCloseRecoveryClaim,
+  persistProviderSessionCloseRecoveryIdentity,
+  providerSessionCloseRecoveryClaimLeaseMs,
+  providerSessionCloseRecoveryClaimRenewIntervalMs,
+  renewProviderSessionCloseRecoveryClaim,
+  releaseProviderSessionCloseRecovery
+} from "@/lib/media/providerSessionCloseRecoveries";
 
 type JsonObject = Record<string, unknown>;
 
@@ -397,22 +405,58 @@ function isValidLingmouProbeConnection(
   );
 }
 
-async function enqueueLingmouProbeRecovery(
+function startDiagnosticClaimRenewal(claimId: string) {
+  let active = true;
+  let failed = false;
+  let pending: Promise<void> | null = null;
+  const interval = setInterval(() => {
+    if (!active || pending) return;
+    pending = renewProviderSessionCloseRecoveryClaim(
+      claimId,
+      providerSessionCloseRecoveryClaimLeaseMs
+    )
+      .catch(() => {
+        failed = true;
+      })
+      .finally(() => {
+        pending = null;
+      });
+  }, providerSessionCloseRecoveryClaimRenewIntervalMs);
+  interval.unref?.();
+
+  return async () => {
+    if (active) {
+      active = false;
+      clearInterval(interval);
+    }
+    await pending;
+    return failed;
+  };
+}
+
+async function persistDiagnosticRecoveryIdentity(
+  claimId: string,
   model: ResolvedMediaModel,
-  identity: { providerSessionId: string; instanceId: string },
-  reasonCode: string
+  providerSessionId: string,
+  instanceId: string,
+  reasonCode: string,
+  attachAttempts: number
 ) {
   try {
-    await enqueueProviderSessionCloseRecovery({
-      providerId: model.providerId,
-      providerSessionId: identity.providerSessionId,
-      instanceId: identity.instanceId,
-      providerConfigVersion: model.providerConfigVersion,
-      reasonCode
-    });
-    return true;
+    return await persistProviderSessionCloseRecoveryIdentity(
+      claimId,
+      {
+        providerId: model.providerId,
+        providerSessionId,
+        instanceId,
+        providerConfigVersion: model.providerConfigVersion,
+        reasonCode
+      },
+      attachAttempts
+    );
   } catch {
-    return false;
+    console.warn("DIGITAL_HUMAN_RECOVERY_IDENTITY_PERSIST_FAILED");
+    return { owner: "NONE" as const, attachFailed: true };
   }
 }
 
@@ -432,11 +476,54 @@ export async function probeLingmouModel(model: ResolvedMediaModel): Promise<{
     };
   }
 
+  let claimId: string;
+  try {
+    const claim = await createProviderSessionCloseRecoveryClaim({
+      providerId: model.providerId,
+      instanceId:
+        typeof model.modelSettings.instanceId === "string"
+          ? model.modelSettings.instanceId
+          : "",
+      providerConfigVersion: model.providerConfigVersion,
+      reasonCode: "DIAGNOSTIC_LIVE_OPERATION",
+      leaseMs: providerSessionCloseRecoveryClaimLeaseMs
+    });
+    claimId = claim.id;
+  } catch {
+    return {
+      ok: false,
+      code: "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED",
+      message: "灵眸真实检查失败。"
+    };
+  }
+
+  const stopRenewalWork = startDiagnosticClaimRenewal(claimId);
+  let renewalFailed = false;
+  const stopRenewal = async () => {
+    if (await stopRenewalWork()) renewalFailed = true;
+  };
   let providerSessionId: string | null = null;
   let failureCode: string | null = null;
+  let retainClaim = false;
+  let identityOwner: "NONE" | "CLAIM" | "FALLBACK" = "NONE";
+  let claimSettledSafely = false;
   try {
     const created = await provider.createSession();
     providerSessionId = created.providerSessionId;
+    if (hasText(providerSessionId)) {
+      try {
+        await attachProviderSessionCloseRecovery(
+          claimId,
+          providerSessionId,
+          "DIAGNOSTIC_LIVE_OPERATION"
+        );
+        identityOwner = "CLAIM";
+        claimSettledSafely = true;
+        await stopRenewal();
+      } catch {
+        failureCode = "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
+      }
+    }
     if (
       !hasText(providerSessionId) ||
       !isValidLingmouProbeConnection(
@@ -448,14 +535,27 @@ export async function probeLingmouModel(model: ResolvedMediaModel): Promise<{
     }
   } catch (error) {
     if (error instanceof LingmouSessionRecoveryError) {
-      const queued = await enqueueLingmouProbeRecovery(
+      retainClaim = true;
+      const identity = error.recoveryIdentity();
+      const persisted = await persistDiagnosticRecoveryIdentity(
+        claimId,
         model,
-        error.recoveryIdentity(),
-        "DIAGNOSTIC_CREATE_COMPENSATION_FAILED"
+        identity.providerSessionId,
+        identity.instanceId,
+        "DIAGNOSTIC_CREATE_COMPENSATION_FAILED",
+        2
       );
-      failureCode = queued
-        ? safeLingmouProbeCode(error, "LINGMOU_LIVE_CREATE_FAILED")
-        : "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
+      identityOwner = persisted.owner;
+      claimSettledSafely = identityOwner !== "NONE";
+      if (identityOwner !== "NONE") await stopRenewal();
+      if (!persisted.attachFailed && identityOwner === "CLAIM") {
+        failureCode = safeLingmouProbeCode(
+          error,
+          "LINGMOU_LIVE_CREATE_FAILED"
+        );
+      } else {
+        failureCode = "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
+      }
     } else {
       failureCode = safeLingmouProbeCode(
         error,
@@ -466,22 +566,52 @@ export async function probeLingmouModel(model: ResolvedMediaModel): Promise<{
     if (providerSessionId) {
       try {
         await provider.closeSession(providerSessionId);
+        try {
+          await releaseProviderSessionCloseRecovery(claimId);
+          identityOwner = "NONE";
+          claimSettledSafely = true;
+        } catch {
+          failureCode = "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
+        }
       } catch (error) {
-        const queued = await enqueueLingmouProbeRecovery(
-          model,
-          {
+        retainClaim = true;
+        if (identityOwner === "NONE") {
+          const persisted = await persistDiagnosticRecoveryIdentity(
+            claimId,
+            model,
             providerSessionId,
-            instanceId:
-              typeof model.modelSettings.instanceId === "string"
-                ? model.modelSettings.instanceId
-                : ""
-          },
-          "DIAGNOSTIC_CLOSE_FAILED"
-        );
-        failureCode = queued
-          ? safeLingmouProbeCode(error, "LINGMOU_LIVE_CLOSE_FAILED")
-          : "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
+            typeof model.modelSettings.instanceId === "string"
+              ? model.modelSettings.instanceId
+              : "",
+            "DIAGNOSTIC_LIVE_CLOSE_FAILED",
+            1
+          );
+          identityOwner = persisted.owner;
+          claimSettledSafely = identityOwner !== "NONE";
+          if (identityOwner !== "NONE") await stopRenewal();
+          if (persisted.attachFailed || identityOwner === "NONE") {
+            failureCode = "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
+          }
+        }
+        if (failureCode !== "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED") {
+          failureCode = safeLingmouProbeCode(
+            error,
+            "LINGMOU_LIVE_CLOSE_FAILED"
+          );
+        }
       }
+    } else if (!retainClaim) {
+      try {
+        await releaseProviderSessionCloseRecovery(claimId);
+        identityOwner = "NONE";
+        claimSettledSafely = true;
+      } catch {
+        failureCode = "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
+      }
+    }
+    await stopRenewal();
+    if (renewalFailed && !claimSettledSafely) {
+      failureCode = "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED";
     }
   }
 

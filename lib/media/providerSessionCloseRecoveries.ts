@@ -12,12 +12,28 @@ export type ProviderSessionCloseRecoveryInput = {
   instanceId: string;
   providerConfigVersion: number;
   reasonCode: string;
+  digitalHumanSessionId?: string;
 };
 
-type RecoveryRecord = ProviderSessionCloseRecoveryInput & {
+export type ProviderSessionCloseRecoveryClaimInput = {
+  providerId: string;
+  instanceId: string;
+  providerConfigVersion: number;
+  reasonCode: string;
+  leaseMs: number;
+};
+
+type RecoveryRecord = {
   id: string;
+  providerId: string;
+  digitalHumanSessionId: string | null;
+  providerSessionId: string | null;
+  instanceId: string;
+  providerConfigVersion: number;
+  reasonCode: string;
   attemptCount: number;
   nextAttemptAt: Date;
+  claimExpiresAt: Date | null;
   lastErrorCode: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -37,9 +53,31 @@ type RecoveryRepository = {
   upsert: (
     input: ProviderSessionCloseRecoveryInput & { nextAttemptAt: Date }
   ) => Promise<RecoveryRecord>;
+  createClaim: (
+    input: Omit<ProviderSessionCloseRecoveryClaimInput, "leaseMs"> & {
+      nextAttemptAt: Date;
+      claimExpiresAt: Date;
+    }
+  ) => Promise<RecoveryRecord>;
+  attach: (
+    id: string,
+    data: {
+      providerSessionId: string;
+      reasonCode: string;
+      nextAttemptAt: Date;
+      claimExpiresAt: null;
+    }
+  ) => Promise<boolean>;
+  renewClaim: (id: string, claimExpiresAt: Date) => Promise<boolean>;
+  expireClaims: (now: Date) => Promise<Array<{ id: string }>>;
   findDue: (now: Date) => Promise<RecoveryRecord[]>;
   findProvider: (providerId: string) => Promise<CloseProviderRecord | null>;
   delete: (id: string) => Promise<unknown>;
+  complete: (
+    id: string,
+    digitalHumanSessionId: string | null,
+    completedAt: Date
+  ) => Promise<unknown>;
   recordFailure: (
     id: string,
     data: {
@@ -56,6 +94,7 @@ type RecoveryServiceDependencies = {
     source: LingmouCloseCredentialSource,
     instanceId: string
   ) => LingmouSessionCloser;
+  auditUnknownClaim: (claimId: string) => void;
   now: () => Date;
 };
 
@@ -71,6 +110,11 @@ export class ProviderSessionCloseRecoveryPersistenceError extends Error {
 const inFlightRecoveries = new Map<string, Promise<boolean>>();
 const initialBackoffMs = 5_000;
 const maxBackoffMs = 300_000;
+const minClaimLeaseMs = 30_000;
+const maxClaimLeaseMs = 15 * 60_000;
+
+export const providerSessionCloseRecoveryClaimLeaseMs = 60_000;
+export const providerSessionCloseRecoveryClaimRenewIntervalMs = 20_000;
 
 function boundedText(value: string) {
   const normalized = value.trim();
@@ -78,6 +122,17 @@ function boundedText(value: string) {
     throw new ProviderSessionCloseRecoveryPersistenceError();
   }
   return normalized;
+}
+
+function boundedClaimLeaseMs(value: number) {
+  if (
+    !Number.isInteger(value) ||
+    value < minClaimLeaseMs ||
+    value > maxClaimLeaseMs
+  ) {
+    throw new ProviderSessionCloseRecoveryPersistenceError();
+  }
+  return value;
 }
 
 function safeReasonCode(value: string) {
@@ -152,10 +207,12 @@ function closeCredentialSource(
   };
 }
 
-function createDefaultRepository(): RecoveryRepository {
+export function createPrismaProviderSessionCloseRecoveryRepository(
+  client = prisma
+): RecoveryRepository {
   return {
     upsert: (input) =>
-      prisma.providerSessionCloseRecovery.upsert({
+      client.providerSessionCloseRecovery.upsert({
         where: {
           providerId_providerSessionId_instanceId: {
             providerId: input.providerId,
@@ -163,21 +220,85 @@ function createDefaultRepository(): RecoveryRepository {
             instanceId: input.instanceId
           }
         },
+        create: input,
         update: {
-          providerConfigVersion: input.providerConfigVersion,
+          digitalHumanSessionId: input.digitalHumanSessionId,
           reasonCode: input.reasonCode,
-          nextAttemptAt: input.nextAttemptAt,
-          lastErrorCode: null
-        },
-        create: input
+          nextAttemptAt: input.nextAttemptAt
+        }
+      }),
+    createClaim: (input) =>
+      client.$transaction(async (transaction) => {
+        const provider = await transaction.aiServiceProvider.findUnique({
+          where: { id: input.providerId },
+          select: { closeConfigVersion: true }
+        });
+        if (
+          !provider ||
+          provider.closeConfigVersion !== input.providerConfigVersion
+        ) {
+          throw new Error("Provider close configuration changed");
+        }
+        return transaction.providerSessionCloseRecovery.create({
+          data: { ...input, providerSessionId: null }
+        });
+      }),
+    attach: (id, data) =>
+      client.$transaction(async (transaction) => {
+        const updated = await transaction.providerSessionCloseRecovery.updateMany({
+          where: {
+            id,
+            OR: [
+              { providerSessionId: null },
+              { providerSessionId: data.providerSessionId }
+            ]
+          },
+          data
+        });
+        if (updated.count === 1) return true;
+        const existing = await transaction.providerSessionCloseRecovery.findUnique({
+          where: { id },
+          select: { providerSessionId: true }
+        });
+        return existing?.providerSessionId === data.providerSessionId;
+      }),
+    async renewClaim(id, claimExpiresAt) {
+      const updated = await client.providerSessionCloseRecovery.updateMany({
+        where: { id, providerSessionId: null, claimExpiresAt: { not: null } },
+        data: { claimExpiresAt }
+      });
+      return updated.count === 1;
+    },
+    expireClaims: (now) =>
+      client.$transaction(async (transaction) => {
+        const expired = await transaction.providerSessionCloseRecovery.findMany({
+          where: {
+            providerSessionId: null,
+            claimExpiresAt: { lte: now }
+          },
+          select: { id: true }
+        });
+        if (expired.length > 0) {
+          await transaction.providerSessionCloseRecovery.deleteMany({
+            where: {
+              id: { in: expired.map((claim) => claim.id) },
+              providerSessionId: null,
+              claimExpiresAt: { lte: now }
+            }
+          });
+        }
+        return expired;
       }),
     findDue: (now) =>
-      prisma.providerSessionCloseRecovery.findMany({
-        where: { nextAttemptAt: { lte: now } },
+      client.providerSessionCloseRecovery.findMany({
+        where: {
+          providerSessionId: { not: null },
+          nextAttemptAt: { lte: now }
+        },
         orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }]
       }),
     findProvider: (providerId) =>
-      prisma.aiServiceProvider.findUnique({
+      client.aiServiceProvider.findUnique({
         where: { id: providerId },
         select: {
           id: true,
@@ -190,9 +311,30 @@ function createDefaultRepository(): RecoveryRepository {
         }
       }),
     delete: (id) =>
-      prisma.providerSessionCloseRecovery.deleteMany({ where: { id } }),
+      client.providerSessionCloseRecovery.deleteMany({ where: { id } }),
+    complete: (id, digitalHumanSessionId, completedAt) =>
+      client.$transaction(async (transaction) => {
+        if (digitalHumanSessionId) {
+          await transaction.digitalHumanSession.updateMany({
+            where: { id: digitalHumanSessionId, status: { not: "STOPPED" } },
+            data: {
+              status: "STOPPED",
+              providerId: null,
+              modelId: null,
+              providerSessionId: null,
+              instanceId: null,
+              providerConfigVersion: null,
+              endedAt: completedAt,
+              stopReason: "PROVIDER_SESSION_RECOVERED"
+            }
+          });
+        }
+        await transaction.providerSessionCloseRecovery.deleteMany({
+          where: { id }
+        });
+      }),
     recordFailure: (id, data) =>
-      prisma.providerSessionCloseRecovery.updateMany({ where: { id }, data })
+      client.providerSessionCloseRecovery.updateMany({ where: { id }, data })
   };
 }
 
@@ -200,8 +342,11 @@ export function createProviderSessionCloseRecoveryService(
   overrides: Partial<RecoveryServiceDependencies> = {}
 ) {
   const deps: RecoveryServiceDependencies = {
-    repository: createDefaultRepository(),
+    repository: createPrismaProviderSessionCloseRecoveryRepository(),
     createSessionCloser: createLingmouSessionCloser,
+    auditUnknownClaim: (claimId) => {
+      console.warn("DIGITAL_HUMAN_DIAGNOSTIC_UNKNOWN_UPSTREAM", { claimId });
+    },
     now: () => new Date(),
     ...overrides
   };
@@ -213,6 +358,9 @@ export function createProviderSessionCloseRecoveryService(
       instanceId: boundedText(input.instanceId),
       providerConfigVersion: input.providerConfigVersion,
       reasonCode: safeReasonCode(input.reasonCode),
+      digitalHumanSessionId: input.digitalHumanSessionId
+        ? boundedText(input.digitalHumanSessionId)
+        : undefined,
       nextAttemptAt: deps.now()
     };
     if (!Number.isInteger(normalized.providerConfigVersion)) {
@@ -225,12 +373,104 @@ export function createProviderSessionCloseRecoveryService(
     }
   }
 
+  async function createClaim(input: ProviderSessionCloseRecoveryClaimInput) {
+    const claimedAt = deps.now();
+    const leaseMs = boundedClaimLeaseMs(input.leaseMs);
+    const normalized = {
+      providerId: boundedText(input.providerId),
+      instanceId: boundedText(input.instanceId),
+      providerConfigVersion: input.providerConfigVersion,
+      reasonCode: safeReasonCode(input.reasonCode),
+      nextAttemptAt: claimedAt,
+      claimExpiresAt: new Date(claimedAt.getTime() + leaseMs)
+    };
+    if (!Number.isInteger(normalized.providerConfigVersion)) {
+      throw new ProviderSessionCloseRecoveryPersistenceError();
+    }
+    try {
+      return await deps.repository.createClaim(normalized);
+    } catch {
+      throw new ProviderSessionCloseRecoveryPersistenceError();
+    }
+  }
+
+  async function renewClaim(id: string, leaseMs: number) {
+    const renewedAt = deps.now();
+    try {
+      const renewed = await deps.repository.renewClaim(
+        boundedText(id),
+        new Date(renewedAt.getTime() + boundedClaimLeaseMs(leaseMs))
+      );
+      if (!renewed) throw new Error("Recovery claim is unavailable");
+    } catch {
+      throw new ProviderSessionCloseRecoveryPersistenceError();
+    }
+  }
+
+  async function attach(
+    id: string,
+    providerSessionId: string,
+    reasonCode: string
+  ) {
+    try {
+      const updated = await deps.repository.attach(boundedText(id), {
+        providerSessionId: boundedText(providerSessionId),
+        reasonCode: safeReasonCode(reasonCode),
+        nextAttemptAt: deps.now(),
+        claimExpiresAt: null
+      });
+      if (!updated) throw new Error("Recovery claim is unavailable");
+    } catch {
+      throw new ProviderSessionCloseRecoveryPersistenceError();
+    }
+  }
+
+  async function release(id: string) {
+    try {
+      await deps.repository.delete(boundedText(id));
+    } catch {
+      throw new ProviderSessionCloseRecoveryPersistenceError();
+    }
+  }
+
+  async function persistClaimIdentity(
+    claimId: string,
+    input: ProviderSessionCloseRecoveryInput,
+    attachAttempts = 2
+  ) {
+    const normalizedClaimId = boundedText(claimId);
+    if (!Number.isInteger(attachAttempts) || attachAttempts < 1 || attachAttempts > 3) {
+      throw new ProviderSessionCloseRecoveryPersistenceError();
+    }
+    let attachFailed = false;
+    for (let attempt = 0; attempt < attachAttempts; attempt += 1) {
+      try {
+        await attach(
+          normalizedClaimId,
+          input.providerSessionId,
+          input.reasonCode
+        );
+        return { owner: "CLAIM" as const, attachFailed };
+      } catch {
+        attachFailed = true;
+      }
+    }
+
+    const fallback = await enqueue(input);
+    if (fallback.id === normalizedClaimId) {
+      return { owner: "CLAIM" as const, attachFailed };
+    }
+    await release(normalizedClaimId).catch(() => undefined);
+    return { owner: "FALLBACK" as const, attachFailed };
+  }
+
   function closeRecovery(record: RecoveryRecord) {
     const existing = inFlightRecoveries.get(record.id);
     if (existing) return existing;
 
     const pending = (async () => {
       try {
+        if (!record.providerSessionId) return false;
         const provider = await deps.repository.findProvider(record.providerId);
         if (
           !provider ||
@@ -248,7 +488,11 @@ export function createProviderSessionCloseRecoveryService(
             record.instanceId
           )
           .closeSession(record.providerSessionId);
-        await deps.repository.delete(record.id);
+        await deps.repository.complete(
+          record.id,
+          record.digitalHumanSessionId,
+          deps.now()
+        );
         return true;
       } catch (error) {
         const attemptCount = record.attemptCount + 1;
@@ -273,12 +517,24 @@ export function createProviderSessionCloseRecoveryService(
   }
 
   async function drainDue(at = deps.now()) {
+    const expiredClaims = await deps.repository.expireClaims(at);
+    for (const claim of expiredClaims) {
+      deps.auditUnknownClaim(claim.id);
+    }
     const records = await deps.repository.findDue(at);
     const results = await Promise.all(records.map(closeRecovery));
     return results.filter(Boolean).length;
   }
 
-  return { enqueue, drainDue };
+  return {
+    enqueue,
+    createClaim,
+    renewClaim,
+    attach,
+    release,
+    persistClaimIdentity,
+    drainDue
+  };
 }
 
 export async function enqueueProviderSessionCloseRecovery(
@@ -289,4 +545,45 @@ export async function enqueueProviderSessionCloseRecovery(
 
 export async function drainProviderSessionCloseRecoveries(now?: Date) {
   return createProviderSessionCloseRecoveryService().drainDue(now);
+}
+
+export async function createProviderSessionCloseRecoveryClaim(
+  input: ProviderSessionCloseRecoveryClaimInput
+) {
+  return createProviderSessionCloseRecoveryService().createClaim(input);
+}
+
+export async function attachProviderSessionCloseRecovery(
+  id: string,
+  providerSessionId: string,
+  reasonCode: string
+) {
+  return createProviderSessionCloseRecoveryService().attach(
+    id,
+    providerSessionId,
+    reasonCode
+  );
+}
+
+export async function renewProviderSessionCloseRecoveryClaim(
+  id: string,
+  leaseMs: number
+) {
+  return createProviderSessionCloseRecoveryService().renewClaim(id, leaseMs);
+}
+
+export async function persistProviderSessionCloseRecoveryIdentity(
+  claimId: string,
+  input: ProviderSessionCloseRecoveryInput,
+  attachAttempts = 2
+) {
+  return createProviderSessionCloseRecoveryService().persistClaimIdentity(
+    claimId,
+    input,
+    attachAttempts
+  );
+}
+
+export async function releaseProviderSessionCloseRecovery(id: string) {
+  return createProviderSessionCloseRecoveryService().release(id);
 }

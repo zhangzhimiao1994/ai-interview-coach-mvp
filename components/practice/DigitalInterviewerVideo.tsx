@@ -451,6 +451,16 @@ export function DigitalInterviewerVideo({
               createdOwner,
               "CLIENT_SDK_INIT_FAILED"
             );
+            const ownershipChanged =
+              createdOwner.finalized ||
+              createdOwner.trainingSessionId !== sessionId ||
+              sessionOwnershipRef.current !== createdOwner;
+            if (ownershipChanged) {
+              deleteOwnedDigitalHumanSession(createdOwner);
+            }
+            if (ownershipChanged || createdOwner.session !== localSession) {
+              throw new DOMException("Session owner changed", "AbortError");
+            }
             return {
               session: localSession,
               avatarClient: null,
@@ -691,7 +701,7 @@ export function DigitalInterviewerVideo({
           ) {
             return;
           }
-          stopSpeech(false);
+          const downgradeGeneration = stopSpeech(false);
           const owner = sessionOwnershipRef.current;
           try {
             if (!owner || owner.session !== digitalSession) {
@@ -701,6 +711,21 @@ export function DigitalInterviewerVideo({
               owner,
               "CLIENT_PCM_PUSH_FAILED"
             );
+            const ownershipChanged =
+              owner.finalized ||
+              owner.trainingSessionId !== sessionId ||
+              sessionOwnershipRef.current !== owner;
+            if (ownershipChanged) {
+              deleteOwnedDigitalHumanSession(owner);
+            }
+            if (
+              !playbackGuard.isCurrent(downgradeGeneration) ||
+              ownershipChanged ||
+              owner.session !== localSession ||
+              digitalSessionRef.current !== digitalSession
+            ) {
+              return;
+            }
             avatarClientRef.current = null;
             digitalSessionRef.current = localSession;
             setDigitalSession(localSession);
@@ -711,6 +736,16 @@ export function DigitalInterviewerVideo({
             setSpeechMessage("");
             lastAutoPlayedRef.current = null;
           } catch {
+            if (
+              !playbackGuard.isCurrent(downgradeGeneration) ||
+              !owner ||
+              owner.finalized ||
+              owner.trainingSessionId !== sessionId ||
+              sessionOwnershipRef.current !== owner ||
+              digitalSessionRef.current !== digitalSession
+            ) {
+              return;
+            }
             avatarClientRef.current = null;
             digitalSessionRef.current = null;
             setDigitalSession(null);

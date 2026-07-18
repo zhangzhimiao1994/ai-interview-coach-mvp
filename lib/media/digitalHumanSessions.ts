@@ -292,7 +292,8 @@ export function createPrismaDigitalHumanSessionRepository(
       client.digitalHumanSession.findMany({
         where: {
           trainingSessionId,
-          status: { in: [...nonStoppedStatuses] }
+          status: { in: [...nonStoppedStatuses] },
+          closeRecovery: { is: null }
         },
         orderBy: { createdAt: "asc" }
       }),
@@ -303,7 +304,8 @@ export function createPrismaDigitalHumanSessionRepository(
           status: { in: [...nonStoppedStatuses] },
           providerId: { not: null },
           providerSessionId: { not: null },
-          instanceId: { not: null }
+          instanceId: { not: null },
+          closeRecovery: { is: null }
         },
         orderBy: { createdAt: "asc" }
       }),
@@ -315,6 +317,7 @@ export function createPrismaDigitalHumanSessionRepository(
           providerId: { not: null },
           providerSessionId: { not: null },
           instanceId: { not: null },
+          closeRecovery: { is: null },
           OR: [
             {
               status: { in: ["READY", "SPEAKING"] },
@@ -802,30 +805,40 @@ export function createDigitalHumanSessionService(
     } catch (error) {
       if (error instanceof LingmouSessionRecoveryError) {
         const identity = error.recoveryIdentity();
-        await deps.repository
-          .transitionSession(connecting.id, ["CONNECTING"], {
-            status: "FAILED",
-            providerSessionId: identity.providerSessionId,
-            instanceId: identity.instanceId,
-            endedAt: deps.now(),
-            stopReason: "CREATE_COMPENSATION_FAILED"
-          })
-          .catch(() => undefined);
         try {
           await deps.enqueueRecovery({
             providerId: model.providerId,
             providerSessionId: identity.providerSessionId,
             instanceId: identity.instanceId,
             providerConfigVersion: model.providerConfigVersion,
-            reasonCode: "CREATE_COMPENSATION_FAILED"
+            reasonCode: "CREATE_COMPENSATION_FAILED",
+            digitalHumanSessionId: connecting.id
           });
         } catch {
+          await deps.repository
+            .transitionSession(connecting.id, ["CONNECTING"], {
+              status: "FAILED",
+              providerSessionId: identity.providerSessionId,
+              instanceId: identity.instanceId,
+              endedAt: deps.now(),
+              stopReason: "CREATE_COMPENSATION_FAILED"
+            })
+            .catch(() => undefined);
           throw new DigitalHumanSessionError(
             "Digital human recovery queue could not be persisted",
             "DIGITAL_HUMAN_RECOVERY_QUEUE_PERSIST_FAILED",
             500
           );
         }
+        await deps.repository
+          .transitionSession(connecting.id, ["CONNECTING"], {
+            status: "FAILED",
+            providerSessionId: null,
+            instanceId: identity.instanceId,
+            endedAt: deps.now(),
+            stopReason: "CREATE_COMPENSATION_FAILED"
+          })
+          .catch(() => undefined);
         throw new DigitalHumanSessionError(
           "Digital human upstream session is pending recovery",
           "DIGITAL_HUMAN_UPSTREAM_RECOVERY_PENDING",

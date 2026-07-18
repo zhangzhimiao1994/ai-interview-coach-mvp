@@ -106,6 +106,7 @@ describe("server shutdown lifecycle", () => {
         providerId: { not: null },
         providerSessionId: { not: null },
         instanceId: { not: null },
+        closeRecovery: { is: null },
         OR: [
           {
             status: { in: ["READY", "SPEAKING"] },
