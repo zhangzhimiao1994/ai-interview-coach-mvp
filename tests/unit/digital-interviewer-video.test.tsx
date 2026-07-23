@@ -21,9 +21,24 @@ const lingmou = vi.hoisted(() => {
     createClient: vi.fn(async () => client)
   };
 });
+const duix = vi.hoisted(() => {
+  const client = {
+    start: vi.fn(async (): Promise<void> => undefined),
+    speak: vi.fn(async (): Promise<void> => undefined),
+    interrupt: vi.fn(),
+    exit: vi.fn(async (): Promise<void> => undefined)
+  };
+  return {
+    client,
+    createClient: vi.fn(async () => client)
+  };
+});
 
 vi.mock("@/lib/client/lingmouAvatarClient", () => ({
   createLingmouAvatarClient: lingmou.createClient
+}));
+vi.mock("@/lib/client/duixAvatarClient", () => ({
+  createDuixAvatarClient: duix.createClient
 }));
 
 import {
@@ -73,8 +88,19 @@ const connection = {
   token: "short-lived-token",
   sessionId: "provider-session"
 };
+const duixConnection = {
+  protocol: "webrtc",
+  metadata: {
+    adapter: "DUIX_H5_SDK",
+    sign: "jwt-sign",
+    conversationId: "conv-1",
+    platform: "duix.com",
+    openAsr: false,
+    speechMode: "duix-managed"
+  }
+};
 
-function sessionResponse(mode: "LINGMOU_CLOUD" | "LOCAL_AVATAR") {
+function sessionResponse(mode: "DUIX_H5" | "LINGMOU_CLOUD" | "LOCAL_AVATAR") {
   return Response.json(
     {
       session: {
@@ -82,7 +108,12 @@ function sessionResponse(mode: "LINGMOU_CLOUD" | "LOCAL_AVATAR") {
         mode,
         status: "READY",
         reasonCode: mode === "LOCAL_AVATAR" ? "LINGMOU_NOT_CONFIGURED" : null,
-        connection: mode === "LINGMOU_CLOUD" ? connection : null,
+        connection:
+          mode === "LINGMOU_CLOUD"
+            ? connection
+            : mode === "DUIX_H5"
+              ? duixConnection
+              : null,
         expiresAt: "2026-07-18T01:00:00.000Z"
       }
     },
@@ -131,7 +162,7 @@ function fallbackResponse() {
 }
 
 function createFetchRouter(options: {
-  mode?: "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+  mode?: "DUIX_H5" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
   speech?: () => Promise<Response> | Response;
 } = {}) {
   const mode = options.mode ?? "LOCAL_AVATAR";
@@ -262,7 +293,7 @@ describe("DigitalInterviewerVideo", () => {
 
     expect(markup).toContain('data-testid="lingmou-avatar-root"');
     expect(markup).toContain('<video');
-    expect(markup).toContain("灵眸真实数字人 / 本地数字人降级");
+    expect(markup).toContain("DUIX / 灵眸实时数字人");
     expect(markup).toContain("CosyVoice / 浏览器语音降级");
     expect(markup).toContain("AI 生成数字人");
     expect(markup).toContain("请介绍项目经验。");
@@ -331,6 +362,23 @@ describe("DigitalInterviewerVideo", () => {
       Int16Array.from([2, 3]),
       true
     );
+    expect(audio.play).not.toHaveBeenCalled();
+    expect(speechSynthesis.speak).not.toHaveBeenCalled();
+  });
+
+  it("starts DUIX H5 mode and speaks directly without requesting CosyVoice speech", async () => {
+    const { audio, speechSynthesis } = setupInteractiveBrowser();
+    const fetchMock = createFetchRouter({ mode: "DUIX_H5" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { avatarRoot } = await renderInteractive(audio);
+
+    expect(duix.createClient).toHaveBeenCalledOnce();
+    expect(duix.client.start).toHaveBeenCalledWith(duixConnection, avatarRoot);
+    expect(duix.client.speak).toHaveBeenCalledWith("请介绍一下你自己。", true);
+    expect(fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/speech")
+    )).toHaveLength(0);
     expect(audio.play).not.toHaveBeenCalled();
     expect(speechSynthesis.speak).not.toHaveBeenCalled();
   });

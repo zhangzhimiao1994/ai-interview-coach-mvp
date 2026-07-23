@@ -7,7 +7,12 @@ import {
   type LingmouAvatarClient,
   type LingmouRtcConnection
 } from "@/lib/client/lingmouAvatarClient";
+import {
+  createDuixAvatarClient,
+  type DuixAvatarClient
+} from "@/lib/client/duixAvatarClient";
 import { Pcm16LeDecoder, pcm16LeToWavBlob } from "@/lib/client/pcm16";
+import type { DigitalHumanConnection } from "@/lib/media/types";
 
 type InterviewerExpression =
   | "neutral"
@@ -30,22 +35,23 @@ type DigitalInterviewerVideoProps = {
 };
 
 type SpeechState = "idle" | "loading" | "speaking" | "paused" | "unsupported";
-type SpeechMode = "COSYVOICE" | "BROWSER_TTS_FALLBACK" | null;
-type AvatarMode = "CONNECTING" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+type SpeechMode = "DUIX" | "COSYVOICE" | "BROWSER_TTS_FALLBACK" | null;
+type AvatarMode = "CONNECTING" | "DUIX_H5" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+type AvatarClient = DuixAvatarClient | LingmouAvatarClient;
 
 type PublicDigitalHumanSession = {
   id: string;
-  mode: "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+  mode: "DUIX_H5" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
   status: "READY";
   reasonCode: string | null;
-  connection: LingmouRtcConnection | null;
+  connection: DigitalHumanConnection | LingmouRtcConnection | null;
   expiresAt: string;
 };
 
 type DigitalHumanSessionActivation = {
   session: PublicDigitalHumanSession;
-  avatarClient: LingmouAvatarClient | null;
-  avatarMode: "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+  avatarClient: AvatarClient | null;
+  avatarMode: "DUIX_H5" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
   avatarMessage: string;
 };
 
@@ -54,7 +60,7 @@ type DigitalHumanSessionOwnership = {
   controller: AbortController;
   promise: Promise<DigitalHumanSessionActivation>;
   session: PublicDigitalHumanSession | null;
-  avatarClient: LingmouAvatarClient | null;
+  avatarClient: AvatarClient | null;
   lease: number;
   finalized: boolean;
   deleteRequested: boolean;
@@ -136,7 +142,11 @@ function isDigitalHumanSession(value: unknown): value is PublicDigitalHumanSessi
   const session = value as Partial<PublicDigitalHumanSession>;
   return (
     typeof session.id === "string" &&
-    (session.mode === "LINGMOU_CLOUD" || session.mode === "LOCAL_AVATAR") &&
+    (
+      session.mode === "DUIX_H5" ||
+      session.mode === "LINGMOU_CLOUD" ||
+      session.mode === "LOCAL_AVATAR"
+    ) &&
     session.status === "READY" &&
     typeof session.expiresAt === "string" &&
     (session.connection === null || typeof session.connection === "object")
@@ -195,7 +205,7 @@ export function DigitalInterviewerVideo({
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const avatarRootRef = useRef<HTMLVideoElement | null>(null);
-  const avatarClientRef = useRef<LingmouAvatarClient | null>(null);
+  const avatarClientRef = useRef<AvatarClient | null>(null);
   const digitalSessionRef = useRef<PublicDigitalHumanSession | null>(null);
   const sessionOwnershipRef = useRef<DigitalHumanSessionOwnership | null>(null);
   const avatarModeRef = useRef<AvatarMode>(avatarMode);
@@ -217,7 +227,7 @@ export function DigitalInterviewerVideo({
   const setActiveAvatarMode = useCallback((mode: AvatarMode) => {
     avatarModeRef.current = mode;
     setAvatarMode(mode);
-    setCloudReady(mode === "LINGMOU_CLOUD");
+    setCloudReady(mode === "LINGMOU_CLOUD" || mode === "DUIX_H5");
   }, []);
 
   const stopSpeech = useCallback(
@@ -429,7 +439,10 @@ export function DigitalInterviewerVideo({
               client.exit();
               throw new DOMException("Session finalized", "AbortError");
             }
-            await client.start(createdSession.connection, root);
+            await client.start(
+              createdSession.connection as LingmouRtcConnection,
+              root
+            );
             if (createdOwner.finalized) {
               client.exit();
               throw new DOMException("Session finalized", "AbortError");
@@ -438,6 +451,59 @@ export function DigitalInterviewerVideo({
               session: createdSession,
               avatarClient: client,
               avatarMode: "LINGMOU_CLOUD",
+              avatarMessage: ""
+            };
+          } catch (error) {
+            if (
+              createdOwner.finalized ||
+              caughtErrorName(error) === "AbortError"
+            ) {
+              throw error;
+            }
+            const localSession = await requestOwnedDowngrade(
+              createdOwner,
+              "CLIENT_SDK_INIT_FAILED"
+            );
+            const ownershipChanged =
+              createdOwner.finalized ||
+              createdOwner.trainingSessionId !== sessionId ||
+              sessionOwnershipRef.current !== createdOwner;
+            if (ownershipChanged) {
+              deleteOwnedDigitalHumanSession(createdOwner);
+            }
+            if (ownershipChanged || createdOwner.session !== localSession) {
+              throw new DOMException("Session owner changed", "AbortError");
+            }
+            return {
+              session: localSession,
+              avatarClient: null,
+              avatarMode: "LOCAL_AVATAR",
+              avatarMessage: "数字人画面已降级"
+            };
+          }
+        }
+
+        if (createdSession.mode === "DUIX_H5" && createdSession.connection) {
+          try {
+            if (!root) throw new Error("DUIX_ROOT_UNAVAILABLE");
+            const client = await createDuixAvatarClient();
+            createdOwner.avatarClient = client;
+            if (createdOwner.finalized) {
+              void client.exit();
+              throw new DOMException("Session finalized", "AbortError");
+            }
+            await client.start(
+              createdSession.connection as DigitalHumanConnection,
+              root
+            );
+            if (createdOwner.finalized) {
+              void client.exit();
+              throw new DOMException("Session finalized", "AbortError");
+            }
+            return {
+              session: createdSession,
+              avatarClient: client,
+              avatarMode: "DUIX_H5",
               avatarMessage: ""
             };
           } catch (error) {
@@ -538,7 +604,7 @@ export function DigitalInterviewerVideo({
   }, [requestOwnedDowngrade, sessionId, setActiveAvatarMode, stopSpeech]);
 
   useEffect(() => {
-    if (!digitalSession || digitalSession.mode !== "LINGMOU_CLOUD") return;
+    if (!digitalSession || digitalSession.mode === "LOCAL_AVATAR") return;
     const heartbeat = () => {
       void fetch(
         `/api/digital-human/sessions/${encodeURIComponent(digitalSession.id)}/heartbeat`,
@@ -649,6 +715,15 @@ export function DigitalInterviewerVideo({
     abortRef.current = controller;
     setSpeechState("loading");
     try {
+      if (avatarModeRef.current === "DUIX_H5" && avatarClientRef.current) {
+        await (avatarClientRef.current as DuixAvatarClient).speak(prompt, true);
+        if (!playbackGuard.isCurrent(generation)) return;
+        setSpeechMode("DUIX");
+        setSpeechState("speaking");
+        setSpeechMessage("DUIX 数字人正在播报。");
+        return;
+      }
+
       const response = await fetch(
         `/api/digital-human/sessions/${encodeURIComponent(digitalSession.id)}/speech`,
         {
@@ -672,6 +747,7 @@ export function DigitalInterviewerVideo({
       if (!response.body) throw new Error("TTS_STREAM_MISSING");
 
       if (avatarModeRef.current === "LINGMOU_CLOUD" && avatarClientRef.current) {
+        const lingmouClient = avatarClientRef.current as LingmouAvatarClient;
         const decoder = new Pcm16LeDecoder();
         const reader = response.body.getReader();
         let previous: Int16Array | null = null;
@@ -685,12 +761,12 @@ export function DigitalInterviewerVideo({
             if (next.done) break;
             const decoded = decoder.push(next.value);
             if (decoded.length === 0) continue;
-            if (previous) avatarClientRef.current.pushPcm(previous, false);
+            if (previous) lingmouClient.pushPcm(previous, false);
             previous = decoded;
           }
           decoder.finish();
           if (!previous) throw new Error("TTS_STREAM_EMPTY");
-          avatarClientRef.current.pushPcm(previous, true);
+          lingmouClient.pushPcm(previous, true);
           setSpeechMode("COSYVOICE");
           setSpeechState("idle");
           setSpeechMessage("CosyVoice 播报已发送至灵眸数字人。");
@@ -855,7 +931,7 @@ export function DigitalInterviewerVideo({
       setSpeechState("paused");
       return;
     }
-    if (avatarModeRef.current === "LINGMOU_CLOUD") {
+    if (avatarModeRef.current === "LINGMOU_CLOUD" || avatarModeRef.current === "DUIX_H5") {
       avatarClientRef.current?.interrupt();
       setSpeechState("paused");
       return;
@@ -868,8 +944,12 @@ export function DigitalInterviewerVideo({
 
   const modeText =
     speechState === "loading"
-      ? "正在生成 CosyVoice"
-      : speechMode === "COSYVOICE"
+      ? avatarMode === "DUIX_H5"
+        ? "DUIX 准备播报"
+        : "正在生成 CosyVoice"
+      : speechMode === "DUIX"
+        ? "DUIX"
+        : speechMode === "COSYVOICE"
         ? "CosyVoice"
         : speechMode === "BROWSER_TTS_FALLBACK"
           ? "浏览器语音降级"
@@ -899,7 +979,7 @@ export function DigitalInterviewerVideo({
               <video
                 ref={avatarRootRef}
                 data-testid="lingmou-avatar-root"
-                aria-label="灵眸数字人视频"
+                aria-label="实时数字人视频"
                 autoPlay
                 playsInline
                 className="absolute inset-0 h-full w-full rounded-[2rem] object-cover"
@@ -966,7 +1046,7 @@ export function DigitalInterviewerVideo({
             />
             <div className="flex flex-wrap items-center gap-2 text-xs text-blue-100">
               <span className="rounded-full border border-emerald-200/30 bg-emerald-300/10 px-2 py-1">{modeText}</span>
-              <span>灵眸真实数字人 / 本地数字人降级</span>
+              <span>DUIX / 灵眸实时数字人</span>
               <span aria-hidden="true">·</span>
               <span>CosyVoice / 浏览器语音降级</span>
             </div>
@@ -981,7 +1061,7 @@ export function DigitalInterviewerVideo({
           <StatusLine icon={<Camera className="h-4 w-4" aria-hidden="true" />} label="摄像头已连接" />
           <StatusLine icon={<Mic className="h-4 w-4" aria-hidden="true" />} label="麦克风待录入" />
           <StatusLine icon={<Radio className="h-4 w-4" aria-hidden="true" />} label="AI 追问引擎在线" />
-          {!compact ? <div className="mt-2 rounded-md bg-black/25 p-3 text-xs leading-5 text-blue-50">灵眸不可用时保留本地数字人；CosyVoice 不可用时再使用浏览器语音，面试文字始终可读。</div> : null}
+          {!compact ? <div className="mt-2 rounded-md bg-black/25 p-3 text-xs leading-5 text-blue-50">实时数字人不可用时保留本地数字人；CosyVoice 不可用时再使用浏览器语音，面试文字始终可读。</div> : null}
         </aside>
       </div>
     </section>

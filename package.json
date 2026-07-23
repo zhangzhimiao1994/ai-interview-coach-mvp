@@ -23,6 +23,7 @@
     "@alicloud/openapi-core": "1.0.8",
     "@prisma/client": "^5.22.0",
     "clsx": "^2.1.1",
+    "duix-guiji": "^2.1.2",
     "lm-avatar-chat-sdk": "1.1.4",
     "lucide-react": "^0.468.0",
     "next": "^15.0.0",

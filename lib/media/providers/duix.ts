@@ -61,9 +61,9 @@ export function createDuixProvider(
   const ttlSeconds = 600;
 
   return {
-    async createSession(_input: DigitalHumanSessionInput) {
+    async createSession(input: DigitalHumanSessionInput) {
       const now = deps.now();
-      const traceId = deps.randomId();
+      const traceId = input.idempotencyKey || deps.randomId();
       const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
       const sign = createDuixSign({
         appId: credentials.appId,
@@ -109,7 +109,8 @@ export function createDuixProvider(
       };
     },
 
-    async stopSession(_sessionId: string) {
+    async stopSession(sessionId: string) {
+      void sessionId;
       return undefined;
     },
 
