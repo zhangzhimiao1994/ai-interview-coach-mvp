@@ -1,8 +1,11 @@
+# syntax=docker/dockerfile:1.7
+
 FROM node:22-alpine AS deps
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000 --no-audit
 
 FROM node:22-alpine AS builder
 

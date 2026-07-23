@@ -86,6 +86,26 @@ describe("linux deployment package", () => {
     expect(dockerIgnore).not.toMatch(/^lib(?:\/|$)/m);
   });
 
+  it("keeps the DUIX H5 SDK dependency and browser adapter in the Docker source package", () => {
+    expect(readWorkspaceFile("package.json")).toContain('"duix-guiji"');
+    expect(readWorkspaceFile("package-lock.json")).toContain('"node_modules/duix-guiji"');
+    expect(existsSync(join(root, "lib/client/duixAvatarClient.ts"))).toBe(true);
+    expect(existsSync(join(root, "duix-guiji.d.ts"))).toBe(true);
+
+    const dockerIgnore = readWorkspaceFile(".dockerignore");
+    expect(dockerIgnore).not.toMatch(/^duix-guiji\.d\.ts$/m);
+    expect(dockerIgnore).not.toMatch(/^lib\/client(?:\/|$)/m);
+  });
+
+  it("uses cached and retryable npm installs during Docker builds", () => {
+    const dockerfile = readWorkspaceFile("Dockerfile");
+
+    expect(dockerfile).toContain("# syntax=docker/dockerfile");
+    expect(dockerfile).toContain("--mount=type=cache,target=/root/.npm");
+    expect(dockerfile).toContain("--fetch-retries=5");
+    expect(dockerfile).toContain("--fetch-retry-maxtimeout=120000");
+  });
+
   it("documents authenticated diagnostics after source and Docker updates", () => {
     const docs = readWorkspaceFile("docs/linux-deployment.md");
 

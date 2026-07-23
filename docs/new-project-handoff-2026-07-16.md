@@ -288,4 +288,46 @@ c9426c3 harden production startup and health checks
 db554cf clarify current model selection semantics
 ```
 
+## 12. 2026-07-23 本地进展：硅基 DUIX 数字人接入
+
+本轮从 `feature/alibaba-multimodal-integration` 继续开发，项目展示名保持为“开发面试数字人”，远端仓库仍是 `zhangzhimiao1994/ai-interview-coach-mvp`。按用户最新要求，本轮只做本地提交，不推送 GitHub。
+
+已完成并本地提交：
+
+- `eeeadce design: add DUIX digital human integration`
+- `681a391 plan: add DUIX implementation plan`
+- `ac4321c feat: add DUIX provider configuration`
+- `a13f731 feat: support DUIX digital human sessions`
+- `bb031e9 feat: drive interview room with DUIX avatar`
+
+已实现范围：
+
+- 新增 `DUIX` 服务商类型和后台配置字段：`appId`、`appSecret`、`platform`。
+- 新增 DUIX 实时数字人模型设置：`conversationId`、`interactionMode=direct-drive`、`speechMode=duix-managed`。
+- 服务端使用 DUIX `appSecret` 生成短期 HS256 JWT sign，只向浏览器返回 `sign`、`conversationId` 和 H5 SDK 所需公开元数据，不暴露 `appSecret`。
+- 数字人会话新增 `DUIX_H5` 模式；DUIX 配置缺失或签名失败时降级到 `LOCAL_AVATAR`，不自动切到灵眸以避免额外付费调用。
+- 面试房间新增 DUIX H5 SDK 客户端，支持 `init/start/speak/break/stop` 生命周期；DUIX 播报时不再走 `/speech` 的 CosyVoice 音频流。
+- Docker 源码包同步包含 `duix-guiji`、`duix-guiji.d.ts` 和 `lib/client/duixAvatarClient.ts`；Dockerfile 的 `npm ci` 已加 BuildKit npm cache 和 fetch retry，降低 registry 抖动失败概率。
+
+已通过验证：
+
+- `npm.cmd test -- tests/unit/linux-deployment-package.test.ts`
+- `npm.cmd test`
+- `npm.cmd run build`
+
+Docker 验证状态：
+
+- 已临时启动 Docker Desktop 并尝试 `docker compose build`。
+- 第一次 Docker 构建在容器内 `npm ci` 阶段失败：`ECONNRESET`，属于 Docker 内 npm registry 网络连接中断。
+- 已更新 Dockerfile 为缓存和重试安装后再次尝试；第二次仍长时间停在容器内 `npm ci` 网络下载阶段。
+- 为避免占用内存，已执行 `docker compose down --remove-orphans` 并执行 `docker desktop stop` 关闭 Docker Desktop。
+- 因 Docker 内 registry 网络阻塞，本轮没有完成 Docker 镜像健康检查；源码测试和 Next 生产构建已通过。
+
+继续建议：
+
+1. 网络稳定后重新执行 `docker compose build`。
+2. 构建成功后执行 `docker compose up -d`、`docker compose ps`、访问 `/api/health`。
+3. 验证后执行 `docker compose down --remove-orphans` 和 `docker desktop stop`。
+4. 用户明确恢复推送授权后，再推送本地提交到 GitHub。
+
 新项目或新会话应从 `feature/alibaba-multimodal-integration` 分支和本交接文档继续，不要从早期 Mock 演示版本重新开始。
