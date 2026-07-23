@@ -38,6 +38,18 @@ const connection = {
   token: "short-lived-token",
   sessionId: "provider-session-1"
 };
+const duixConnection = {
+  protocol: "webrtc" as const,
+  metadata: {
+    adapter: "DUIX_H5_SDK",
+    sign: "short-lived-sign",
+    conversationId: "conv-1",
+    platform: "duix.com",
+    sdkPackage: "duix-guiji",
+    openAsr: false,
+    speechMode: "duix-managed"
+  }
+};
 
 function realtimeModel(): ResolvedMediaModel {
   return {
@@ -65,10 +77,36 @@ function realtimeModel(): ResolvedMediaModel {
   };
 }
 
+function duixRealtimeModel(): ResolvedMediaModel {
+  return {
+    capability: "DIGITAL_HUMAN_REALTIME",
+    providerId: "duix-provider",
+    providerName: "硅基 DUIX",
+    providerType: "DUIX",
+    providerConfigVersion: 2,
+    baseUrl: null,
+    providerSettings: { platform: "duix.com" },
+    modelId: "duix-model",
+    modelDisplayName: "DUIX 2D 端渲染实时数字人",
+    modelName: "duix-h5-realtime",
+    modelSettings: {
+      conversationId: "conv-1",
+      client: "web",
+      interactionMode: "direct-drive",
+      speechMode: "duix-managed"
+    },
+    temperature: 0.4,
+    maxTokens: 1200,
+    timeoutMs: 30_000,
+    credentialEnvelopes: { apiKey: null, structured: null }
+  };
+}
+
 function harness(initial: RecordRow[] = []) {
   const rows = new Map(initial.map((row) => [row.id, { ...row }]));
   let sequence = initial.length;
   const closeSession = vi.fn().mockResolvedValue(undefined);
+  const stopSession = vi.fn().mockResolvedValue(undefined);
   const createSession = vi.fn().mockResolvedValue({
     providerSessionId: "provider-session-1",
     connection
@@ -130,7 +168,7 @@ function harness(initial: RecordRow[] = []) {
     failUnrecoverableSessions: vi.fn().mockResolvedValue(0)
   };
   const resolveRealtimeModel = vi.fn().mockResolvedValue(realtimeModel());
-  const provider = { createSession, closeSession };
+  const provider = { createSession, closeSession, stopSession };
   const createProvider = vi.fn(() => provider);
   const createSessionCloser = vi.fn(() => ({ closeSession }));
   const enqueueRecovery = vi.fn().mockResolvedValue(undefined);
@@ -212,6 +250,43 @@ describe("digital human session lifecycle", () => {
     });
     expect(JSON.stringify(stored)).not.toContain("short-lived-token");
     expect(stored).not.toHaveProperty("connection");
+  });
+
+  it("creates a ready DUIX H5 session while returning only browser-safe metadata", async () => {
+    const { rows, resolveRealtimeModel, provider, createSessionCloser, service } =
+      harness();
+    resolveRealtimeModel.mockResolvedValue(duixRealtimeModel());
+    provider.createSession.mockResolvedValue({
+      providerSessionId: "duix-provider-session-1",
+      connection: duixConnection
+    });
+
+    const result = await service.createDigitalHumanSession("training-1");
+
+    expect(provider.createSession).toHaveBeenCalledWith({
+      trainingSessionId: "training-1"
+    });
+    expect(result).toEqual({
+      id: "digital-1",
+      mode: "DUIX_H5",
+      status: "READY",
+      reasonCode: null,
+      connection: duixConnection,
+      expiresAt: "2026-07-17T03:15:00.000Z"
+    });
+    expect(rows.get("digital-1")).toMatchObject({
+      providerId: "duix-provider",
+      modelId: "duix-model",
+      adapter: "DUIX_H5_SDK",
+      mode: "DUIX_H5",
+      providerSessionId: "duix-provider-session-1",
+      instanceId: null,
+      providerConfigVersion: 2,
+      status: "READY"
+    });
+    expect(createSessionCloser).not.toHaveBeenCalled();
+    expect(JSON.stringify(rows.get("digital-1"))).not.toContain("short-lived-sign");
+    expect(JSON.stringify(result)).not.toContain("appSecret");
   });
 
   it("falls back to a usable local session when Lingmou configuration is unavailable", async () => {
@@ -340,6 +415,36 @@ describe("digital human session lifecycle", () => {
     });
   });
 
+  it("falls back locally when DUIX signing or H5 session preparation fails", async () => {
+    const { rows, resolveRealtimeModel, provider, enqueueRecovery, service } =
+      harness();
+    resolveRealtimeModel.mockResolvedValue(duixRealtimeModel());
+    provider.createSession.mockRejectedValue(
+      new MediaProviderError(
+        "raw duix appSecret sentinel",
+        "DUIX",
+        "DUIX_UPSTREAM_FAILED",
+        true
+      )
+    );
+
+    const result = await service.createDigitalHumanSession("training-1");
+
+    expect(result).toMatchObject({
+      mode: "LOCAL_AVATAR",
+      status: "READY",
+      reasonCode: "DUIX_UPSTREAM_FAILED",
+      connection: null
+    });
+    expect(enqueueRecovery).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain("appSecret sentinel");
+    expect([...rows.values()][0]).toMatchObject({
+      mode: "LOCAL_AVATAR",
+      status: "READY",
+      providerSessionId: null
+    });
+  });
+
   it("records STOPPED after compensation closes a cloud session whose READY update failed", async () => {
     const { rows, repository, provider, service } = harness();
     repository.transitionSession.mockRejectedValueOnce(new Error("database unavailable"));
@@ -425,6 +530,37 @@ describe("digital human session lifecycle", () => {
     });
     expect(provider.closeSession).not.toHaveBeenCalled();
     expect(repository.transitionSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops a DUIX H5 session locally without invoking Lingmou close recovery", async () => {
+    const duix = row({
+      providerId: "duix-provider",
+      modelId: "duix-model",
+      adapter: "DUIX_H5_SDK",
+      mode: "DUIX_H5",
+      providerSessionId: "duix-provider-session-1",
+      instanceId: null,
+      providerConfigVersion: 2
+    });
+    const {
+      rows,
+      repository,
+      provider,
+      createSessionCloser,
+      service
+    } = harness([duix]);
+
+    await service.stopDigitalHumanSession("digital-1", "CLIENT_EXIT");
+
+    expect(rows.get("digital-1")).toMatchObject({
+      status: "STOPPED",
+      endedAt: now,
+      stopReason: "CLIENT_EXIT"
+    });
+    expect(provider.closeSession).not.toHaveBeenCalled();
+    expect(provider.stopSession).not.toHaveBeenCalled();
+    expect(repository.findCloseProvider).not.toHaveBeenCalled();
+    expect(createSessionCloser).not.toHaveBeenCalled();
   });
 
   it("normalizes unsafe stop reasons before persistence", async () => {

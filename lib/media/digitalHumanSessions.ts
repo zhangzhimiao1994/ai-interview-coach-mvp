@@ -10,11 +10,17 @@ import {
   type LingmouSessionCloser
 } from "@/lib/media/providers/lingmou";
 import type { LingmouCloseCredentialSource } from "@/lib/media/providers/lingmouCredentials";
+import { createDuixProvider } from "@/lib/media/providers/duix";
 import {
   drainProviderSessionCloseRecoveries,
   enqueueProviderSessionCloseRecovery,
   type ProviderSessionCloseRecoveryInput
 } from "@/lib/media/providerSessionCloseRecoveries";
+import type {
+  DigitalHumanConnection,
+  DigitalHumanSessionInput,
+  RealtimeDigitalHumanProvider
+} from "@/lib/media/types";
 
 export const digitalHumanSessionStatuses = [
   "CONNECTING",
@@ -27,14 +33,17 @@ export const digitalHumanSessionStatuses = [
 
 export type DigitalHumanSessionStatus =
   (typeof digitalHumanSessionStatuses)[number];
-export type DigitalHumanSessionMode = "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+export type DigitalHumanSessionMode =
+  | "DUIX_H5"
+  | "LINGMOU_CLOUD"
+  | "LOCAL_AVATAR";
 
 export type PublicDigitalHumanSession = {
   id: string;
   mode: DigitalHumanSessionMode;
   status: "READY";
   reasonCode: string | null;
-  connection: LingmouRtcConnection | null;
+  connection: LingmouRtcConnection | DigitalHumanConnection | null;
   expiresAt: string;
 };
 
@@ -117,7 +126,7 @@ export type DigitalHumanSessionRepository = {
 type DigitalHumanSessionServiceDependencies = {
   repository: DigitalHumanSessionRepository;
   resolveRealtimeModel: () => Promise<ResolvedMediaModel>;
-  createProvider: (model: ResolvedMediaModel) => LingmouProvider;
+  createProvider: (model: ResolvedMediaModel) => RealtimeDigitalHumanProvider | LingmouProvider;
   createSessionCloser: (
     source: LingmouCloseCredentialSource,
     persistedInstanceId: string
@@ -139,6 +148,40 @@ const inFlightSessionDowngrades = new Map<
   string,
   Promise<PublicDigitalHumanSession>
 >();
+
+function runtimeAdapter(model: ResolvedMediaModel) {
+  if (model.providerType === "DUIX") {
+    return {
+      adapter: "DUIX_H5_SDK",
+      mode: "DUIX_H5" as const,
+      notConfiguredCode: "DUIX_NOT_CONFIGURED",
+      upstreamFailedCode: "DUIX_UPSTREAM_FAILED"
+    };
+  }
+
+  return {
+    adapter: "LINGMOU_OFFICIAL_SDK",
+    mode: "LINGMOU_CLOUD" as const,
+    notConfiguredCode: "LINGMOU_NOT_CONFIGURED",
+    upstreamFailedCode: "LINGMOU_UPSTREAM_FAILED"
+  };
+}
+
+function createRealtimeProvider(model: ResolvedMediaModel) {
+  if (model.providerType === "DUIX") {
+    return createDuixProvider(model);
+  }
+  if (model.providerType === "LINGMOU") {
+    return createLingmouProvider(model);
+  }
+  throw new MediaConfigurationError(
+    "Selected digital-human provider is not adapted",
+    {
+      provider: model.providerType,
+      code: "DIGITAL_HUMAN_PROVIDER_NOT_ADAPTED"
+    }
+  );
+}
 
 const allowedTransitions: Record<
   DigitalHumanSessionStatus,
@@ -395,7 +438,7 @@ function defaultDependencies(): DigitalHumanSessionServiceDependencies {
   return {
     repository: createPrismaDigitalHumanSessionRepository(),
     resolveRealtimeModel: () => resolveMediaModel("DIGITAL_HUMAN_REALTIME"),
-    createProvider: createLingmouProvider,
+    createProvider: createRealtimeProvider,
     createSessionCloser: createLingmouSessionCloser,
     enqueueRecovery: enqueueProviderSessionCloseRecovery,
     now: () => new Date()
@@ -610,7 +653,7 @@ export function createDigitalHumanSessionService(
       };
     }
     if (
-      record.mode !== "LINGMOU_CLOUD" ||
+      !["LINGMOU_CLOUD", "DUIX_H5"].includes(record.mode) ||
       !["READY", "SPEAKING", "FAILED"].includes(record.status)
     ) {
       throw new DigitalHumanSessionError(
@@ -634,23 +677,25 @@ export function createDigitalHumanSessionService(
     }
 
     try {
-      if (
-        !stopping.providerId ||
-        !stopping.providerSessionId ||
-        !stopping.instanceId
-      ) {
-        throw new Error("Cloud session metadata is incomplete");
+      if (stopping.mode === "LINGMOU_CLOUD") {
+        if (
+          !stopping.providerId ||
+          !stopping.providerSessionId ||
+          !stopping.instanceId
+        ) {
+          throw new Error("Cloud session metadata is incomplete");
+        }
+        const provider = await deps.repository.findCloseProvider(
+          stopping.providerId
+        );
+        if (!provider) throw new Error("Close provider is unavailable");
+        await deps
+          .createSessionCloser(
+            closeCredentialSource(provider),
+            stopping.instanceId
+          )
+          .closeSession(stopping.providerSessionId);
       }
-      const provider = await deps.repository.findCloseProvider(
-        stopping.providerId
-      );
-      if (!provider) throw new Error("Close provider is unavailable");
-      await deps
-        .createSessionCloser(
-          closeCredentialSource(provider),
-          stopping.instanceId
-        )
-        .closeSession(stopping.providerSessionId);
 
       const local = await transition(stopping, "READY", {
         providerId: null,
@@ -778,16 +823,18 @@ export function createDigitalHumanSessionService(
         safeReasonCode(error, "LINGMOU_NOT_CONFIGURED")
       );
     }
+    const adapter = runtimeAdapter(model);
 
     const createdAt = deps.now();
     const connecting = await createClaimedSession({
       trainingSessionId,
       providerId: model.providerId,
       modelId: model.modelId,
-      adapter: "LINGMOU_OFFICIAL_SDK",
-      mode: "LINGMOU_CLOUD",
+      adapter: adapter.adapter,
+      mode: adapter.mode,
       providerSessionId: null,
       instanceId:
+        model.providerType === "LINGMOU" &&
         typeof model.modelSettings.instanceId === "string"
           ? model.modelSettings.instanceId
           : null,
@@ -797,13 +844,16 @@ export function createDigitalHumanSessionService(
       expiresAt: new Date(createdAt.getTime() + expiresAfterMs)
     });
 
-    let provider: LingmouProvider;
-    let cloud: Awaited<ReturnType<LingmouProvider["createSession"]>>;
+    let provider: RealtimeDigitalHumanProvider | LingmouProvider;
+    let cloud: {
+      providerSessionId?: string;
+      connection: LingmouRtcConnection | DigitalHumanConnection;
+    };
     try {
       provider = deps.createProvider(model);
-      cloud = await provider.createSession();
+      cloud = await provider.createSession({ trainingSessionId } as DigitalHumanSessionInput);
     } catch (error) {
-      if (error instanceof LingmouSessionRecoveryError) {
+      if (model.providerType === "LINGMOU" && error instanceof LingmouSessionRecoveryError) {
         const identity = error.recoveryIdentity();
         try {
           await deps.enqueueRecovery({
@@ -852,6 +902,7 @@ export function createDigitalHumanSessionService(
         mode: "LOCAL_AVATAR",
         providerSessionId: null,
         instanceId: null,
+        providerConfigVersion: null,
         lastActivityAt: deps.now()
       });
       if (!fallback) {
@@ -865,7 +916,7 @@ export function createDigitalHumanSessionService(
         id: fallback.id,
         mode: "LOCAL_AVATAR",
         status: "READY",
-        reasonCode: safeReasonCode(error, "LINGMOU_UPSTREAM_FAILED"),
+        reasonCode: safeReasonCode(error, adapter.upstreamFailedCode),
         connection: null,
         expiresAt: fallback.expiresAt.toISOString()
       };
@@ -873,13 +924,13 @@ export function createDigitalHumanSessionService(
 
     try {
       const ready = await transition(connecting, "READY", {
-        providerSessionId: cloud.providerSessionId,
+        providerSessionId: cloud.providerSessionId ?? connecting.id,
         lastActivityAt: deps.now()
       });
       if (!ready) throw new Error("Local state update failed");
       return {
         id: ready.id,
-        mode: "LINGMOU_CLOUD",
+        mode: adapter.mode,
         status: "READY",
         reasonCode: null,
         connection: cloud.connection,
@@ -888,7 +939,11 @@ export function createDigitalHumanSessionService(
     } catch {
       let compensationClosed = false;
       try {
-        await provider.closeSession(cloud.providerSessionId);
+        if ("closeSession" in provider && cloud.providerSessionId) {
+          await provider.closeSession(cloud.providerSessionId);
+        } else if ("stopSession" in provider) {
+          await provider.stopSession(cloud.providerSessionId ?? connecting.id);
+        }
         compensationClosed = true;
       } catch {
         compensationClosed = false;
@@ -901,7 +956,7 @@ export function createDigitalHumanSessionService(
             ["CONNECTING", "READY"],
             {
               status: "STOPPING",
-              providerSessionId: cloud.providerSessionId,
+              providerSessionId: cloud.providerSessionId ?? connecting.id,
               stopReason: "CLOUD_PERSIST_FAILED"
             }
           );
@@ -917,7 +972,7 @@ export function createDigitalHumanSessionService(
             ["CONNECTING", "READY"],
             {
               status: "FAILED",
-              providerSessionId: cloud.providerSessionId,
+              providerSessionId: cloud.providerSessionId ?? connecting.id,
               endedAt: deps.now(),
               stopReason: "CLOUD_PERSIST_FAILED"
             }
