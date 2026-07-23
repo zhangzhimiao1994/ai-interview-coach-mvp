@@ -4,7 +4,7 @@ import { Cpu, KeyRound, Plus, Route, Server, Star, Trash2 } from "lucide-react";
 import React from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { AlibabaProviderFields, CapabilitySettings, LingmouProviderFields } from "./AiMultimodalConfigFields";
+import { AlibabaProviderFields, CapabilitySettings, DuixProviderFields, LingmouProviderFields } from "./AiMultimodalConfigFields";
 import { modelSettingsFromForm } from "@/lib/domain/aiModelSettings";
 import {
   aiCapabilities,
@@ -68,6 +68,7 @@ const providerTypeLabels: Record<AiProviderType, string> = {
   DEEPSEEK: "DeepSeek",
   TONGYI: "通义千问 / 百炼",
   LINGMOU: "灵眸数字人",
+  DUIX: "硅基 DUIX 数字人",
   VOLCANO_ARK: "火山方舟",
   ZHIPU: "智谱",
   MINIMAX: "MiniMax",
@@ -175,7 +176,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
     const payload = {
       displayName: String(form.get("displayName") || ""),
       providerType,
-      ...(providerType !== "TONGYI" && providerType !== "LINGMOU" ? {
+      ...(providerType !== "TONGYI" && providerType !== "LINGMOU" && providerType !== "DUIX" ? {
         baseUrl,
         apiKey: String(form.get("apiKey") || "")
       } : {}),
@@ -189,6 +190,11 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
               accessKeyId: String(form.get("accessKeyId") || ""),
               accessKeySecret: String(form.get("accessKeySecret") || "")
             })
+        : providerType === "DUIX"
+          ? nonEmptyEntries({
+              appId: String(form.get("appId") || ""),
+              appSecret: String(form.get("appSecret") || "")
+            })
         : {},
       settings: providerType === "TONGYI"
         ? nonEmptyEntries({
@@ -197,6 +203,8 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
           })
         : providerType === "LINGMOU"
           ? nonEmptyEntries({ region: String(form.get("region") || "cn-beijing") })
+        : providerType === "DUIX"
+          ? nonEmptyEntries({ platform: String(form.get("platform") || "duix.com") })
         : {},
       enabled: form.get("enabled") === "on",
       notes: String(form.get("notes") || "")
@@ -448,7 +456,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                 ))}
               </select>
             </label>
-            {providerType !== "TONGYI" && providerType !== "LINGMOU" ? (
+            {providerType !== "TONGYI" && providerType !== "LINGMOU" && providerType !== "DUIX" ? (
               <>
                 <Field
                   label="Base URL"
@@ -462,6 +470,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
             ) : null}
             {providerType === "TONGYI" ? <AlibabaProviderFields /> : null}
             {providerType === "LINGMOU" ? <LingmouProviderFields /> : null}
+            {providerType === "DUIX" ? <DuixProviderFields /> : null}
             <Field label="备注" name="notes" placeholder="适合报告分析、备用模型等" />
             <label className="flex items-center gap-2 text-sm text-ink">
               <input name="enabled" type="checkbox" defaultChecked />

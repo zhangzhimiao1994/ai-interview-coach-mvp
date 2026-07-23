@@ -28,6 +28,19 @@ export function LingmouProviderFields(): React.JSX.Element {
   );
 }
 
+export function DuixProviderFields(): React.JSX.Element {
+  return (
+    <div className="grid gap-4 rounded-md border border-line p-4">
+      <h3 className="text-sm font-medium text-ink">硅基 DUIX 凭据</h3>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <ConfigField label="App ID" name="appId" type="password" />
+        <ConfigField label="App Secret" name="appSecret" type="password" />
+        <ConfigField label="平台域名" name="platform" defaultValue="duix.com" />
+      </div>
+    </div>
+  );
+}
+
 export function CapabilitySettings({ capability }: { capability: AiCapability }) {
   if (capability === "SPEECH_TO_TEXT") {
     return (
@@ -56,8 +69,11 @@ export function CapabilitySettings({ capability }: { capability: AiCapability })
       <SettingsGrid>
         <ConfigField label="配置 ID" name="configId" placeholder="灵眸数字人配置 ID" />
         <ConfigField label="实例 ID" name="instanceId" placeholder="灵眸数字人实例 ID" />
+        <ConfigField label="DUIX Conversation ID" name="conversationId" placeholder="DUIX 会话 ID" />
         <ConfigField label="渲染模式" name="renderMode" defaultValue="cloud" readOnly />
         <ConfigField label="集成模式" name="integrationMode" defaultValue="audio-driven" readOnly />
+        <ConfigField label="DUIX 交互模式" name="interactionMode" defaultValue="direct-drive" readOnly />
+        <ConfigField label="DUIX 语音模式" name="speechMode" defaultValue="duix-managed" readOnly />
         <ConfigField label="客户端" name="client" defaultValue="web" readOnly />
       </SettingsGrid>
     );

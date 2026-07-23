@@ -27,9 +27,13 @@ import {
 } from "@/lib/media/providers/alibabaCredentials";
 import { validateAlibabaHttpTtsModelName } from "@/lib/media/providers/alibabaTts";
 import { lingmouAdapterContract } from "@/lib/media/providers/lingmouCredentials";
+import {
+  hasCompleteDuixConfiguration
+} from "@/lib/media/providers/duixCredentials";
 import { MediaConfigurationError } from "@/lib/media/errors";
 import { MediaProviderError } from "@/lib/media/errors";
 import type { ResolvedMediaModel } from "@/lib/media/config";
+import { createDuixProvider } from "@/lib/media/providers/duix";
 import {
   createLingmouProvider,
   LingmouSessionRecoveryError
@@ -85,6 +89,11 @@ export type AiDiagnosticDependencies = {
   probeTextModel: (
     config: OpenAiCompatibleProviderConfig
   ) => Promise<OpenAiCompatibleProbeResult>;
+  probeDuixModel: (model: ResolvedMediaModel) => Promise<{
+    ok: boolean;
+    code: string;
+    message: string;
+  }>;
   probeLingmouModel: (model: ResolvedMediaModel) => Promise<{
     ok: boolean;
     code: string;
@@ -119,6 +128,7 @@ function dependencies(
     findModel: findDiagnosticModel,
     readConfigSecret: () => readAiConfigSecret(),
     probeTextModel: probeOpenAiCompatibleModel,
+    probeDuixModel,
     probeLingmouModel,
     now: Date.now,
     ...overrides
@@ -253,6 +263,9 @@ function requiredConfiguration(
   const usesLingmouManagedEndpoint =
     capability === "DIGITAL_HUMAN_REALTIME" &&
     model.provider.providerType === "LINGMOU";
+  const usesDuixManagedEndpoint =
+    capability === "DIGITAL_HUMAN_REALTIME" &&
+    model.provider.providerType === "DUIX";
 
   if (!hasText(model.modelName)) {
     missing.push("模型名称");
@@ -262,6 +275,7 @@ function requiredConfiguration(
     !isMock &&
     !usesAlibabaMediaEndpoint &&
     !usesLingmouManagedEndpoint &&
+    !usesDuixManagedEndpoint &&
     !model.provider.baseUrl
   ) {
     missing.push("Base URL");
@@ -269,6 +283,7 @@ function requiredConfiguration(
     !isMock &&
     !usesAlibabaMediaEndpoint &&
     !usesLingmouManagedEndpoint &&
+    !usesDuixManagedEndpoint &&
     !isHttpUrl(model.provider.baseUrl)
   ) {
     throw new DiagnosticConfigurationError(
@@ -285,6 +300,7 @@ function requiredConfiguration(
   if (
     !isMock &&
     !usesLingmouManagedEndpoint &&
+    !usesDuixManagedEndpoint &&
     !hasText(apiKey) &&
     !usesAsrCredential &&
     !usesTtsCredential
@@ -358,6 +374,20 @@ function requiredConfiguration(
   }
 }
 
+function hasCompleteDuixDiagnosticConfiguration(
+  modelName: string,
+  providerSettings: JsonObject,
+  modelSettings: JsonObject,
+  credentials: CredentialMap
+) {
+  return hasCompleteDuixConfiguration(
+    modelName,
+    providerSettings,
+    modelSettings,
+    credentials
+  );
+}
+
 function hasCompleteLingmouConfiguration(
   modelName: string,
   providerSettings: JsonObject,
@@ -383,6 +413,37 @@ function safeLingmouProbeCode(error: unknown, fallback: string) {
       ? error.code
       : fallback;
   return /^[A-Z0-9_.-]{1,100}$/.test(code) ? code : fallback;
+}
+
+function safeDuixProbeCode(error: unknown, fallback: string) {
+  const code =
+    error instanceof MediaConfigurationError || error instanceof MediaProviderError
+      ? error.code
+      : fallback;
+  return /^[A-Z0-9_.-]{1,100}$/.test(code) ? code : fallback;
+}
+
+export async function probeDuixModel(model: ResolvedMediaModel): Promise<{
+  ok: boolean;
+  code: string;
+  message: string;
+}> {
+  try {
+    const check = await createDuixProvider(model).checkConnection();
+    return {
+      ok: check.available,
+      code: check.code ?? (check.available ? "LIVE_AVAILABLE" : "DUIX_LIVE_FAILED"),
+      message: check.available
+        ? "DUIX 签名鉴权检查通过。"
+        : "DUIX 签名鉴权检查失败。"
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      code: safeDuixProbeCode(error, "DUIX_LIVE_FAILED"),
+      message: "DUIX 签名鉴权检查失败。"
+    };
+  }
 }
 
 function isValidLingmouProbeConnection(
@@ -665,6 +726,41 @@ function resolvedLingmouDiagnosticModel(
   };
 }
 
+function resolvedDuixDiagnosticModel(
+  model: DiagnosticModel,
+  providerSettings: JsonObject,
+  modelSettings: JsonObject
+): ResolvedMediaModel {
+  return {
+    capability: "DIGITAL_HUMAN_REALTIME",
+    providerId: model.provider.id,
+    providerName: model.provider.displayName,
+    providerType: model.provider.providerType,
+    providerConfigVersion: model.provider.closeConfigVersion ?? 0,
+    baseUrl: model.provider.baseUrl,
+    providerSettings,
+    modelId: model.id,
+    modelDisplayName: model.displayName,
+    modelName: model.modelName,
+    modelSettings,
+    temperature: model.temperature,
+    maxTokens: model.maxTokens,
+    timeoutMs: model.timeoutMs,
+    credentialEnvelopes: {
+      apiKey: credentialEnvelope(
+        model.provider.apiKeyCiphertext,
+        model.provider.apiKeyIv,
+        model.provider.apiKeyTag
+      ),
+      structured: credentialEnvelope(
+        model.provider.credentialsCiphertext,
+        model.provider.credentialsIv,
+        model.provider.credentialsTag
+      )
+    }
+  };
+}
+
 type ResultContext = {
   capability: AiCapability;
   checkMode: AiDiagnosticCheckMode;
@@ -728,7 +824,7 @@ export async function diagnoseAiCapability(
         !model ||
         !model.isSelected ||
         model.capability !== capability ||
-        model.provider.providerType !== "LINGMOU"
+        !["DUIX", "LINGMOU"].includes(model.provider.providerType)
       )
     ) {
       return result(
@@ -785,6 +881,26 @@ export async function diagnoseAiCapability(
 
     if (
       capability === "DIGITAL_HUMAN_REALTIME" &&
+      model.provider.providerType === "DUIX" &&
+      !hasCompleteDuixDiagnosticConfiguration(
+        model.modelName,
+        providerSettings,
+        modelSettings,
+        credentials
+      )
+    ) {
+      return result(
+        context,
+        "NOT_CONFIGURED",
+        "DUIX_NOT_CONFIGURED",
+        "DUIX 未配置，当前使用本地数字人",
+        deps.now
+      );
+    }
+
+    if (
+      capability === "DIGITAL_HUMAN_REALTIME" &&
+      model.provider.providerType === "LINGMOU" &&
       !hasCompleteLingmouConfiguration(
         model.modelName,
         providerSettings,
@@ -860,22 +976,30 @@ export async function diagnoseAiCapability(
 
     if (capability === "DIGITAL_HUMAN_REALTIME") {
       if (options.liveCheck) {
-        let probe: Awaited<ReturnType<typeof probeLingmouModel>>;
-        try {
-          probe = await deps.probeLingmouModel(
-            resolvedLingmouDiagnosticModel(
-              model,
-              providerSettings,
-              modelSettings
-            )
-          );
-        } catch {
-          probe = {
-            ok: false,
-            code: "LINGMOU_LIVE_FAILED",
-            message: "灵眸真实检查失败。"
-          };
-        }
+        const isDuix = model.provider.providerType === "DUIX";
+        const probe = await (
+          isDuix
+            ? deps.probeDuixModel(
+                resolvedDuixDiagnosticModel(
+                  model,
+                  providerSettings,
+                  modelSettings
+                )
+              )
+            : deps.probeLingmouModel(
+                resolvedLingmouDiagnosticModel(
+                  model,
+                  providerSettings,
+                  modelSettings
+                )
+              )
+        ).catch(() => ({
+          ok: false,
+          code: isDuix ? "DUIX_LIVE_FAILED" : "LINGMOU_LIVE_FAILED",
+          message: isDuix
+            ? "DUIX 签名鉴权检查失败。"
+            : "灵眸真实检查失败。"
+        }));
         return result(
           context,
           probe.ok ? "LIVE_AVAILABLE" : "LIVE_FAILED",

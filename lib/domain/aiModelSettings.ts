@@ -20,8 +20,11 @@ export function modelSettingsFromForm(capability: AiCapability, form: FormData) 
       return {
         configId: String(form.get("configId") || ""),
         instanceId: String(form.get("instanceId") || ""),
-        renderMode: "cloud",
-        integrationMode: "audio-driven",
+        conversationId: String(form.get("conversationId") || ""),
+        renderMode: String(form.get("renderMode") || "cloud"),
+        integrationMode: String(form.get("integrationMode") || "audio-driven"),
+        interactionMode: String(form.get("interactionMode") || "direct-drive"),
+        speechMode: String(form.get("speechMode") || "duix-managed"),
         client: "web"
       };
     case "VISION_BEHAVIOR_ANALYSIS":
