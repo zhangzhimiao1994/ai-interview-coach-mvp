@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { encryptSecret } from "@/lib/domain/aiServices";
+import { encryptCredentialMap, encryptSecret } from "@/lib/domain/aiServices";
 import { createDbConfiguredAiProvider } from "@/lib/ai/dbConfiguredProvider";
 import type { AiProvider } from "@/lib/ai/types";
 
@@ -147,5 +147,79 @@ describe("DB configured AI provider", () => {
 
     const requestBody = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
     expect(requestBody.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("lets a Tongyi omni model take over follow-up coaching with structured Bailian credentials", async () => {
+    const configSecret = "tongyi-omni-takeover-test-secret";
+    const encryptedCredentials = encryptCredentialMap({ apiKey: "sk-bailian-test" }, configSecret);
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              instantFeedback: "回答结构清楚。",
+              followUpQuestion: "请结合一个线上故障案例继续说明。",
+              suggestedAnswerStructure: ["背景", "行动", "结果"],
+              riskTags: []
+            })
+          }
+        }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubEnv("AI_CONFIG_SECRET", configSecret);
+    const provider = createDbConfiguredAiProvider({
+      findModel: vi.fn().mockResolvedValue({
+        id: "model-qwen-omni-takeover",
+        providerId: "provider-tongyi",
+        displayName: "Qwen Omni 全模态接管调试",
+        modelName: "qwen3.5-omni-plus",
+        capability: "INTERVIEW_FOLLOW_UP",
+        temperature: 0.2,
+        maxTokens: 1600,
+        timeoutMs: 45000,
+        costNote: null,
+        enabled: true,
+        isDefault: false,
+        isSelected: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        provider: {
+          id: "provider-tongyi",
+          displayName: "阿里百炼",
+          providerType: "TONGYI",
+          baseUrl: null,
+          apiKeyPreview: "",
+          apiKeyCiphertext: null,
+          apiKeyIv: null,
+          apiKeyTag: null,
+          credentialsCiphertext: encryptedCredentials.ciphertext,
+          credentialsIv: encryptedCredentials.iv,
+          credentialsTag: encryptedCredentials.tag,
+          settingsJson: JSON.stringify({
+            region: "cn-beijing",
+            workspaceId: "workspace123"
+          }),
+          enabled: true
+        }
+      })
+    });
+
+    const result = await provider.generateFollowUpCoaching({
+      sessionId: "session-1",
+      questionId: "formal-0",
+      question: "介绍一个项目。",
+      answer: "我负责了核心链路。",
+      stage: "FORMAL_INTERVIEW"
+    });
+
+    expect(result.followUpQuestion).toContain("线上故障");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls[0][0]).toBe(
+      "https://workspace123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+    );
+    expect(fetchImpl.mock.calls[0][1].headers.Authorization).toBe("Bearer sk-bailian-test");
+    const requestBody = JSON.parse(fetchImpl.mock.calls[0][1].body as string);
+    expect(requestBody.model).toBe("qwen3.5-omni-plus");
   });
 });

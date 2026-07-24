@@ -19,7 +19,7 @@ export type ModelRecommendationGroup = {
   recommendations: ModelRecommendation[];
 };
 
-export const modelRecommendationLastUpdated = "2026-07-17";
+export const modelRecommendationLastUpdated = "2026-07-24";
 
 export const modelRecommendationGroups: ModelRecommendationGroup[] = [
   {
@@ -49,6 +49,18 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         suggestedTemperature: 0.4,
         suggestedMaxTokens: 1600,
         suggestedTimeoutMs: 45000
+      },
+      {
+        capability: "INTERVIEW_FOLLOW_UP",
+        providerType: "TONGYI",
+        providerName: "阿里百炼",
+        modelName: "qwen3.5-omni-plus",
+        fit: "全模态接管调试项，可在测试时接管候选人回答后的追问和即时反馈。",
+        priceNote: "按百炼 Qwen-Omni 实际调用量计费；模型名以阿里云百炼控制台和官方文档为准。",
+        howToUse: "添加后仅在需要全模态接管测试时设为专业追问的当前使用模型；默认不要替换稳定追问链路。",
+        suggestedTemperature: 0.25,
+        suggestedMaxTokens: 1600,
+        suggestedTimeoutMs: 60000
       }
     ]
   },
@@ -157,6 +169,18 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         suggestedTemperature: 0.2,
         suggestedMaxTokens: 1200,
         suggestedTimeoutMs: 45000
+      },
+      {
+        capability: "VISION_BEHAVIOR_ANALYSIS",
+        providerType: "TONGYI",
+        providerName: "阿里百炼",
+        modelName: "qwen3.5-omni-plus",
+        fit: "全模态调试项，用于同时验证文本、图片、音频和视频理解，不默认接管面试流程。",
+        priceNote: "按百炼 Qwen-Omni 实际调用量计费；长音视频调试前先确认费用和额度。",
+        howToUse: "添加后设为行为分析当前模型时，只作为多模态理解调试入口；面试追问接管请使用专业追问能力下的全模态接管项。",
+        suggestedTemperature: 0.2,
+        suggestedMaxTokens: 1600,
+        suggestedTimeoutMs: 60000
       }
     ]
   },

@@ -1,4 +1,10 @@
-import { decryptSecret, readAiConfigSecret, type EncryptedSecret } from "@/lib/domain/aiServices";
+import {
+  decryptCredentialMap,
+  decryptSecret,
+  readAiConfigSecret,
+  type CredentialMap,
+  type EncryptedSecret
+} from "@/lib/domain/aiServices";
 import { findSelectedAiModel } from "./configResolver";
 import { mockAiProvider } from "./mockProvider";
 import { createOpenAiCompatibleProvider } from "./openAiCompatibleProvider";
@@ -23,6 +29,63 @@ function secretFromModel(model: ConfiguredModel): EncryptedSecret | null {
   };
 }
 
+function structuredSecretFromModel(model: ConfiguredModel): EncryptedSecret | null {
+  if (
+    !model.provider.credentialsCiphertext ||
+    !model.provider.credentialsIv ||
+    !model.provider.credentialsTag
+  ) {
+    return null;
+  }
+
+  return {
+    ciphertext: model.provider.credentialsCiphertext,
+    iv: model.provider.credentialsIv,
+    tag: model.provider.credentialsTag
+  };
+}
+
+function parseProviderSettings(model: ConfiguredModel) {
+  if (!model.provider.settingsJson) {
+    return {};
+  }
+
+  const parsed = JSON.parse(model.provider.settingsJson) as unknown;
+
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+function tongyiCompatibleBaseUrl(model: ConfiguredModel) {
+  if (model.provider.providerType !== "TONGYI") {
+    return null;
+  }
+
+  const settings = parseProviderSettings(model);
+  const workspaceId = typeof settings.workspaceId === "string"
+    ? settings.workspaceId.trim()
+    : typeof settings.workspace === "string"
+      ? settings.workspace.trim()
+      : "";
+  const region = typeof settings.region === "string" && settings.region.trim()
+    ? settings.region.trim()
+    : "cn-beijing";
+
+  if (!workspaceId) {
+    return null;
+  }
+
+  return `https://${workspaceId}.${region}.maas.aliyuncs.com/compatible-mode/v1`;
+}
+
+function structuredCredentialsFromModel(
+  encrypted: EncryptedSecret | null,
+  configSecret: string
+): CredentialMap {
+  return encrypted ? decryptCredentialMap(encrypted, configSecret) : {};
+}
+
 function providerForModel(model: ConfiguredModel): AiProvider | null {
   if (model.provider.providerType === "MOCK") {
     return mockAiProvider;
@@ -39,14 +102,29 @@ function providerForModel(model: ConfiguredModel): AiProvider | null {
     model.provider.providerType === "OPENAI"
   ) {
     const encrypted = secretFromModel(model);
+    const encryptedStructuredCredentials = structuredSecretFromModel(model);
 
-    if (!model.provider.baseUrl || !encrypted) {
+    if (!encrypted && !encryptedStructuredCredentials) {
+      return null;
+    }
+
+    const configSecret = readAiConfigSecret();
+    const structuredCredentials = structuredCredentialsFromModel(
+      encryptedStructuredCredentials,
+      configSecret
+    );
+    const apiKey = encrypted
+      ? decryptSecret(encrypted, configSecret)
+      : structuredCredentials.apiKey;
+    const baseUrl = model.provider.baseUrl || tongyiCompatibleBaseUrl(model);
+
+    if (!baseUrl || !apiKey) {
       return null;
     }
 
     return createOpenAiCompatibleProvider({
-      baseUrl: model.provider.baseUrl,
-      apiKey: decryptSecret(encrypted, readAiConfigSecret()),
+      baseUrl,
+      apiKey,
       modelName: model.modelName,
       temperature: model.temperature,
       maxTokens: model.maxTokens,

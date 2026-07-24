@@ -68,9 +68,21 @@ describe("model recommendation matrix", () => {
         modelName: "lingmou-2d-cloud-audio-driven"
       }),
       expect.objectContaining({
+        capability: "INTERVIEW_FOLLOW_UP",
+        providerType: "TONGYI",
+        modelName: "qwen3.5-omni-plus",
+        fit: expect.stringContaining("全模态接管")
+      }),
+      expect.objectContaining({
         capability: "VISION_BEHAVIOR_ANALYSIS",
         providerType: "TONGYI",
         modelName: "qwen3.6-flash"
+      }),
+      expect.objectContaining({
+        capability: "VISION_BEHAVIOR_ANALYSIS",
+        providerType: "TONGYI",
+        modelName: "qwen3.5-omni-plus",
+        fit: expect.stringContaining("全模态调试")
       })
     ]));
   });

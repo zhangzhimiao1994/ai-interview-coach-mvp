@@ -76,13 +76,35 @@ describe("Alibaba media model seed references", () => {
 
     await seedAlibabaMediaModels(prisma);
 
-    expect(prisma.aiModelConfig.create).toHaveBeenCalledTimes(3);
+    expect(prisma.aiModelConfig.create).toHaveBeenCalledTimes(5);
     const created = prisma.aiModelConfig.create.mock.calls.map(([args]) => args.data);
     expect(created.map((model) => model.modelName)).toEqual([
       "qwen3-asr-flash-realtime",
       "cosyvoice-v3-flash",
-      "qwen3.6-flash"
+      "qwen3.6-flash",
+      "qwen3.5-omni-plus",
+      "qwen3.5-omni-plus"
     ]);
+    expect(created).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        displayName: expect.stringContaining("全模态接管调试"),
+        modelName: "qwen3.5-omni-plus",
+        capability: "INTERVIEW_FOLLOW_UP",
+        isSelected: false
+      }),
+      expect.objectContaining({
+        displayName: expect.stringContaining("全模态行为调试"),
+        modelName: "qwen3.5-omni-plus",
+        capability: "VISION_BEHAVIOR_ANALYSIS",
+        isSelected: false
+      })
+    ]));
+    const takeoverModel = created.find((model) => model.capability === "INTERVIEW_FOLLOW_UP");
+    expect(JSON.parse(takeoverModel.settingsJson)).toEqual({
+      debugMode: "omni-takeover",
+      takeoverScope: "follow-up",
+      modalities: ["text", "audio", "image", "video"]
+    });
     expect(JSON.parse(created[1].settingsJson)).toEqual({
       voice: "longanhuan",
       format: "pcm",

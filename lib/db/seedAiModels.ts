@@ -50,6 +50,30 @@ const alibabaMediaReferences = [
     modelName: "qwen3.6-flash",
     capability: "VISION_BEHAVIOR_ANALYSIS",
     settings: { minimumConfidence: 0.6, frameIntervalMs: 1000, maxFrames: 12 }
+  },
+  {
+    seedKey: "omni-follow-up-takeover",
+    displayName: "阿里百炼 Qwen-Omni 全模态接管调试",
+    modelName: "qwen3.5-omni-plus",
+    capability: "INTERVIEW_FOLLOW_UP",
+    settings: {
+      debugMode: "omni-takeover",
+      takeoverScope: "follow-up",
+      modalities: ["text", "audio", "image", "video"]
+    }
+  },
+  {
+    seedKey: "omni-behavior-debug",
+    displayName: "阿里百炼 Qwen-Omni 全模态行为调试",
+    modelName: "qwen3.5-omni-plus",
+    capability: "VISION_BEHAVIOR_ANALYSIS",
+    settings: {
+      minimumConfidence: 0.6,
+      frameIntervalMs: 1000,
+      maxFrames: 12,
+      debugMode: "omni-observe",
+      modalities: ["text", "audio", "image", "video"]
+    }
   }
 ] as const;
 

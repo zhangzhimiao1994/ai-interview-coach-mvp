@@ -330,4 +330,22 @@ Docker 验证状态：
 3. 验证后执行 `docker compose down --remove-orphans` 和 `docker desktop stop`。
 4. 用户明确恢复推送授权后，再推送本地提交到 GitHub。
 
+## 13. 2026-07-24 本地进展：Qwen-Omni 全模态调试项
+
+本轮新增百炼 Qwen-Omni 作为可选调试模型。用户口头提到 `qwen3-omni-plus`，当前阿里云百炼官方文档和示例使用的模型名为 `qwen3.5-omni-plus`，代码中按官方模型名配置。
+
+已实现范围：
+
+- 在模型推荐矩阵中新增 `INTERVIEW_FOLLOW_UP` / `qwen3.5-omni-plus`：用于“全模态接管调试”，手动设为当前模型后可接管候选人回答后的追问和即时反馈。
+- 在模型推荐矩阵中新增 `VISION_BEHAVIOR_ANALYSIS` / `qwen3.5-omni-plus`：用于“全模态行为调试”，手动设为当前模型后可作为多模态观察入口。
+- 百炼服务商存在时，种子逻辑会额外生成两个可编辑模型：`omni-follow-up-takeover` 和 `omni-behavior-debug`，均不默认设为当前模型。
+- TONGYI 文本/全模态接管链路支持从结构化百炼凭据 `credentials.apiKey` 读取密钥；当 provider 未单独设置 baseUrl 时，会按 `workspaceId + region` 生成百炼 OpenAI 兼容地址：`https://{workspaceId}.{region}.maas.aliyuncs.com/compatible-mode/v1`。
+
+使用方式：
+
+1. 后台确认阿里百炼服务商已启用，并配置 `apiKey`、`workspaceId`、`region`。
+2. 如果要让全模态模型接管追问，把 `阿里百炼 Qwen-Omni 全模态接管调试` 设为 `专业追问` 的当前使用模型。
+3. 如果只做全模态观察/行为调试，把 `阿里百炼 Qwen-Omni 全模态行为调试` 设为 `神态/行为分析` 的当前使用模型。
+4. 默认不要同时替换稳定追问链路和行为分析链路；先单项测试，确认费用、延迟和输出结构稳定后再扩大范围。
+
 新项目或新会话应从 `feature/alibaba-multimodal-integration` 分支和本交接文档继续，不要从早期 Mock 演示版本重新开始。
