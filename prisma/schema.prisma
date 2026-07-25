@@ -274,3 +274,18 @@ model AiModelConfig {
   @@index([isDefault])
   @@index([isSelected])
 }
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  displayName  String?
+  passwordHash String
+  role         String    @default("ADMIN")
+  enabled      Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([enabled])
+  @@index([role])
+}

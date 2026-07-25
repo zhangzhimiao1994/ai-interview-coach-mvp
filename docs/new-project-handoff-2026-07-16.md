@@ -349,3 +349,29 @@ Docker 验证状态：
 4. 默认不要同时替换稳定追问链路和行为分析链路；先单项测试，确认费用、延迟和输出结构稳定后再扩大范围。
 
 新项目或新会话应从 `feature/alibaba-multimodal-integration` 分支和本交接文档继续，不要从早期 Mock 演示版本重新开始。
+
+## 14. 2026-07-25 本地进展：首次运行初始化与后台用户管理
+
+本轮新增数据库管理员体系，用于“让谁能登录、让谁不能登录”。仍在 `feature/alibaba-multimodal-integration` 分支继续，远程仓库仍为 `zhangzhimiao1994/ai-interview-coach-mvp`。
+
+已实现范围：
+
+- 新增 `AdminUser` Prisma 模型和迁移：保存管理员用户名、显示名、密码哈希、角色、启用状态和最近登录时间。
+- 新增首次运行初始化流程：当数据库中没有管理员时，访问 `/login` 会跳转到 `/setup`，由用户配置第一个超级管理员账号和密码。
+- 新增数据库登录流程：`/api/auth/login` 校验启用状态和密码，成功后写入签名 HttpOnly Cookie；禁用用户无法登录。
+- 新增后台用户管理页：`/admin/users` 支持新增管理员、启用/禁用登录、调整角色、重置密码和退出登录。
+- 后台导航和首页新增“用户管理”入口。
+- Middleware 支持签名后台会话，并保留 `.env` Basic Auth 作为过渡/应急入口；API 请求未认证时返回 401，不再跳转到登录页。
+
+已通过验证：
+
+- `npm.cmd test -- tests/unit/admin-auth-session.test.ts tests/unit/admin-users.test.ts tests/unit/admin-auth-routes.test.ts tests/unit/admin-user-routes.test.ts`
+- `npm.cmd run build`
+- `npm.cmd test`
+
+注意事项：
+
+1. 部署或本机数据库升级需要执行 Prisma migration/deploy 或相应初始化流程，确保 `AdminUser` 表存在。
+2. `AI_CONFIG_SECRET` 必须保持为足够长且稳定的随机字符串；它用于签名后台登录 Cookie，改动后旧登录会话会失效。
+3. 当前禁用用户会阻止新登录；已经签发的 Cookie 在过期前仍可能有效。若后续需要“禁用后立即踢下线”，建议新增服务端 Session 表或 sessionVersion 校验。
+4. 不提交 `.env`、数据库、API Key、候选人隐私数据或任何运行时日志。

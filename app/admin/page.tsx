@@ -26,6 +26,12 @@ const adminSections = [
     description: "绑定候选人、目标公司、岗位模板、阶段开关和数字人面试官。"
   },
   {
+    group: "后台安全",
+    href: "/admin/users",
+    title: "用户管理",
+    description: "新增管理员、启用或禁用账号登录、调整角色，并在首次运行时完成超级管理员初始化。"
+  },
+  {
     group: "AI能力",
     href: "/admin/ai-services",
     title: "AI 配置中心",

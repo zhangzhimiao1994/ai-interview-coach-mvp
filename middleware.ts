@@ -5,6 +5,10 @@ import {
   isPlaceholderSecret,
   isProtectedPath
 } from "@/lib/security/requestGuards";
+import {
+  adminSessionCookieName,
+  verifyAdminSessionCookie
+} from "@/lib/security/adminSession";
 
 function unauthorized() {
   return new NextResponse("Authentication required", {
@@ -27,7 +31,17 @@ function clientIp(request: NextRequest) {
   );
 }
 
-export function middleware(request: NextRequest) {
+function isPublicAuthPath(pathname: string) {
+  return (
+    pathname === "/login" ||
+    pathname === "/setup" ||
+    pathname === "/api/auth/login" ||
+    pathname === "/api/auth/setup" ||
+    pathname === "/api/auth/logout"
+  );
+}
+
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (request.method === "POST" && pathname === "/api/sessions") {
@@ -41,8 +55,20 @@ export function middleware(request: NextRequest) {
     }
   }
 
-  if (!isProtectedPath(pathname)) {
+  if (isPublicAuthPath(pathname) || !isProtectedPath(pathname)) {
     return NextResponse.next();
+  }
+
+  const sessionSecret = process.env.AI_CONFIG_SECRET?.trim();
+  if (sessionSecret && !isPlaceholderSecret(sessionSecret)) {
+    const session = await verifyAdminSessionCookie(
+      request.cookies.get(adminSessionCookieName)?.value,
+      sessionSecret
+    );
+
+    if (session.ok) {
+      return NextResponse.next();
+    }
   }
 
   const username = process.env.ADMIN_USERNAME?.trim() || "admin";
@@ -58,11 +84,19 @@ export function middleware(request: NextRequest) {
 
   const auth = authenticateBasicRequest(request.headers.get("authorization"), { username, password });
 
-  if (!auth.ok) {
+  if (auth.ok) {
+    return NextResponse.next();
+  }
+
+  if (pathname.startsWith("/api/")) {
     return unauthorized();
   }
 
-  return NextResponse.next();
+  const loginUrl = request.nextUrl.clone();
+  loginUrl.pathname = "/login";
+  loginUrl.searchParams.set("next", pathname);
+
+  return NextResponse.redirect(loginUrl);
 }
 
 export const config = {

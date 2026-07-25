@@ -10,6 +10,7 @@ import {
   Database,
   LayoutDashboard,
   Settings2,
+  ShieldCheck,
   UserRound
 } from "lucide-react";
 
@@ -18,6 +19,7 @@ type AdminNavKey =
   | "candidates"
   | "templates"
   | "tasks"
+  | "users"
   | "ai-services"
   | "digital-human"
   | "behavior-analysis";
@@ -66,6 +68,13 @@ const navItems: Array<{
     label: "服务交付",
     description: "训练任务创建",
     icon: BriefcaseBusiness
+  },
+  {
+    key: "users",
+    href: "/admin/users" as Route,
+    label: "用户管理",
+    description: "登录权限",
+    icon: ShieldCheck
   },
   {
     key: "ai-services",
@@ -124,7 +133,7 @@ export function AdminShell({
           )}
         </div>
 
-        <nav className="mt-5 grid gap-2 md:grid-cols-4 xl:grid-cols-7" aria-label="后台导航">
+        <nav className="mt-5 grid gap-2 md:grid-cols-4 xl:grid-cols-8" aria-label="后台导航">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = item.key === active;
