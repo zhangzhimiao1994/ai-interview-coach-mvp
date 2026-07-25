@@ -48,7 +48,7 @@ describe("model recommendation matrix", () => {
     expect(source).toContain("添加参考");
   });
 
-  it("uses separate Bailian CosyVoice and Lingmou digital-human references", () => {
+  it("uses Qwen-Audio-TTS as the default Bailian speech synthesis recommendation", () => {
     const recommendations = modelRecommendationGroups.flatMap((group) => group.recommendations);
 
     expect(recommendations).toEqual(expect.arrayContaining([
@@ -60,7 +60,14 @@ describe("model recommendation matrix", () => {
       expect.objectContaining({
         capability: "TEXT_TO_SPEECH",
         providerType: "TONGYI",
-        modelName: "cosyvoice-v3-flash"
+        modelName: "qwen-audio-3.0-tts-flash",
+        fit: expect.stringContaining("Qwen-Audio-TTS")
+      }),
+      expect.objectContaining({
+        capability: "TEXT_TO_SPEECH",
+        providerType: "TONGYI",
+        modelName: "cosyvoice-v3-flash",
+        fit: expect.stringContaining("备选")
       }),
       expect.objectContaining({
         capability: "DIGITAL_HUMAN_REALTIME",
@@ -91,7 +98,8 @@ describe("model recommendation matrix", () => {
     const source = [
       "components/admin/AiServiceConfigPanel.tsx",
       "components/admin/AiMultimodalConfigFields.tsx",
-      "lib/domain/aiModelSettings.ts"
+      "lib/domain/aiModelSettings.ts",
+      "lib/domain/modelRecommendations.ts"
     ].map((path) => readFileSync(join(process.cwd(), path), "utf8")).join("\n");
 
     for (const field of [
@@ -116,6 +124,11 @@ describe("model recommendation matrix", () => {
     }
     expect(source).toContain("credentials:");
     expect(source).toContain("settings:");
+    expect(source).toContain("qwen-audio-3.0-tts-flash");
+    expect(source).toContain("modelPreset");
+    expect(source).toContain("settings={modelDraft.settings}");
+    expect(source).toContain("stringSetting(settings");
+    expect(source).toContain("自定义");
     expect(aiProviderTypes).toContain("LINGMOU");
   });
 });

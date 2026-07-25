@@ -50,7 +50,7 @@ describe("AI service configuration form submissions", () => {
     }, reset);
 
     await act(async () => {
-      await renderer.root.findAllByType("form")[0].props.onSubmit(event);
+      await renderer.root.findAllByType("form")[1].props.onSubmit(event);
     });
 
     expect(reset).toHaveBeenCalledOnce();
@@ -94,7 +94,7 @@ describe("AI service configuration form submissions", () => {
     }, reset);
 
     await act(async () => {
-      await renderer.root.findAllByType("form")[1].props.onSubmit(event);
+      await renderer.root.findAllByType("form")[2].props.onSubmit(event);
     });
 
     expect(reset).toHaveBeenCalledOnce();
@@ -108,7 +108,7 @@ describe("AI service configuration form submissions", () => {
     await selectProviderType("TONGYI");
 
     await act(async () => {
-      await renderer.root.findAllByType("form")[0].props.onSubmit(releasedSubmitEvent({
+      await renderer.root.findAllByType("form")[1].props.onSubmit(releasedSubmitEvent({
         displayName: "Bailian",
         apiKey: "must-not-submit",
         asrApiKey: "asr-key",
@@ -137,7 +137,7 @@ describe("AI service configuration form submissions", () => {
     await selectProviderType("LINGMOU");
 
     await act(async () => {
-      await renderer.root.findAllByType("form")[0].props.onSubmit(releasedSubmitEvent({
+      await renderer.root.findAllByType("form")[1].props.onSubmit(releasedSubmitEvent({
         displayName: "Lingmou",
         apiKey: "must-not-submit",
         accessKeyId: "ak-id",

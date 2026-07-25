@@ -6,6 +6,8 @@ import {
 
 const {
   findFirst,
+  findUnique,
+  runtimeFindUnique,
   createDuixProvider,
   createLingmouProvider,
   createDuixSession,
@@ -20,6 +22,8 @@ const {
 } =
   vi.hoisted(() => ({
     findFirst: vi.fn(),
+    findUnique: vi.fn(),
+    runtimeFindUnique: vi.fn(),
     createDuixProvider: vi.fn(),
     createLingmouProvider: vi.fn(),
     createDuixSession: vi.fn(),
@@ -35,7 +39,8 @@ const {
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
-    aiModelConfig: { findFirst }
+    aiModelConfig: { findFirst, findUnique },
+    aiRuntimeSetting: { findUnique: runtimeFindUnique }
   }
 }));
 vi.mock("@/lib/media/providers/lingmou", async (importOriginal) => {
@@ -80,6 +85,8 @@ const configSecret = "unit-test-ai-config-secret";
 describe("AI configuration diagnostics", () => {
   beforeEach(() => {
     findFirst.mockReset();
+    findUnique.mockReset();
+    runtimeFindUnique.mockReset().mockResolvedValue(null);
     createDuixSession.mockReset();
     createSession.mockReset();
     closeSession.mockReset();
@@ -181,6 +188,31 @@ describe("AI configuration diagnostics", () => {
       modelName: "qwen-plus"
     });
     expect(deps.probeLingmouModel).not.toHaveBeenCalled();
+  });
+
+  it("reports a covered capability as valid when it is routed through an Omni takeover model", async () => {
+    const deps = dependencies(selectedModel({
+      capability: "INTERVIEW_FOLLOW_UP",
+      modelOverrides: {
+        id: "model-omni",
+        displayName: "Qwen Omni",
+        modelName: "qwen3.5-omni-plus"
+      }
+    }));
+
+    const result = await diagnoseAiCapability("VISION_BEHAVIOR_ANALYSIS", {
+      liveCheck: false,
+      dependencies: deps
+    });
+
+    expect(result).toMatchObject({
+      status: "CONFIG_VALID",
+      code: "MULTIMODAL_TAKEOVER_ENABLED",
+      providerName: "Alibaba Cloud",
+      modelDisplayName: "Qwen Omni",
+      modelName: "qwen3.5-omni-plus"
+    });
+    expect(deps.probeTextModel).not.toHaveBeenCalled();
   });
 
   it("runs a minimum live text check with decrypted credentials only in memory", async () => {

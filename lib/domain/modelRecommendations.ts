@@ -19,7 +19,7 @@ export type ModelRecommendationGroup = {
   recommendations: ModelRecommendation[];
 };
 
-export const modelRecommendationLastUpdated = "2026-07-24";
+export const modelRecommendationLastUpdated = "2026-07-25";
 
 export const modelRecommendationGroups: ModelRecommendationGroup[] = [
   {
@@ -126,10 +126,22 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
         capability: "TEXT_TO_SPEECH",
         providerType: "TONGYI",
         providerName: "阿里百炼",
-        modelName: "cosyvoice-v3-flash",
-        fit: "中文面试官 CosyVoice 语音合成参考模型，使用 48k PCM 单声道输出。",
+        modelName: "qwen-audio-3.0-tts-flash",
+        fit: "Qwen-Audio-TTS 默认语音合成模型，支持自然语言风格指令和 [angry]、[whisper]、[laughs] 等内联情绪标签，使用 48k PCM 单声道输出。",
         priceNote: "约 0.8 元/万字符；以阿里百炼价格页为准。",
-        howToUse: "添加后设为语音合成的当前使用模型，并配置音色、格式、采样率、声道和情感指令。",
+        howToUse: "添加后设为语音合成的当前使用模型；音色建议 longanhuan_v3.6，情感和语速可通过 instruction 与文本内联标签控制。",
+        suggestedTemperature: 0.2,
+        suggestedMaxTokens: 1000,
+        suggestedTimeoutMs: 30000
+      },
+      {
+        capability: "TEXT_TO_SPEECH",
+        providerType: "TONGYI",
+        providerName: "阿里百炼",
+        modelName: "cosyvoice-v3-flash",
+        fit: "备选 CosyVoice 语音合成模型，适合继续兼容旧配置和已有音色。",
+        priceNote: "约 0.8 元/万字符；以阿里百炼价格页为准。",
+        howToUse: "如果 Qwen-Audio-TTS 音色或额度暂不可用，可选择该备选模型；仍通过同一真实语音合成链路调用。",
         suggestedTemperature: 0.2,
         suggestedMaxTokens: 1000,
         suggestedTimeoutMs: 30000

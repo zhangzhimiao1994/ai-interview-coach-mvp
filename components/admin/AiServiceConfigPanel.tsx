@@ -1,6 +1,6 @@
 "use client";
 
-import { Cpu, KeyRound, Plus, Route, Server, Star, Trash2 } from "lucide-react";
+import { Cpu, KeyRound, Plus, Route, Server, Sparkles, Star, Trash2 } from "lucide-react";
 import React from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
@@ -17,6 +17,11 @@ import {
   modelRecommendationLastUpdated,
   type ModelRecommendation
 } from "@/lib/domain/modelRecommendations";
+import {
+  defaultMultimodalTakeoverCapabilities,
+  isSupportedMultimodalTakeoverModel,
+  type MultimodalTakeoverSettings
+} from "@/lib/domain/multimodalTakeover";
 
 type Provider = {
   id: string;
@@ -52,6 +57,7 @@ type ModelConfig = {
 type AiServiceConfigPanelProps = {
   initialProviders: Provider[];
   initialModels: ModelConfig[];
+  initialMultimodalTakeover?: MultimodalTakeoverSettings;
 };
 
 type ApiResult<T> = T & {
@@ -109,8 +115,58 @@ const initialModelDraft = {
   temperature: 0.4,
   maxTokens: 1200,
   timeoutMs: 30000,
-  costNote: ""
+  costNote: "",
+  settings: {} as Record<string, unknown>
 };
+
+const customModelPreset = "custom";
+
+const emptyMultimodalTakeover: MultimodalTakeoverSettings = {
+  enabled: false,
+  modelId: null,
+  coveredCapabilities: [...defaultMultimodalTakeoverCapabilities]
+};
+
+function modelPresetValue(recommendation: ModelRecommendation) {
+  return [
+    recommendation.capability,
+    recommendation.providerType,
+    recommendation.providerName,
+    recommendation.modelName
+  ].join("|");
+}
+
+function ttsSettingsForPreset(modelName: string) {
+  if (modelName.startsWith("qwen-audio-3.0-tts")) {
+    return {
+      voice: "longanhuan_v3.6",
+      format: "pcm",
+      sampleRate: 48000,
+      channels: 1,
+      instruction: "像专业面试官一样自然、清晰地表达；可根据文本中的 [whisper]、[laughs]、[angry] 等标签添加情绪。"
+    };
+  }
+
+  if (modelName.startsWith("cosyvoice")) {
+    return {
+      voice: "longanhuan",
+      format: "pcm",
+      sampleRate: 48000,
+      channels: 1,
+      instruction: "你说话的情感是 neutral."
+    };
+  }
+
+  return {};
+}
+
+const modelPresetOptions = modelRecommendationGroups.flatMap((group) =>
+  group.recommendations.map((recommendation) => ({
+    value: modelPresetValue(recommendation),
+    label: `${capabilityLabels[recommendation.capability]} / ${recommendation.providerName} / ${recommendation.modelName}`,
+    recommendation
+  }))
+);
 
 function nonEmptyEntries(values: Record<string, string>) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value.trim().length > 0));
@@ -134,24 +190,41 @@ function apiErrorMessage(result: ApiResult<unknown> | null, fallback: string) {
   return result.error || fallback;
 }
 
-export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServiceConfigPanelProps) {
+export function AiServiceConfigPanel({
+  initialProviders,
+  initialModels,
+  initialMultimodalTakeover = emptyMultimodalTakeover
+}: AiServiceConfigPanelProps) {
   const [providers, setProviders] = useState(initialProviders);
   const [models, setModels] = useState(initialModels);
   const [providerMessage, setProviderMessage] = useState("");
   const [modelMessage, setModelMessage] = useState("");
+  const [multimodalMessage, setMultimodalMessage] = useState("");
   const [savingProvider, setSavingProvider] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
+  const [savingMultimodal, setSavingMultimodal] = useState(false);
   const [providerType, setProviderType] = useState<AiProviderType>("OPENAI_COMPATIBLE");
   const [baseUrl, setBaseUrl] = useState(providerBaseUrlPresets.OPENAI_COMPATIBLE ?? "");
   const [modelDraft, setModelDraft] = useState(initialModelDraft);
+  const [modelPreset, setModelPreset] = useState(customModelPreset);
+  const [multimodalTakeover, setMultimodalTakeover] = useState(initialMultimodalTakeover);
 
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
+  const omniModels = useMemo(
+    () => models.filter((model) =>
+      model.enabled &&
+      model.provider.enabled &&
+      isSupportedMultimodalTakeoverModel(model.modelName)
+    ),
+    [models]
+  );
 
   function updateModelDraft<K extends keyof typeof initialModelDraft>(key: K, value: (typeof initialModelDraft)[K]) {
     setModelDraft((current) => ({ ...current, [key]: value }));
   }
 
   function applyRecommendation(recommendation: ModelRecommendation) {
+    setModelPreset(modelPresetValue(recommendation));
     setProviderType(recommendation.providerType);
     setBaseUrl(providerBaseUrlPresets[recommendation.providerType] ?? "");
     setModelDraft({
@@ -161,9 +234,65 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       temperature: recommendation.suggestedTemperature,
       maxTokens: recommendation.suggestedMaxTokens,
       timeoutMs: recommendation.suggestedTimeoutMs,
-      costNote: recommendation.priceNote
+      costNote: recommendation.priceNote,
+      settings: recommendation.capability === "TEXT_TO_SPEECH"
+        ? ttsSettingsForPreset(recommendation.modelName)
+        : {}
     });
     setModelMessage("已填入推荐模型参数，请选择对应服务商后保存。");
+  }
+
+  function selectModelPreset(value: string) {
+    setModelPreset(value);
+
+    if (value === customModelPreset) {
+      return;
+    }
+
+    const preset = modelPresetOptions.find((option) => option.value === value);
+    if (preset) {
+      applyRecommendation(preset.recommendation);
+    }
+  }
+
+  function updateMultimodalCapability(capability: AiCapability, enabled: boolean) {
+    setMultimodalTakeover((current) => {
+      const nextCapabilities = enabled
+        ? [...new Set([...current.coveredCapabilities, capability])]
+        : current.coveredCapabilities.filter((item) => item !== capability);
+
+      return { ...current, coveredCapabilities: nextCapabilities };
+    });
+  }
+
+  async function saveMultimodalTakeover(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSavingMultimodal(true);
+    setMultimodalMessage("");
+
+    try {
+      const response = await fetch("/api/ai-services/multimodal-takeover", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(multimodalTakeover)
+      });
+      const result = (await response.json().catch(() => null)) as ApiResult<{
+        settings?: MultimodalTakeoverSettings;
+      }> | null;
+
+      if (!response.ok || !result?.settings) {
+        setMultimodalMessage(apiErrorMessage(result, "全模态接管开关保存失败。"));
+        return;
+      }
+
+      setMultimodalTakeover(result.settings);
+      setMultimodalMessage("全模态接管设置已保存。");
+    } catch {
+      setMultimodalMessage("服务不可达，请稍后重试。");
+    } finally {
+      setSavingMultimodal(false);
+    }
   }
 
   async function createProvider(event: React.FormEvent<HTMLFormElement>) {
@@ -288,6 +417,7 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
       });
       formElement.reset();
       setModelDraft(initialModelDraft);
+      setModelPreset(customModelPreset);
       setModelMessage("模型配置已保存。");
     } catch {
       setModelMessage("服务不可达，请稍后重试。");
@@ -380,6 +510,87 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
           items={["VISION_BEHAVIOR_ANALYSIS"]}
           note="接口：POST /api/behavior-analysis"
         />
+      </section>
+
+      <section className="rounded-lg border border-line bg-panel p-5 shadow-sm">
+        <form className="grid gap-4" onSubmit={saveMultimodalTakeover}>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <Sparkles className="mt-0.5 h-5 w-5 text-brand" aria-hidden="true" />
+              <div>
+                <h2 className="font-semibold text-ink">全模态接管开关</h2>
+                <p className="mt-1 text-sm leading-6 text-muted">
+                  开启后，没有单独选中模型的覆盖能力会回退到指定 Qwen Omni 模型；已经单独配置的能力仍优先使用原模型。
+                </p>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-ink">
+              <input
+                name="multimodalTakeoverEnabled"
+                type="checkbox"
+                checked={multimodalTakeover.enabled}
+                onChange={(event) =>
+                  setMultimodalTakeover((current) => ({
+                    ...current,
+                    enabled: event.target.checked
+                  }))
+                }
+              />
+              启用全模态接管
+            </label>
+          </div>
+          <div className="grid gap-4 lg:grid-cols-[1fr_1.4fr]">
+            <label className="grid gap-2 text-sm">
+              <span className="font-medium text-ink">接管模型</span>
+              <select
+                className="rounded-md border border-line px-3 py-2"
+                name="multimodalTakeoverModelId"
+                value={multimodalTakeover.modelId ?? ""}
+                onChange={(event) =>
+                  setMultimodalTakeover((current) => ({
+                    ...current,
+                    modelId: event.target.value || null
+                  }))
+                }
+              >
+                <option value="">请选择已启用的 Qwen Omni 模型</option>
+                {omniModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.provider.displayName} / {model.displayName} / {model.modelName}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs leading-5 text-muted">
+                目前只允许 Qwen Omni 系列；ASR、TTS、实时数字人仍沿用各自真实适配器，暂不被这个开关替代。
+              </span>
+            </label>
+            <div className="grid gap-2 text-sm">
+              <span className="font-medium text-ink">覆盖能力</span>
+              <div className="flex flex-wrap gap-3 rounded-md border border-line p-3">
+                {defaultMultimodalTakeoverCapabilities.map((capability) => (
+                  <label key={capability} className="flex items-center gap-2 text-sm text-ink">
+                    <input
+                      name="coveredCapabilities"
+                      type="checkbox"
+                      value={capability}
+                      checked={multimodalTakeover.coveredCapabilities.includes(capability)}
+                      onChange={(event) => updateMultimodalCapability(capability, event.target.checked)}
+                    />
+                    {capabilityLabels[capability]}
+                  </label>
+                ))}
+              </div>
+              <span className="text-xs leading-5 text-muted">
+                单项模型优先；只有该能力没有选中模型时，才由全模态模型接管。
+              </span>
+            </div>
+          </div>
+          {multimodalMessage ? <p className="text-sm text-muted">{multimodalMessage}</p> : null}
+          <Button className="w-fit gap-2" disabled={savingMultimodal}>
+            <Sparkles className="h-4 w-4" aria-hidden="true" />
+            {savingMultimodal ? "保存中..." : "保存全模态接管"}
+          </Button>
+        </form>
       </section>
 
       <section className="rounded-lg border border-line bg-panel p-5 shadow-sm">
@@ -491,6 +702,25 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
           </div>
           <div className="mt-5 grid gap-4">
             <label className="grid gap-2 text-sm">
+              <span className="font-medium text-ink">模型预设</span>
+              <select
+                className="rounded-md border border-line px-3 py-2"
+                name="modelPreset"
+                value={modelPreset}
+                onChange={(event) => selectModelPreset(event.target.value)}
+              >
+                <option value={customModelPreset}>自定义</option>
+                {modelPresetOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs leading-5 text-muted">
+                主流模型可直接选择预设；列表里没有的模型请选择“自定义”后手动填写模型名称和参数。
+              </span>
+            </label>
+            <label className="grid gap-2 text-sm">
               <span className="font-medium text-ink">所属服务商</span>
               <select name="providerId" className="rounded-md border border-line px-3 py-2" required>
                 <option value="">请选择服务商</option>
@@ -532,7 +762,11 @@ export function AiServiceConfigPanel({ initialProviders, initialModels }: AiServ
                 ))}
               </select>
             </label>
-            <CapabilitySettings capability={modelDraft.capability} />
+            <CapabilitySettings
+              key={`${modelDraft.capability}-${modelDraft.modelName}-${modelPreset}`}
+              capability={modelDraft.capability}
+              settings={modelDraft.settings}
+            />
             <div className="grid gap-3 sm:grid-cols-3">
               <Field
                 label="温度"

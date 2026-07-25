@@ -365,6 +365,75 @@ describe("AI service API routes", () => {
     }
   });
 
+  it("saves and returns the Omni takeover switch without exposing unrelated model fields", async () => {
+    const savedValue = JSON.stringify({
+      enabled: true,
+      modelId: "model-omni",
+      coveredCapabilities: ["INTERVIEW_FOLLOW_UP", "VISION_BEHAVIOR_ANALYSIS"]
+    });
+    const prisma = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "model-omni",
+          modelName: "qwen3.5-omni-plus",
+          enabled: true,
+          provider: { enabled: true },
+          secretSentinel: "must-not-leak"
+        })
+      },
+      aiRuntimeSetting: {
+        findUnique: vi.fn().mockResolvedValue({ valueJson: savedValue }),
+        upsert: vi.fn().mockResolvedValue({ valueJson: savedValue })
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/multimodal-takeover/route");
+    const putResponse = await route.PUT(
+      new Request("http://localhost/api/ai-services/multimodal-takeover", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: true,
+          modelId: "model-omni",
+          coveredCapabilities: [
+            "INTERVIEW_FOLLOW_UP",
+            "VISION_BEHAVIOR_ANALYSIS"
+          ]
+        })
+      })
+    );
+    const getResponse = await route.GET();
+    const putPayload = await putResponse.json();
+    const getPayload = await getResponse.json();
+
+    expect(putResponse.status).toBe(200);
+    expect(getResponse.status).toBe(200);
+    expect(prisma.aiModelConfig.findUnique).toHaveBeenCalledWith({
+      where: { id: "model-omni" },
+      select: {
+        id: true,
+        modelName: true,
+        enabled: true,
+        provider: { select: { enabled: true } }
+      }
+    });
+    expect(prisma.aiRuntimeSetting.upsert).toHaveBeenCalledWith({
+      where: { key: "ai.multimodalTakeover" },
+      create: {
+        key: "ai.multimodalTakeover",
+        valueJson: savedValue
+      },
+      update: { valueJson: savedValue }
+    });
+    expect(putPayload.settings).toEqual({
+      enabled: true,
+      modelId: "model-omni",
+      coveredCapabilities: ["INTERVIEW_FOLLOW_UP", "VISION_BEHAVIOR_ANALYSIS"]
+    });
+    expect(getPayload.settings).toEqual(putPayload.settings);
+    expect(JSON.stringify(putPayload)).not.toContain("must-not-leak");
+  });
+
   it("preserves blank legacy keys and merges changed structured credentials", async () => {
     vi.stubEnv("AI_CONFIG_SECRET", "route-test-config-secret");
     const storedEnvelope = encryptCredentialMap({

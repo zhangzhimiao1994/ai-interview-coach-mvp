@@ -2,16 +2,18 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { providerFindMany, modelFindMany, getAllAiDiagnostics } = vi.hoisted(() => ({
+const { providerFindMany, modelFindMany, runtimeSettingFindUnique, getAllAiDiagnostics } = vi.hoisted(() => ({
   providerFindMany: vi.fn(),
   modelFindMany: vi.fn(),
+  runtimeSettingFindUnique: vi.fn(),
   getAllAiDiagnostics: vi.fn()
 }));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
     aiServiceProvider: { findMany: providerFindMany },
-    aiModelConfig: { findMany: modelFindMany }
+    aiModelConfig: { findMany: modelFindMany },
+    aiRuntimeSetting: { findUnique: runtimeSettingFindUnique }
   }
 }));
 
@@ -22,6 +24,13 @@ describe("AI services admin page diagnostics", () => {
     vi.stubGlobal("React", React);
     providerFindMany.mockReset().mockResolvedValue([]);
     modelFindMany.mockReset().mockResolvedValue([]);
+    runtimeSettingFindUnique.mockReset().mockResolvedValue({
+      valueJson: JSON.stringify({
+        enabled: true,
+        modelId: "model-omni",
+        coveredCapabilities: ["INTERVIEW_FOLLOW_UP"]
+      })
+    });
     getAllAiDiagnostics.mockReset().mockResolvedValue([
       {
         capability: "INTERVIEW_DIALOGUE",
@@ -50,6 +59,10 @@ describe("AI services admin page diagnostics", () => {
     expect(getAllAiDiagnostics).toHaveBeenCalledTimes(1);
     expect(providerFindMany).toHaveBeenCalledTimes(1);
     expect(modelFindMany).toHaveBeenCalledTimes(1);
+    expect(runtimeSettingFindUnique).toHaveBeenCalledWith({
+      where: { key: "ai.multimodalTakeover" }
+    });
+    expect(markup).toContain('name="multimodalTakeoverEnabled"');
     expect(markup).toContain("配置诊断");
     expect(markup).toContain("Alibaba Cloud / Qwen Plus");
     expect(markup).toContain("不会自动触发付费请求");

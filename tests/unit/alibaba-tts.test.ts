@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildAlibabaTtsRequestBody,
   buildAlibabaTtsUrl,
   createAlibabaTtsProvider
 } from "@/lib/media/providers/alibabaTts";
@@ -134,6 +135,33 @@ describe("Alibaba CosyVoice HTTP TTS provider", () => {
     await expect(collect(result.chunks)).resolves.toEqual(
       Uint8Array.from([1, 0, 2, 0, 3, 0, 4, 0])
     );
+  });
+
+  it("builds a Qwen-Audio-TTS HTTP request with style instructions and inline emotion tags", () => {
+    const model = resolvedTtsModel();
+    model.modelName = "qwen-audio-3.0-tts-flash";
+    model.modelSettings = {
+      voice: "longanhuan_v3.6",
+      format: "pcm",
+      sampleRate: 48000,
+      channels: 1,
+      instruction: "像讲睡前故事一样慢慢读，声音温柔、有耐心。"
+    };
+
+    expect(buildAlibabaTtsRequestBody(model, {
+      text: "[whisper]请你先做一个自我介绍。[laughs]",
+      instructions: "像讲睡前故事一样慢慢读。"
+    })).toEqual({
+      model: "qwen-audio-3.0-tts-flash",
+      input: {
+        text: "[whisper]请你先做一个自我介绍。[laughs]",
+        voice: "longanhuan_v3.6",
+        format: "pcm",
+        sample_rate: 48000,
+        rate: 1,
+        instruction: "像讲睡前故事一样慢慢读。"
+      }
+    });
   });
 
   it("adapts the PCM stream to the legacy synthesis result", async () => {

@@ -382,3 +382,31 @@ Docker 验证状态：
 2. `AI_CONFIG_SECRET` 必须保持为足够长且稳定的随机字符串；它用于签名后台登录 Cookie，改动后旧登录会话会失效。
 3. 当前禁用用户会阻止新登录；已经签发的 Cookie 在过期前仍可能有效。若后续需要“禁用后立即踢下线”，建议新增服务端 Session 表或 sessionVersion 校验。
 4. 不提交 `.env`、数据库、API Key、候选人隐私数据或任何运行时日志。
+# 2026-07-25 更新：Qwen-Audio-TTS 与全模态接管开关
+
+本轮继续在 `feature/alibaba-multimodal-integration` 分支开发，项目展示名仍为“开发面试数字人”，远端仓库仍是 `zhangzhimiao1994/ai-interview-coach-mvp`。用户明确要求：不要使用 mock 证明真实服务可用；如果使用 Docker 调试，结束后必须关闭 Docker。本轮没有启动 Docker。
+
+已实现范围：
+
+- 语音合成默认推荐和种子从 CosyVoice 主线调整为 `qwen-audio-3.0-tts-flash`，默认音色为 `longanhuan_v3.6`，输出仍为 48k PCM 单声道，保留 `cosyvoice-v3-flash` 作为备选模型。
+- 阿里 TTS HTTP 适配器支持 `qwen-audio-3.0-tts-flash` 请求体，保留文本中的 `[whisper]`、`[laughs]`、`[angry]` 等内联情绪标签，并允许通过 `instruction` 传入自然语言风格指令。
+- 数字人播报链路新增面试情境 TTS 风格生成：根据阶段、问题意图和文本中的内联情绪标签动态组合语气指令；如果模型 settings 显式配置 `stageVoices`，可按阶段切换安全音色。
+- 后台“新增模型”加入模型预设下拉框：主流推荐可直接选择；列表中没有的模型走“自定义”后手动配置。TTS 预设会把音色、采样率、声道、情绪指令同步填到能力设置字段。
+- 新增 `AiRuntimeSetting` 表和 `/api/ai-services/multimodal-takeover` 路由，用于保存“全模态接管开关”。
+- 后台 AI 配置页新增独立的“全模态接管开关”：开启后可指定已启用的 Qwen Omni 模型，并选择覆盖能力。当前默认覆盖 `INTERVIEW_FOLLOW_UP` 与 `VISION_BEHAVIOR_ANALYSIS`。
+- 运行时模型选择规则改为：单项能力当前模型优先；如果该能力没有单独选中模型，且全模态接管开关开启、能力在覆盖列表中、指定模型是启用的 Qwen Omni，则回退到该 Omni 模型。
+- 配置诊断会识别被 Omni 接管的能力，并返回 `MULTIMODAL_TAKEOVER_ENABLED`，避免误报“该能力尚未选择当前使用模型”。
+
+重要约束：
+
+1. 全模态接管当前不替代 `SPEECH_TO_TEXT`、`TEXT_TO_SPEECH` 和 `DIGITAL_HUMAN_REALTIME` 的真实适配器；这些链路仍然需要各自的真实配置。
+2. `qwen3.5-omni-plus` 为当前推荐预设；`qwen3-omni-plus` 作为用户已提到的名称在规则中保留兼容，但实际可用模型名以阿里云百炼控制台和官方文档为准。
+3. 不要用 mock 结果声明真实服务可用。没有真实 API Key/服务额度时，只能做配置校验、纯函数测试、迁移测试和构建测试。
+4. 升级数据库需要执行 Prisma migration/deploy，确保 `AiRuntimeSetting` 表和 Qwen-Audio-TTS 默认迁移落库。
+
+本轮已通过验证：
+
+- `npm.cmd test -- tests/unit/alibaba-tts.test.ts tests/unit/interview-tts-style.test.ts tests/unit/model-recommendations.test.ts tests/unit/seed-ai-models.test.ts tests/unit/qwen-audio-tts-default-migration.test.ts tests/unit/multimodal-takeover.test.ts tests/unit/multimodal-takeover-persistence.test.ts tests/unit/ai-model-selection.test.ts tests/unit/ai-service-routes.test.ts tests/unit/ai-service-selection-ui.test.tsx tests/unit/ai-diagnostics-page.test.tsx tests/unit/ai-diagnostics.test.ts`
+- `npx.cmd prisma generate`
+- `npm.cmd test`
+- `npm.cmd run build`

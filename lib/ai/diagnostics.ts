@@ -11,6 +11,12 @@ import {
   type AiCapability
 } from "@/lib/domain/aiServiceConstants";
 import {
+  isSupportedMultimodalTakeoverModel,
+  multimodalTakeoverSettingKey,
+  parseMultimodalTakeoverSettings,
+  selectModelWithMultimodalTakeover
+} from "@/lib/domain/multimodalTakeover";
+import {
   isTextDiagnosticCapability,
   type AiDiagnosticCheckMode,
   type AiDiagnosticResult,
@@ -115,10 +121,38 @@ class DiagnosticConfigurationError extends Error {
 }
 
 export async function findDiagnosticModel(capability: AiCapability) {
-  return prisma.aiModelConfig.findFirst({
+  const directModel = await prisma.aiModelConfig.findFirst({
     where: { capability, isSelected: true },
     include: { provider: true }
   });
+
+  if (directModel) {
+    return directModel;
+  }
+
+  try {
+    const row = await prisma.aiRuntimeSetting.findUnique({
+      where: { key: multimodalTakeoverSettingKey }
+    });
+    const settings = parseMultimodalTakeoverSettings(row?.valueJson);
+    if (!settings.enabled || !settings.modelId) {
+      return null;
+    }
+
+    const takeoverModel = await prisma.aiModelConfig.findUnique({
+      where: { id: settings.modelId },
+      include: { provider: true }
+    });
+
+    return selectModelWithMultimodalTakeover({
+      capability,
+      directModel: null,
+      takeoverModel,
+      settings
+    });
+  } catch {
+    return null;
+  }
 }
 
 function dependencies(
@@ -832,6 +866,20 @@ export async function diagnoseAiCapability(
         "NOT_CONFIGURED",
         "LINGMOU_NOT_CONFIGURED",
         "灵眸未配置，当前使用本地数字人",
+        deps.now
+      );
+    }
+
+    if (
+      model &&
+      model.capability !== capability &&
+      isSupportedMultimodalTakeoverModel(model.modelName)
+    ) {
+      return result(
+        context,
+        "CONFIG_VALID",
+        "MULTIMODAL_TAKEOVER_ENABLED",
+        "全模态接管已启用：该能力未单独选中模型时，将由当前 Qwen Omni 模型处理。",
         deps.now
       );
     }

@@ -33,7 +33,20 @@ const alibabaMediaReferences = [
   },
   {
     seedKey: "text-to-speech",
-    displayName: "阿里百炼 CosyVoice 语音合成",
+    displayName: "阿里百炼 Qwen-Audio-TTS 情绪语音合成",
+    modelName: "qwen-audio-3.0-tts-flash",
+    capability: "TEXT_TO_SPEECH",
+    settings: {
+      voice: "longanhuan_v3.6",
+      format: "pcm",
+      sampleRate: 48000,
+      channels: 1,
+      instruction: "像专业面试官一样自然、清晰地表达；可根据文本中的 [whisper]、[laughs]、[angry] 等标签添加情绪。"
+    }
+  },
+  {
+    seedKey: "text-to-speech-cosyvoice",
+    displayName: "阿里百炼 CosyVoice 语音合成备选",
     modelName: "cosyvoice-v3-flash",
     capability: "TEXT_TO_SPEECH",
     settings: {

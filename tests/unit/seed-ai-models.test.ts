@@ -76,10 +76,11 @@ describe("Alibaba media model seed references", () => {
 
     await seedAlibabaMediaModels(prisma);
 
-    expect(prisma.aiModelConfig.create).toHaveBeenCalledTimes(5);
+    expect(prisma.aiModelConfig.create).toHaveBeenCalledTimes(6);
     const created = prisma.aiModelConfig.create.mock.calls.map(([args]) => args.data);
     expect(created.map((model) => model.modelName)).toEqual([
       "qwen3-asr-flash-realtime",
+      "qwen-audio-3.0-tts-flash",
       "cosyvoice-v3-flash",
       "qwen3.6-flash",
       "qwen3.5-omni-plus",
@@ -106,6 +107,13 @@ describe("Alibaba media model seed references", () => {
       modalities: ["text", "audio", "image", "video"]
     });
     expect(JSON.parse(created[1].settingsJson)).toEqual({
+      voice: "longanhuan_v3.6",
+      format: "pcm",
+      sampleRate: 48000,
+      channels: 1,
+      instruction: "像专业面试官一样自然、清晰地表达；可根据文本中的 [whisper]、[laughs]、[angry] 等标签添加情绪。"
+    });
+    expect(JSON.parse(created[2].settingsJson)).toEqual({
       voice: "longanhuan",
       format: "pcm",
       sampleRate: 48000,

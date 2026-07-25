@@ -1,6 +1,11 @@
 import React from "react";
 import type { AiCapability } from "@/lib/domain/aiServiceConstants";
 
+type CapabilitySettingsProps = {
+  capability: AiCapability;
+  settings?: Record<string, unknown>;
+};
+
 export function AlibabaProviderFields(): React.JSX.Element {
   return (
     <div className="grid gap-4 rounded-md border border-line p-4">
@@ -41,13 +46,13 @@ export function DuixProviderFields(): React.JSX.Element {
   );
 }
 
-export function CapabilitySettings({ capability }: { capability: AiCapability }) {
+export function CapabilitySettings({ capability, settings = {} }: CapabilitySettingsProps) {
   if (capability === "SPEECH_TO_TEXT") {
     return (
       <SettingsGrid>
-        <ConfigField label="识别语言" name="language" defaultValue="zh-CN" />
-        <ConfigField label="采样率" name="sampleRate" type="number" defaultValue={16000} />
-        <ConfigField label="音频编码（当前仅支持 PCM）" name="encoding" defaultValue="pcm" readOnly />
+        <ConfigField label="识别语言" name="language" defaultValue={stringSetting(settings, "language", "zh-CN")} />
+        <ConfigField label="采样率" name="sampleRate" type="number" defaultValue={numberSetting(settings, "sampleRate", 16000)} />
+        <ConfigField label="音频编码（当前仅支持 PCM）" name="encoding" defaultValue={stringSetting(settings, "encoding", "pcm")} readOnly />
       </SettingsGrid>
     );
   }
@@ -55,11 +60,19 @@ export function CapabilitySettings({ capability }: { capability: AiCapability })
   if (capability === "TEXT_TO_SPEECH") {
     return (
       <SettingsGrid>
-        <ConfigField label="音色" name="voice" defaultValue="longanhuan" />
-        <ConfigField label="音频格式" name="format" defaultValue="pcm" readOnly />
-        <ConfigField label="采样率" name="sampleRate" type="number" defaultValue={48000} readOnly />
-        <ConfigField label="声道数" name="channels" type="number" defaultValue={1} readOnly />
-        <ConfigField label="默认情感指令" name="instruction" defaultValue="你说话的情感是 neutral." />
+        <ConfigField label="音色" name="voice" defaultValue={stringSetting(settings, "voice", "longanhuan_v3.6")} />
+        <ConfigField label="音频格式" name="format" defaultValue={stringSetting(settings, "format", "pcm")} readOnly />
+        <ConfigField label="采样率" name="sampleRate" type="number" defaultValue={numberSetting(settings, "sampleRate", 48000)} readOnly />
+        <ConfigField label="声道数" name="channels" type="number" defaultValue={numberSetting(settings, "channels", 1)} readOnly />
+        <ConfigField
+          label="默认情感指令"
+          name="instruction"
+          defaultValue={stringSetting(
+            settings,
+            "instruction",
+            "像专业面试官一样自然、清晰地表达；可根据文本中的 [whisper]、[laughs]、[angry] 等标签添加情绪。"
+          )}
+        />
       </SettingsGrid>
     );
   }
@@ -67,14 +80,14 @@ export function CapabilitySettings({ capability }: { capability: AiCapability })
   if (capability === "DIGITAL_HUMAN_REALTIME") {
     return (
       <SettingsGrid>
-        <ConfigField label="配置 ID" name="configId" placeholder="灵眸数字人配置 ID" />
-        <ConfigField label="实例 ID" name="instanceId" placeholder="灵眸数字人实例 ID" />
-        <ConfigField label="DUIX Conversation ID" name="conversationId" placeholder="DUIX 会话 ID" />
-        <ConfigField label="渲染模式" name="renderMode" defaultValue="cloud" readOnly />
-        <ConfigField label="集成模式" name="integrationMode" defaultValue="audio-driven" readOnly />
-        <ConfigField label="DUIX 交互模式" name="interactionMode" defaultValue="direct-drive" readOnly />
-        <ConfigField label="DUIX 语音模式" name="speechMode" defaultValue="duix-managed" readOnly />
-        <ConfigField label="客户端" name="client" defaultValue="web" readOnly />
+        <ConfigField label="配置 ID" name="configId" placeholder="灵眸数字人配置 ID" defaultValue={stringSetting(settings, "configId", "")} />
+        <ConfigField label="实例 ID" name="instanceId" placeholder="灵眸数字人实例 ID" defaultValue={stringSetting(settings, "instanceId", "")} />
+        <ConfigField label="DUIX Conversation ID" name="conversationId" placeholder="DUIX 会话 ID" defaultValue={stringSetting(settings, "conversationId", "")} />
+        <ConfigField label="渲染模式" name="renderMode" defaultValue={stringSetting(settings, "renderMode", "cloud")} readOnly />
+        <ConfigField label="集成模式" name="integrationMode" defaultValue={stringSetting(settings, "integrationMode", "audio-driven")} readOnly />
+        <ConfigField label="DUIX 交互模式" name="interactionMode" defaultValue={stringSetting(settings, "interactionMode", "direct-drive")} readOnly />
+        <ConfigField label="DUIX 语音模式" name="speechMode" defaultValue={stringSetting(settings, "speechMode", "duix-managed")} readOnly />
+        <ConfigField label="客户端" name="client" defaultValue={stringSetting(settings, "client", "web")} readOnly />
       </SettingsGrid>
     );
   }
@@ -82,14 +95,24 @@ export function CapabilitySettings({ capability }: { capability: AiCapability })
   if (capability === "VISION_BEHAVIOR_ANALYSIS") {
     return (
       <SettingsGrid>
-        <ConfigField label="最低置信度" name="minimumConfidence" type="number" step="0.05" defaultValue={0.6} />
-        <ConfigField label="抽帧间隔 ms" name="frameIntervalMs" type="number" defaultValue={1000} />
-        <ConfigField label="最多帧数" name="maxFrames" type="number" defaultValue={12} />
+        <ConfigField label="最低置信度" name="minimumConfidence" type="number" step="0.05" defaultValue={numberSetting(settings, "minimumConfidence", 0.6)} />
+        <ConfigField label="抽帧间隔 ms" name="frameIntervalMs" type="number" defaultValue={numberSetting(settings, "frameIntervalMs", 1000)} />
+        <ConfigField label="最多帧数" name="maxFrames" type="number" defaultValue={numberSetting(settings, "maxFrames", 12)} />
       </SettingsGrid>
     );
   }
 
   return null;
+}
+
+function stringSetting(settings: Record<string, unknown>, key: string, fallback: string) {
+  const value = settings[key];
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function numberSetting(settings: Record<string, unknown>, key: string, fallback: number) {
+  const value = settings[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function SettingsGrid({ children }: { children: React.ReactNode }) {

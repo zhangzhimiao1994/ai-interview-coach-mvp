@@ -25,8 +25,11 @@ const COSYVOICE_MODELS = new Set([
   "cosyvoice-v3-flash",
   "cosyvoice-v2"
 ]);
+const QWEN_AUDIO_TTS_MODELS = new Set(["qwen-audio-3.0-tts-flash"]);
 const DEFAULT_VOICE = "longanhuan";
+const DEFAULT_QWEN_AUDIO_VOICE = "longanhuan_v3.6";
 const DEFAULT_INSTRUCTION = "你说话的情感是 neutral.";
+const DEFAULT_QWEN_AUDIO_INSTRUCTION = "语气自然、清晰，可以根据文本中的情绪标签自动表达情绪。";
 const PCM_SAMPLE_RATE = 48_000 as const;
 const MAX_PCM_CHUNK_BYTES = 1024 * 1024;
 const MAX_PCM_TOTAL_BYTES = 10 * 1024 * 1024;
@@ -145,9 +148,9 @@ function parseSseData(frame: string) {
 
 export function validateAlibabaHttpTtsModelName(modelName: string): string {
   const normalized = modelName.trim();
-  if (!COSYVOICE_MODELS.has(normalized)) {
+  if (!COSYVOICE_MODELS.has(normalized) && !QWEN_AUDIO_TTS_MODELS.has(normalized)) {
     throw new MediaConfigurationError(
-      "The selected speech pipeline supports only CosyVoice HTTP models.",
+      "The selected speech pipeline supports only adapted Alibaba TTS models.",
       { code: "ALIBABA_TTS_MODEL_INVALID" }
     );
   }
@@ -173,6 +176,46 @@ export function buildAlibabaTtsUrl({
   return `https://${workspaceId}.${region}.maas.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer`;
 }
 
+export function buildAlibabaTtsRequestBody(
+  model: ResolvedMediaModel,
+  input: SpeechSynthesisInput
+) {
+  const modelName = validateAlibabaHttpTtsModelName(model.modelName);
+  const isQwenAudioTts = QWEN_AUDIO_TTS_MODELS.has(modelName);
+  const inputResult = ttsInputSchema.safeParse({
+    text: input.text,
+    voice:
+      textSetting(input.voice) ||
+      textSetting(model.modelSettings.voice) ||
+      (isQwenAudioTts ? DEFAULT_QWEN_AUDIO_VOICE : DEFAULT_VOICE),
+    instruction:
+      textSetting(input.instructions) ||
+      textSetting(model.modelSettings.instruction) ||
+      textSetting(model.modelSettings.instructions) ||
+      (isQwenAudioTts ? DEFAULT_QWEN_AUDIO_INSTRUCTION : DEFAULT_INSTRUCTION),
+    speed: input.speed ?? 1
+  });
+
+  if (!inputResult.success) {
+    throw new MediaConfigurationError("Alibaba TTS input is invalid", {
+      provider: model.providerType,
+      code: "ALIBABA_TTS_INPUT_INVALID"
+    });
+  }
+
+  return {
+    model: modelName,
+    input: {
+      text: inputResult.data.text,
+      voice: inputResult.data.voice,
+      format: "pcm",
+      sample_rate: PCM_SAMPLE_RATE,
+      rate: inputResult.data.speed,
+      instruction: inputResult.data.instruction
+    }
+  };
+}
+
 export function createAlibabaTtsProvider(
   model: ResolvedMediaModel,
   dependencyOverrides: Partial<AlibabaTtsDependencies> = {}
@@ -186,44 +229,13 @@ export function createAlibabaTtsProvider(
   async function streamPcm(
     input: SpeechSynthesisInput
   ): Promise<SpeechPcmStreamResult> {
-    const modelName = validateAlibabaHttpTtsModelName(model.modelName);
-    const inputResult = ttsInputSchema.safeParse({
-      text: input.text,
-      voice:
-        textSetting(input.voice) ||
-        textSetting(model.modelSettings.voice) ||
-        DEFAULT_VOICE,
-      instruction:
-        textSetting(input.instructions) ||
-        textSetting(model.modelSettings.instruction) ||
-        textSetting(model.modelSettings.instructions) ||
-        DEFAULT_INSTRUCTION,
-      speed: input.speed ?? 1
-    });
-
-    if (!inputResult.success) {
-      throw new MediaConfigurationError("Alibaba TTS input is invalid", {
-        provider: model.providerType,
-        code: "ALIBABA_TTS_INPUT_INVALID"
-      });
-    }
-
+    const body = buildAlibabaTtsRequestBody(model, input);
+    const modelName = body.model;
     const credentials = resolveAlibabaTtsCredentials(
       model,
       deps.readConfigSecret
     );
     const endpoint = buildAlibabaTtsUrl(credentials);
-    const body = {
-      model: modelName,
-      input: {
-        text: inputResult.data.text,
-        voice: inputResult.data.voice,
-        format: "pcm",
-        sample_rate: PCM_SAMPLE_RATE,
-        rate: inputResult.data.speed,
-        instruction: inputResult.data.instruction
-      }
-    };
 
     let response: Response | undefined;
     let streamController: AbortController | undefined;

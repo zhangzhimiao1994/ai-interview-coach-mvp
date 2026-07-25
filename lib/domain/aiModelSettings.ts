@@ -10,11 +10,11 @@ export function modelSettingsFromForm(capability: AiCapability, form: FormData) 
       };
     case "TEXT_TO_SPEECH":
       return {
-        voice: String(form.get("voice") || "longanhuan"),
+        voice: String(form.get("voice") || "longanhuan_v3.6"),
         format: String(form.get("format") || "pcm"),
         sampleRate: Number(form.get("sampleRate") || 48000),
         channels: Number(form.get("channels") || 1),
-        instruction: String(form.get("instruction") || "你说话的情感是 neutral.")
+        instruction: String(form.get("instruction") || "像专业面试官一样自然、清晰地表达；可根据文本中的 [whisper]、[laughs]、[angry] 等标签添加情绪。")
       };
     case "DIGITAL_HUMAN_REALTIME":
       return {

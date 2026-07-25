@@ -3,6 +3,10 @@ import { AiDiagnosticsPanel } from "@/components/admin/AiDiagnosticsPanel";
 import { AiServiceConfigPanel } from "@/components/admin/AiServiceConfigPanel";
 import { getAllAiDiagnostics } from "@/lib/ai/diagnostics";
 import { prisma } from "@/lib/db/prisma";
+import {
+  multimodalTakeoverSettingKey,
+  parseMultimodalTakeoverSettings
+} from "@/lib/domain/multimodalTakeover";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +22,7 @@ const modelInclude = {
 } as const;
 
 export default async function AiServicesPage() {
-  const [providers, models, diagnostics] = await Promise.all([
+  const [providers, models, diagnostics, multimodalTakeoverRow] = await Promise.all([
     prisma.aiServiceProvider.findMany({
       orderBy: { createdAt: "desc" },
       select: {
@@ -35,7 +39,10 @@ export default async function AiServicesPage() {
       orderBy: [{ capability: "asc" }, { createdAt: "desc" }],
       include: modelInclude
     }),
-    getAllAiDiagnostics()
+    getAllAiDiagnostics(),
+    prisma.aiRuntimeSetting.findUnique({
+      where: { key: multimodalTakeoverSettingKey }
+    })
   ]);
 
   return (
@@ -49,7 +56,11 @@ export default async function AiServicesPage() {
     >
       <div className="grid gap-6">
         <AiDiagnosticsPanel initialDiagnostics={diagnostics} />
-        <AiServiceConfigPanel initialProviders={providers} initialModels={models} />
+        <AiServiceConfigPanel
+          initialProviders={providers}
+          initialModels={models}
+          initialMultimodalTakeover={parseMultimodalTakeoverSettings(multimodalTakeoverRow?.valueJson)}
+        />
       </div>
     </AdminShell>
   );

@@ -1,13 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findFirst, findUnique } = vi.hoisted(() => ({
+const { findFirst, findUnique, runtimeFindUnique } = vi.hoisted(() => ({
   findFirst: vi.fn(),
-  findUnique: vi.fn()
+  findUnique: vi.fn(),
+  runtimeFindUnique: vi.fn()
 }));
 
 vi.mock("@/lib/db/prisma", () => ({
   prisma: {
-    aiModelConfig: { findFirst, findUnique }
+    aiModelConfig: { findFirst, findUnique },
+    aiRuntimeSetting: { findUnique: runtimeFindUnique }
   }
 }));
 
@@ -17,6 +19,13 @@ import {
 } from "@/lib/ai/configResolver";
 
 describe("AI model runtime selection", () => {
+  beforeEach(() => {
+    findFirst.mockReset();
+    findUnique.mockReset();
+    runtimeFindUnique.mockReset();
+    runtimeFindUnique.mockResolvedValue(null);
+  });
+
   it("routes by the currently selected model instead of the recommended default", async () => {
     findFirst.mockResolvedValue(null);
 
@@ -52,6 +61,38 @@ describe("AI model runtime selection", () => {
       expect.objectContaining({
         settingsJson: true,
         credentialsCiphertext: true
+      })
+    );
+  });
+
+  it("falls back to the configured Omni takeover model for covered capabilities without a selected single model", async () => {
+    const takeoverModel = {
+      id: "model-omni",
+      capability: "INTERVIEW_FOLLOW_UP",
+      modelName: "qwen3.5-omni-plus",
+      enabled: true,
+      isSelected: true,
+      provider: { enabled: true }
+    };
+    findFirst.mockResolvedValue(null);
+    runtimeFindUnique.mockResolvedValue({
+      valueJson: JSON.stringify({
+        enabled: true,
+        modelId: "model-omni",
+        coveredCapabilities: ["VISION_BEHAVIOR_ANALYSIS"]
+      })
+    });
+    findUnique.mockResolvedValue(takeoverModel);
+
+    const result = await findSelectedAiModel("VISION_BEHAVIOR_ANALYSIS");
+
+    expect(result).toBe(takeoverModel);
+    expect(runtimeFindUnique).toHaveBeenCalledWith({
+      where: { key: "ai.multimodalTakeover" }
+    });
+    expect(findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "model-omni" }
       })
     );
   });

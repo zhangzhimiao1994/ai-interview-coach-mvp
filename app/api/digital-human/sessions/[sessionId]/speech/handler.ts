@@ -7,6 +7,7 @@ import {
 } from "@/lib/domain/trainingQuestions";
 import { resolveMediaModel, type ResolvedMediaModel } from "@/lib/media/config";
 import { MediaConfigurationError, MediaProviderError } from "@/lib/media/errors";
+import { buildInterviewTtsStyle } from "@/lib/media/interviewTtsStyle";
 import { createAlibabaTtsProvider } from "@/lib/media/providers/alibabaTts";
 import type {
   SpeechPcmStreamResult,
@@ -209,9 +210,27 @@ export function createDigitalHumanSpeechStreamHandler(
     let iterator: AsyncIterator<Uint8Array>;
     try {
       model = await deps.resolveModel();
+      const style = buildInterviewTtsStyle({
+        stage: question.stage,
+        text: input.text,
+        defaultInstruction:
+          typeof model.modelSettings.instruction === "string"
+            ? model.modelSettings.instruction
+            : typeof model.modelSettings.instructions === "string"
+              ? model.modelSettings.instructions
+              : undefined,
+        stageVoices:
+          model.modelSettings.stageVoices &&
+          typeof model.modelSettings.stageVoices === "object" &&
+          !Array.isArray(model.modelSettings.stageVoices)
+            ? model.modelSettings.stageVoices as Record<string, string>
+            : undefined
+      });
       const speechInput: SpeechSynthesisInput = {
         text: input.text,
-        speed: input.speed
+        speed: input.speed,
+        instructions: style.instructions,
+        ...(style.voice ? { voice: style.voice } : {})
       };
       result = deps.streamPcm
         ? await deps.streamPcm(speechInput)

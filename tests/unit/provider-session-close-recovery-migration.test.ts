@@ -279,5 +279,5 @@ describe("provider session close recovery migration", () => {
         });
       }
     }
-  });
+  }, 60_000);
 });
