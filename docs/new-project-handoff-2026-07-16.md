@@ -263,6 +263,13 @@ PORT=8080
 
 Docker 数据位于命名卷，不要使用 `docker compose down -v`，否则会删除数据库卷。
 
+所有项目通用 Docker 调试收尾规则：
+
+1. 以后所有项目只要启动过 Docker 容器，调试结束必须执行 `docker compose down --remove-orphans`；
+2. 不要使用 `docker compose down -v`，避免删除数据库命名卷；
+3. 调试结束必须执行 `docker desktop stop` 或确认 Docker Desktop 已关闭；
+4. 交接或汇报时需要明确说明 Docker 当前是否仍在运行。
+
 ## 10. 重要开发规则
 
 1. 每个完成阶段单独提交并推送，不覆盖历史版本；
@@ -272,7 +279,7 @@ Docker 数据位于命名卷，不要使用 `docker compose down -v`，否则会
 5. 推荐模型不等于当前使用模型；
 6. 真实模型失败不能静默返回 Mock；
 7. 数字人、语音、行为分析未通过真实服务检查前，界面必须明确显示 fallback 或未适配；
-8. Docker、Linux 和源码部署必须同步更新并一起验证；
+8. Docker、Linux 和源码部署必须同步更新并一起验证；如使用 Docker 调试，调试结束必须关闭 Docker Desktop；
 9. 行为分析只输出可观察证据和训练建议；
 10. 正式公网使用必须配置 HTTPS。
 
