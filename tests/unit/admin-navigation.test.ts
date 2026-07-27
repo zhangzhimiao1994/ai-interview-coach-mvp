@@ -26,5 +26,7 @@ describe("admin navigation", () => {
     expect(shell).toContain("AI能力");
     expect(shell).toContain("数字人");
     expect(shell).toContain("行为分析");
+    expect(shell).toContain("招聘数据");
+    expect(shell).toContain("/admin/recruitment");
   });
 });

@@ -2,7 +2,7 @@
 
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Field, SelectField, TextAreaField } from "@/components/ui/Field";
 import { defaultStageTemplates } from "@/lib/domain/stages";
@@ -17,12 +17,21 @@ type TrainingTaskFormProps = {
   companies: Array<{ id: string; name: string }>;
   jobs: Array<{ id: string; title: string }>;
   interviewers: Array<{ id: string; name: string }>;
+  jobPostings?: Array<{
+    id: string;
+    title: string;
+    company: string | null;
+    sourceUrl: string | null;
+    description: string;
+    requirements: string[];
+    editedNotes: string | null;
+  }>;
 };
 
 type SaveState = "idle" | "saving" | "error";
 type ImportState = "idle" | "loading" | "error";
 
-export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: TrainingTaskFormProps) {
+export function TrainingTaskForm({ candidates, companies, jobs, interviewers, jobPostings = [] }: TrainingTaskFormProps) {
   const router = useRouter();
   const [state, setState] = useState<SaveState>("idle");
   const [message, setMessage] = useState("");
@@ -38,12 +47,28 @@ export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: 
   const [jobSourceUrl, setJobSourceUrl] = useState("");
   const [jobDescription, setJobDescription] = useState("");
   const [jobManualNotes, setJobManualNotes] = useState("");
+  const [jobPostingId, setJobPostingId] = useState("");
 
   function selectCandidate(nextCandidateId: string) {
     const nextCandidate = candidates.find((candidate) => candidate.id === nextCandidateId);
     setCandidateId(nextCandidateId);
     setTargetCompany(nextCandidate?.targetCompany || "");
     setTargetRole(nextCandidate?.targetRole || "");
+  }
+
+  function selectJobPosting(nextPostingId: string) {
+    setJobPostingId(nextPostingId);
+    const posting = jobPostings.find((item) => item.id === nextPostingId);
+    if (!posting) return;
+
+    const requirementsText = posting.requirements.length
+      ? `\n\nRequirements:\n${posting.requirements.map((item) => `- ${item}`).join("\n")}`
+      : "";
+    setTargetCompany(posting.company || "");
+    setTargetRole(posting.title);
+    setJobSourceUrl(posting.sourceUrl || "");
+    setJobDescription(`${posting.description}${requirementsText}`);
+    setJobManualNotes(posting.editedNotes || "");
   }
 
   async function importJobPosting() {
@@ -115,6 +140,7 @@ export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: 
           companyTemplateId: form.get("companyTemplateId") || undefined,
           jobTemplateId: form.get("jobTemplateId") || undefined,
           interviewerTemplateId: form.get("interviewerTemplateId") || undefined,
+          jobPostingId: form.get("jobPostingId") || undefined,
           title: form.get("title"),
           targetCompany: form.get("targetCompany"),
           targetRole: form.get("targetRole"),
@@ -202,6 +228,22 @@ export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: 
             公开页面会自动提取；需要登录或验证码的网站，请登录后复制可见 JD 粘贴到下方。
           </p>
         </div>
+        <div className="mt-4">
+          <SelectField
+            hint="选择后会把岗位库中的岗位名称、公司、来源链接、JD 和人工备注复制为本次训练任务快照。"
+            label="Job library posting"
+            name="jobPostingId"
+            value={jobPostingId}
+            onChange={(event) => selectJobPosting(event.target.value)}
+          >
+            <option value="">No job library posting</option>
+            {jobPostings.map((posting) => (
+              <option key={posting.id} value={posting.id}>
+                {posting.title}{posting.company ? ` / ${posting.company}` : ""}
+              </option>
+            ))}
+          </SelectField>
+        </div>
         <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
           <Field
             hint="只导入公网 HTTP(S) 页面；不会绕过登录、验证码或招聘网站安全验证。"
@@ -224,14 +266,14 @@ export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: 
         <div className="mt-4 grid gap-4">
           <TextAreaField
             hint="可以粘贴中文或英文 JD、任职要求、加分项、岗位职责。"
-            label="JD 正文 / 岗位要求"
+            label="JD / Job requirements"
             name="jobDescription"
             value={jobDescription}
             onChange={(event) => setJobDescription(event.target.value)}
           />
           <TextAreaField
             hint="用于补充招聘页面没有写清楚、但你希望面试官追问的内容。"
-            label="人工补充要求"
+            label="Manual interview focus"
             name="jobManualNotes"
             value={jobManualNotes}
             onChange={(event) => setJobManualNotes(event.target.value)}

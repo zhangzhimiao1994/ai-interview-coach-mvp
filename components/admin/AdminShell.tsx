@@ -8,6 +8,7 @@ import {
   BriefcaseBusiness,
   ChevronLeft,
   Database,
+  Globe2,
   LayoutDashboard,
   Settings2,
   ShieldCheck,
@@ -19,6 +20,7 @@ type AdminNavKey =
   | "candidates"
   | "templates"
   | "tasks"
+  | "recruitment"
   | "users"
   | "ai-services"
   | "digital-human"
@@ -68,6 +70,13 @@ const navItems: Array<{
     label: "服务交付",
     description: "训练任务创建",
     icon: BriefcaseBusiness
+  },
+  {
+    key: "recruitment",
+    href: "/admin/recruitment" as Route,
+    label: "招聘数据",
+    description: "岗位来源与采集",
+    icon: Globe2
   },
   {
     key: "users",
@@ -133,7 +142,7 @@ export function AdminShell({
           )}
         </div>
 
-        <nav className="mt-5 grid gap-2 md:grid-cols-4 xl:grid-cols-8" aria-label="后台导航">
+        <nav className="mt-5 grid gap-2 md:grid-cols-4 xl:grid-cols-9" aria-label="后台导航">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = item.key === active;
