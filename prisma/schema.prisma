@@ -21,6 +21,7 @@ model Candidate {
   materials     MaterialAsset[]
   tasks         TrainingTask[]
   sessions      TrainingSession[]
+  recruitmentTemplateBindings RecruitmentTemplateCandidate[]
 }
 
 model MaterialAsset {
@@ -78,6 +79,8 @@ model TrainingTask {
   id                    String               @id @default(cuid())
   candidateId           String
   candidate             Candidate            @relation(fields: [candidateId], references: [id])
+  jobPostingId          String?
+  jobPosting            RecruitmentJobPosting? @relation(fields: [jobPostingId], references: [id], onDelete: SetNull)
   companyTemplateId     String?
   companyTemplate       CompanyTemplate?     @relation(fields: [companyTemplateId], references: [id])
   jobTemplateId         String?
@@ -99,9 +102,149 @@ model TrainingTask {
   aiCalls               AiCallLog[]
 
   @@index([candidateId])
+  @@index([jobPostingId])
   @@index([companyTemplateId])
   @@index([jobTemplateId])
   @@index([interviewerTemplateId])
+}
+
+model RecruitmentSource {
+  id                   String                  @id @default(cuid())
+  provider             String
+  sourceType           String
+  displayName          String
+  enabled              Boolean                 @default(true)
+  credentialCiphertext String?
+  credentialIv         String?
+  credentialTag        String?
+  credentialPreview    String?
+  sessionCiphertext    String?
+  sessionIv            String?
+  sessionTag           String?
+  sessionPreview       String?
+  verificationStatus   String                  @default("UNVERIFIED")
+  lastVerifiedAt       DateTime?
+  lastSuccessfulSyncAt DateTime?
+  settingsJson         String                  @default("{}")
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  postings             RecruitmentJobPosting[]
+  syncRuns             RecruitmentSyncRun[]
+
+  @@index([provider])
+  @@index([sourceType])
+  @@index([enabled])
+  @@unique([provider, displayName])
+}
+
+model RecruitmentSearchTemplate {
+  id              String                         @id @default(cuid())
+  name            String
+  keywords        String
+  roleType        String?
+  city            String?
+  country         String?
+  experienceRange String?
+  salaryRange     String?
+  language        String?
+  remoteMode      String?
+  sourceIdsJson   String                         @default("[]")
+  enabled         Boolean                        @default(true)
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+  candidateLinks  RecruitmentTemplateCandidate[]
+  schedules       RecruitmentSyncSchedule[]
+  syncRuns        RecruitmentSyncRun[]
+
+  @@index([enabled])
+  @@index([country])
+  @@index([city])
+}
+
+model RecruitmentTemplateCandidate {
+  id         String                    @id @default(cuid())
+  templateId String
+  template   RecruitmentSearchTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  candidateId String
+  candidate   Candidate                 @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  createdAt  DateTime                  @default(now())
+
+  @@unique([templateId, candidateId])
+  @@index([candidateId])
+}
+
+model RecruitmentSyncSchedule {
+  id             String                    @id @default(cuid())
+  templateId     String
+  template       RecruitmentSearchTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  frequency      String
+  nextRunAt      DateTime
+  enabled        Boolean                   @default(true)
+  lockExpiresAt  DateTime?
+  lastRunAt      DateTime?
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+
+  @@index([enabled, nextRunAt])
+  @@index([templateId])
+}
+
+model RecruitmentSyncRun {
+  id             String                     @id @default(cuid())
+  sourceId       String?
+  source         RecruitmentSource?         @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  templateId     String?
+  template       RecruitmentSearchTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  mode           String                     @default("MANUAL")
+  status         String                     @default("PENDING")
+  insertedCount  Int                        @default(0)
+  updatedCount   Int                        @default(0)
+  skippedCount   Int                        @default(0)
+  failureReason  String?
+  logsJson       String                     @default("[]")
+  startedAt      DateTime                   @default(now())
+  finishedAt     DateTime?
+  createdAt      DateTime                   @default(now())
+
+  @@index([sourceId])
+  @@index([templateId])
+  @@index([status])
+  @@index([startedAt])
+}
+
+model RecruitmentJobPosting {
+  id               String              @id @default(cuid())
+  sourceId         String?
+  source           RecruitmentSource?  @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  provider         String
+  sourceType       String
+  title            String
+  company          String?
+  location         String?
+  salary           String?
+  description      String
+  requirementsJson String              @default("[]")
+  sourceUrl        String?
+  externalJobId    String?
+  publishedAt      DateTime?
+  rawJson          String?
+  dedupeKey        String              @unique
+  status           String              @default("ACTIVE")
+  editedNotes      String?
+  manualImport     Boolean             @default(false)
+  firstSeenAt      DateTime            @default(now())
+  lastSeenAt       DateTime            @default(now())
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  trainingTasks    TrainingTask[]
+
+  @@unique([provider, externalJobId])
+  @@index([sourceId])
+  @@index([provider])
+  @@index([sourceType])
+  @@index([status])
+  @@index([company])
+  @@index([lastSeenAt])
 }
 
 model TrainingSession {
