@@ -206,6 +206,7 @@ PORT=3000
 RUN_DB_SEED=false
 AI_PROVIDER=database
 AI_CONFIG_SECRET="替换为独立随机密钥"
+RECRUITMENT_SESSION_SECRET="替换为至少32字符的独立随机密钥"
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="替换为强密码"
 ```
@@ -410,3 +411,50 @@ Docker 验证状态：
 - `npx.cmd prisma generate`
 - `npm.cmd test`
 - `npm.cmd run build`
+
+## 15. 2026-07-27 本地进展：招聘信息自动采集与岗位库
+
+本轮继续在 `feature/alibaba-multimodal-integration` 分支开发，远程仓库仍为 `zhangzhimiao1994/ai-interview-coach-mvp`，项目展示名仍为“开发面试数字人”。用户要求招聘信息既能从网络自动获取，也能手动导入；国内外招聘来源都要考虑，真实运行不能用 mock 结果声明可达。
+
+已完成并推送到 GitHub 的阶段：
+
+- `1a11b34 docs: design automated recruitment collection`
+- `028cc0a docs: plan automated recruitment collection`
+- `eaafb75 feat: add recruitment collection data model`
+- `8ad722b feat: add manual recruitment job library`
+- `8a20a5a feat: add recruitment source management APIs`
+- `89351ef feat: add recruitment source connectors`
+- `f20f558 feat: add recruitment sync orchestration`
+- `d0fb81c feat: add recruitment admin workspace`
+- `e6f876d feat: add recruitment browser authorization records`
+
+已实现范围：
+
+- 新增招聘来源、招聘模板、招聘岗位、同步运行、浏览器授权记录等 Prisma 模型，训练任务可绑定 `jobPostingId`。
+- 后台新增 `/admin/recruitment` 工作台，支持招聘来源配置、模板配置、岗位库、同步运行和手动导入。
+- 训练任务创建页可从岗位库选择岗位，并把岗位快照带入任务。
+- 公共连接器已接入 Adzuna、Jooble、Greenhouse、Lever、USAJOBS；测试通过注入 fetch 验证真实接口形状，不在运行时代码使用 mock。
+- 同步编排会按来源和模板拉取岗位，归一化后按去重键写入岗位库，并记录运行状态、错误和统计。
+- 浏览器授权记录使用加密 storage state 保存，只展示计数预览，不返回 Cookie 明文。
+
+新增生产环境变量：
+
+```env
+RECRUITMENT_SESSION_SECRET="替换为至少32字符的独立随机密钥"
+```
+
+`RECRUITMENT_SESSION_SECRET` 独立于 `AI_CONFIG_SECRET`，用于加密 recruitment API credentials and browser session state。生产环境不能使用占位值，长度至少 32 字符；更换后旧的招聘 API 凭据和浏览器授权记录将无法解密，需要重新保存或重新授权。
+
+安全要求：
+
+1. 不提交 `.env`、招聘 API Key、浏览器 storage-state JSON、Cookie、账号密码、候选人隐私数据或招聘站点原始登录态。
+2. 招聘来源优先使用官方 API、聚合 API、公开 ATS API 和用户授权后的浏览器授权记录。
+3. 需要登录的网站不能让系统保存明文账号密码；只保存用户主动授权后的加密浏览器会话。
+4. 手动导入仍作为保底来源，适合用户从招聘网站、邮件、PDF 或客户材料中录入岗位要求。
+5. Docker 本轮未启动；以后所有项目如果使用 Docker 调试，结束后必须执行 `docker compose down --remove-orphans`，并关闭 Docker Desktop。
+
+本阶段收尾任务：
+
+- Linux 部署文档已补充 `RECRUITMENT_SESSION_SECRET`、招聘来源、浏览器授权记录和 Docker 调试收尾规则。
+- 生产环境校验应拒绝缺失、占位或短于 32 字符的 `RECRUITMENT_SESSION_SECRET`。
+- 最终验证需继续执行目标测试、全量测试和生产构建，然后单独提交并推送。

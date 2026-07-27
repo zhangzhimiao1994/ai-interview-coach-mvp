@@ -35,11 +35,13 @@ PORT=3000
 RUN_DB_SEED=false
 AI_PROVIDER=database
 AI_CONFIG_SECRET="replace-with-a-long-random-secret"
+RECRUITMENT_SESSION_SECRET="replace-with-a-long-random-secret"
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="replace-with-a-strong-password"
 ```
 
 `AI_CONFIG_SECRET` 不能使用 `change-this-before-production`。它用于加密后台保存的服务商 API Key。
+`RECRUITMENT_SESSION_SECRET` 不能使用占位值，生产环境至少 32 个字符。它独立于 `AI_CONFIG_SECRET`，用于加密 recruitment API credentials and browser session state。
 
 然后执行：
 
@@ -81,6 +83,7 @@ PORT=3000
 RUN_DB_SEED=false
 AI_PROVIDER=database
 AI_CONFIG_SECRET="replace-with-a-long-random-secret"
+RECRUITMENT_SESSION_SECRET="replace-with-a-long-random-secret"
 ADMIN_USERNAME="admin"
 ADMIN_PASSWORD="replace-with-a-strong-password"
 ```
@@ -210,6 +213,20 @@ server {
 推荐参考可以编辑，但不会自动参与调用。必须分别把一个 ASR 模型和一个 TTS 模型设为“当前使用（isSelected）”。更新配置后，新建 ASR 会话和新的语音合成请求会读取最新选择，正在进行的 WebSocket 不会中途切换模型。
 
 候选人端显示“阿里实时识别优先 / 浏览器识别降级”，数字面试官显示“阿里真实语音优先 / 浏览器语音降级”。降级是显式运行状态，不会记录成阿里成功。
+
+### 招聘来源与浏览器授权记录
+
+招聘来源在后台 `/admin/recruitment` 配置。公共 ATS 和招聘聚合 API 使用最小权限 API Key；需要登录的网站使用“浏览器授权记录”保存授权后的浏览器 storage state。系统只保存加密后的 recruitment API credentials and browser session state，不保存招聘网站账号密码，也不会把 Cookie 明文返回给前端。
+
+`RECRUITMENT_SESSION_SECRET` 必须在生产环境配置，且至少 32 个字符。该密钥专门用于招聘来源凭据和浏览器授权记录，不能与 `AI_CONFIG_SECRET` 混用；更换后旧的招聘 API 凭据和浏览器授权记录将无法解密，需要重新授权或重新保存。
+
+安全约束：
+
+- 不要提交 `.env`、招聘 API 响应原文、浏览器 storage-state JSON、Cookie、账号密码或候选人隐私数据。
+- Selenium/Playwright 登录态只作为用户授权后的采集入口；采集前要确认目标网站条款、频率限制和账号安全要求。
+- 手动导入仍是保底来源，适合从招聘网站、邮件、PDF 或候选人提供材料中录入岗位要求。
+- 真实连通性只能由真实 API 或授权会话验证；不要用 mock 结果声明招聘来源可达。
+- 如果为了调试启动 Docker，结束后执行 `docker compose down --remove-orphans`，再执行 `docker desktop stop`。
 
 ## 更新服务
 

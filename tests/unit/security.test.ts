@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   authenticateBasicRequest,
   consumeRateLimit,
@@ -52,6 +54,19 @@ describe("request security guards", () => {
 
     expect(pruneExpiredRateLimits(2_600)).toBe(1);
     expect(consumeRateLimit("active", 1, 1_000, 2_600).allowed).toBe(false);
+  });
+
+  it("keeps recruitment documentation examples free of real secrets and session JSON", () => {
+    const root = process.cwd();
+    const deploymentDocs = readFileSync(join(root, "docs/linux-deployment.md"), "utf8");
+    const handoff = readFileSync(join(root, "docs/new-project-handoff-2026-07-16.md"), "utf8");
+    const combined = `${deploymentDocs}\n${handoff}`;
+
+    expect(combined).toContain("RECRUITMENT_SESSION_SECRET");
+    expect(combined).not.toMatch(/sk-[A-Za-z0-9_-]{16,}/);
+    expect(combined).not.toMatch(/AKIA[0-9A-Z]{16}/);
+    expect(combined).not.toContain('"cookies":[{"name":"sid","value"');
+    expect(combined).not.toContain("secret-cookie");
   });
 
 });

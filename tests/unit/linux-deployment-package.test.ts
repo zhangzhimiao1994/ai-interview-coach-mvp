@@ -36,7 +36,8 @@ describe("linux deployment package", () => {
       ...process.env,
       NODE_ENV: "production",
       DATABASE_URL: "file:./data/prod.db",
-      AI_CONFIG_SECRET: "real-ai-config-secret"
+      AI_CONFIG_SECRET: "real-ai-config-secret",
+      RECRUITMENT_SESSION_SECRET: "real-recruitment-session-secret-123456"
     };
     const invalid = spawnSync(process.execPath, [script], {
       env: { ...baseEnvironment, ADMIN_PASSWORD: "change-this-before-production" },
@@ -51,6 +52,24 @@ describe("linux deployment package", () => {
     expect(invalid.stderr).toContain("ADMIN_PASSWORD");
     expect(valid.status).toBe(0);
     expect(valid.stdout).toContain("validation passed");
+  });
+
+  it("requires recruitment credential encryption in production", () => {
+    const script = join(root, "scripts/validate-production-env.mjs");
+    const missingRecruitmentSecret = spawnSync(process.execPath, [script], {
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        DATABASE_URL: "file:./data/prod.db",
+        ADMIN_PASSWORD: "real-admin-password",
+        AI_CONFIG_SECRET: "real-ai-config-secret"
+      },
+      encoding: "utf8"
+    });
+
+    expect(missingRecruitmentSecret.status).toBe(1);
+    expect(missingRecruitmentSecret.stderr).toContain("RECRUITMENT_SESSION_SECRET");
+    expect(missingRecruitmentSecret.stderr).toContain("recruitment API credentials and browser session state");
   });
 
   it("uses the dedicated readiness endpoint for Docker health checks", () => {
@@ -126,6 +145,10 @@ describe("linux deployment package", () => {
     expect(docs).toContain("npm run db:migrate:deploy");
     expect(docs).toContain("docker compose down --remove-orphans");
     expect(docs).toContain("docker desktop stop");
+    expect(docs).toContain("RECRUITMENT_SESSION_SECRET");
+    expect(docs).toContain("recruitment API credentials and browser session state");
+    expect(docs).toContain("招聘来源");
+    expect(docs).toContain("浏览器授权记录");
   });
 
   it("keeps Lingmou RAM credentials out of environment files", () => {

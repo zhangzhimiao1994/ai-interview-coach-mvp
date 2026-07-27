@@ -20,6 +20,11 @@ export function validateProductionEnvironment(env) {
   if (isMissingOrPlaceholder(env.AI_CONFIG_SECRET)) {
     errors.push("AI_CONFIG_SECRET must be set to a non-placeholder value");
   }
+  if (isMissingOrPlaceholder(env.RECRUITMENT_SESSION_SECRET) || env.RECRUITMENT_SESSION_SECRET.trim().length < 32) {
+    errors.push(
+      "RECRUITMENT_SESSION_SECRET must be set to a non-placeholder value of at least 32 characters; it encrypts recruitment API credentials and browser session state"
+    );
+  }
 
   if (errors.length > 0) {
     throw new Error(`Invalid production configuration: ${errors.join("; ")}`);
