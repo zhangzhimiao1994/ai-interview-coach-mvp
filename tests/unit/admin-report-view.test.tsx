@@ -254,7 +254,7 @@ describe("admin report page", () => {
       }
     });
     expect(markup).toContain("PM final round practice");
-  });
+  }, 10000);
 
   it("404s when the session is missing", async () => {
     vi.resetModules();

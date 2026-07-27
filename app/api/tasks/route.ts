@@ -6,6 +6,7 @@ import { parseTrainingTaskInput } from "@/lib/validators/task";
 
 const taskIncludes = {
   candidate: true,
+  jobPosting: true,
   companyTemplate: true,
   jobTemplate: true,
   interviewerTemplate: true

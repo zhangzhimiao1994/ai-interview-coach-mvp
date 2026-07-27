@@ -21,6 +21,7 @@ const optionalPublicUrl = optionalText.refine((value) => value === undefined || 
 export const trainingTaskInputSchema = z
   .object({
     candidateId: requiredText("Candidate"),
+    jobPostingId: optionalId,
     companyTemplateId: optionalId,
     jobTemplateId: optionalId,
     interviewerTemplateId: optionalId,
