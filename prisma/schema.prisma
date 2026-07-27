@@ -87,6 +87,9 @@ model TrainingTask {
   title                 String
   targetCompany         String
   targetRole            String
+  jobSourceUrl          String?
+  jobDescription        String?
+  jobManualNotes        String?
   stageConfig           String
   expectedMinutes       Int
   status                String               @default("DRAFT")

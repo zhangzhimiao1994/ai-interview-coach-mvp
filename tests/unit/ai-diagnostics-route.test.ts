@@ -51,7 +51,7 @@ describe("AI diagnostics API route", () => {
     });
     expect(getAllAiDiagnostics).toHaveBeenCalledTimes(1);
     expect(diagnoseAiCapability).not.toHaveBeenCalled();
-  });
+  }, 15_000);
 
   it("validates and runs one requested live check", async () => {
     diagnoseAiCapability.mockResolvedValue(

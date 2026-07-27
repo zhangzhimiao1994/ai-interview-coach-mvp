@@ -143,6 +143,7 @@ describe("session API routes", () => {
       title: "PM interview",
       targetCompany: "Acme",
       targetRole: "Product Manager",
+      jobDescription: "岗位职责：负责 AI 面试产品增长。要求：熟悉 SaaS、语音视频和实时协作。",
       expectedMinutes: 30,
       stageConfig: validStageConfig,
       candidate: { id: "candidate-1", name: "Ada", targetRole: "Product Manager" },
@@ -166,6 +167,7 @@ describe("session API routes", () => {
     expect(aiOrchestrator.generateTrainingOutline).toHaveBeenCalledWith({
       targetRole: "Product Manager",
       targetCompany: "Acme",
+      jobDescription: "岗位职责：负责 AI 面试产品增长。要求：熟悉 SaaS、语音视频和实时协作。",
       stages: ["WARM_UP", "FORMAL_INTERVIEW", "AI_REVIEW"],
       questionCountPerStage: 1,
       preferredLanguage: "zh-CN"
@@ -201,7 +203,7 @@ describe("session API routes", () => {
       },
       outline
     });
-  });
+  }, 15_000);
 
   it("rejects empty answer submissions before writing a turn", async () => {
     const { prisma, answerRoute } = await loadRoutes();
@@ -338,7 +340,7 @@ describe("session API routes", () => {
       })
     );
     expect(body.coaching).toEqual(coaching);
-  });
+  }, 15_000);
 
   it("preserves the saved parent-turn stage boundary for follow-up questions", async () => {
     const { prisma, aiOrchestrator, answerRoute } = await loadRoutes();

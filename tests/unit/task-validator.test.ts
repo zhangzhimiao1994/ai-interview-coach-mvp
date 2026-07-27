@@ -27,6 +27,9 @@ describe("parseTrainingTaskInput", () => {
       title: "Product manager interview",
       targetCompany: "Acme",
       targetRole: "Product Manager",
+      jobSourceUrl: " https://jobs.example.com/pm ",
+      jobDescription: " 负责增长策略和用户研究。 ",
+      jobManualNotes: " 重点追问商业化经验。 ",
       stageConfig: JSON.stringify(validStageConfig),
       expectedMinutes: 45
     });
@@ -39,9 +42,29 @@ describe("parseTrainingTaskInput", () => {
       title: "Product manager interview",
       targetCompany: "Acme",
       targetRole: "Product Manager",
+      jobSourceUrl: "https://jobs.example.com/pm",
+      jobDescription: "负责增长策略和用户研究。\n\n人工补充：\n重点追问商业化经验。",
+      jobManualNotes: "重点追问商业化经验。",
       stageConfig: JSON.stringify(validStageConfig),
       expectedMinutes: 45
     });
+  });
+
+  it("rejects private job source URLs for server-side imports", () => {
+    expect(() =>
+      parseTrainingTaskInput({
+        ...validTaskInput,
+        jobSourceUrl: "http://127.0.0.1:3000/internal"
+      })
+    ).toThrowError(
+      expect.objectContaining({
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            message: "Job source URL must be a public HTTP(S) URL"
+          })
+        ])
+      })
+    );
   });
 
   it("rejects expected minutes outside the supported range", () => {

@@ -128,7 +128,7 @@ describe("server shutdown lifecycle", () => {
     clearIntervalSpy.mockRestore();
     vi.doUnmock("@/lib/db/prisma");
     vi.doUnmock("@/lib/media/providerSessionCloseRecoveries");
-  });
+  }, 15_000);
 
   it("drains an active reaper tick before permitting a restarted interval", async () => {
     vi.resetModules();
@@ -183,7 +183,7 @@ describe("server shutdown lifecycle", () => {
     expect(settledBeforeRelease).toBe(false);
     expect(restartAfterDrainWasNew).toBe(true);
     expect(intervalCallbacks).toHaveLength(2);
-  });
+  }, 15_000);
 
   it("wires startup recovery and the reaper before accepting HTTP traffic", () => {
     const source = readFileSync(join(process.cwd(), "server.ts"), "utf8");

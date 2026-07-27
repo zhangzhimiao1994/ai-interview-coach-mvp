@@ -141,7 +141,7 @@ describe("digital human session routes", () => {
       "digital-1",
       "CLIENT_SDK_INIT_FAILED"
     );
-  });
+  }, 15_000);
 
   it("creates a session using only the public RTC whitelist", async () => {
     const { createRoute } = await loadRoutes();

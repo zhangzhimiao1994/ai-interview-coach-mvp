@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { buildJobDescriptionContext, isSafePublicJobPostingUrl } from "@/lib/domain/jobPostingImporter";
 import { parseStageConfigInput } from "@/lib/domain/stages";
 
 const optionalId = z.preprocess(
@@ -7,6 +8,15 @@ const optionalId = z.preprocess(
 );
 
 const requiredText = (fieldName: string) => z.string().trim().min(1, `${fieldName} is required`);
+
+const optionalText = z.preprocess(
+  (value) => (value === null || (typeof value === "string" && value.trim() === "") ? undefined : value),
+  z.string().trim().optional()
+);
+
+const optionalPublicUrl = optionalText.refine((value) => value === undefined || isSafePublicJobPostingUrl(value), {
+  message: "Job source URL must be a public HTTP(S) URL"
+});
 
 export const trainingTaskInputSchema = z
   .object({
@@ -17,6 +27,9 @@ export const trainingTaskInputSchema = z
     title: requiredText("Title"),
     targetCompany: requiredText("Target company"),
     targetRole: requiredText("Target role"),
+    jobSourceUrl: optionalPublicUrl,
+    jobDescription: optionalText,
+    jobManualNotes: optionalText,
     stageConfig: z.unknown().transform((value, ctx) => {
       if (value === undefined || value === null) {
         ctx.addIssue({
@@ -55,7 +68,14 @@ export const trainingTaskInputSchema = z
       .min(5, "Expected minutes must be at least 5")
       .max(120, "Expected minutes must be at most 120")
   })
-  .strict();
+  .strict()
+  .transform((input) => ({
+    ...input,
+    jobDescription: buildJobDescriptionContext({
+      importedDescription: input.jobDescription,
+      manualNotes: input.jobManualNotes
+    }) || undefined
+  }));
 
 export type TrainingTaskInput = z.infer<typeof trainingTaskInputSchema>;
 

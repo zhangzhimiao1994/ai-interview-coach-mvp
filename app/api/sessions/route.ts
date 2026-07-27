@@ -47,6 +47,7 @@ export async function POST(request: Request) {
     const outline = await aiOrchestrator.generateTrainingOutline({
       targetRole: task.targetRole,
       targetCompany: task.targetCompany,
+      jobDescription: task.jobDescription || undefined,
       stages: stagePlan.map((stage) => stage.type),
       questionCountPerStage: 1,
       preferredLanguage: preferredLanguageFromTemplate(task.interviewerTemplate?.languageMode)

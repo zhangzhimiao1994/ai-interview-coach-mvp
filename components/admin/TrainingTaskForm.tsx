@@ -4,7 +4,7 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { Field, SelectField } from "@/components/ui/Field";
+import { Field, SelectField, TextAreaField } from "@/components/ui/Field";
 import { defaultStageTemplates } from "@/lib/domain/stages";
 
 type TrainingTaskFormProps = {
@@ -20,11 +20,14 @@ type TrainingTaskFormProps = {
 };
 
 type SaveState = "idle" | "saving" | "error";
+type ImportState = "idle" | "loading" | "error";
 
 export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: TrainingTaskFormProps) {
   const router = useRouter();
   const [state, setState] = useState<SaveState>("idle");
   const [message, setMessage] = useState("");
+  const [importState, setImportState] = useState<ImportState>("idle");
+  const [importMessage, setImportMessage] = useState("");
   const [candidateId, setCandidateId] = useState(candidates[0]?.id || "");
   const selectedCandidate = useMemo(
     () => candidates.find((candidate) => candidate.id === candidateId),
@@ -32,12 +35,61 @@ export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: 
   );
   const [targetCompany, setTargetCompany] = useState(candidates[0]?.targetCompany || "");
   const [targetRole, setTargetRole] = useState(candidates[0]?.targetRole || "");
+  const [jobSourceUrl, setJobSourceUrl] = useState("");
+  const [jobDescription, setJobDescription] = useState("");
+  const [jobManualNotes, setJobManualNotes] = useState("");
 
   function selectCandidate(nextCandidateId: string) {
     const nextCandidate = candidates.find((candidate) => candidate.id === nextCandidateId);
     setCandidateId(nextCandidateId);
     setTargetCompany(nextCandidate?.targetCompany || "");
     setTargetRole(nextCandidate?.targetRole || "");
+  }
+
+  async function importJobPosting() {
+    if (!jobSourceUrl.trim()) {
+      setImportState("error");
+      setImportMessage("请先填写国内外招聘链接。");
+      return;
+    }
+
+    setImportState("loading");
+    setImportMessage("");
+
+    try {
+      const response = await fetch("/api/job-postings/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: jobSourceUrl })
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        posting?: {
+          title?: string;
+          company?: string;
+          description?: string;
+        };
+        message?: string;
+      } | null;
+
+      if (!response.ok || !payload?.posting?.description) {
+        setImportState("error");
+        setImportMessage(payload?.message || "无法自动读取该招聘页面，请粘贴岗位职责和任职要求。");
+        return;
+      }
+
+      setJobDescription(payload.posting.description);
+      if (payload.posting.company && !targetCompany.trim()) {
+        setTargetCompany(payload.posting.company);
+      }
+      if (payload.posting.title && !targetRole.trim()) {
+        setTargetRole(payload.posting.title);
+      }
+      setImportMessage("已导入岗位信息。请检查并补充你希望面试官重点追问的内容。");
+      setImportState("idle");
+    } catch {
+      setImportState("error");
+      setImportMessage("无法连接导入服务。你可以直接粘贴 JD 内容继续创建任务。");
+    }
   }
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -66,6 +118,9 @@ export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: 
           title: form.get("title"),
           targetCompany: form.get("targetCompany"),
           targetRole: form.get("targetRole"),
+          jobSourceUrl: form.get("jobSourceUrl"),
+          jobDescription: form.get("jobDescription"),
+          jobManualNotes: form.get("jobManualNotes"),
           expectedMinutes: Number(form.get("expectedMinutes")),
           stageConfig
         })
@@ -139,6 +194,50 @@ export function TrainingTaskForm({ candidates, companies, jobs, interviewers }: 
           onChange={(event) => setTargetRole(event.target.value)}
         />
       </div>
+      <section className="rounded-lg border border-line bg-white p-4">
+        <div className="grid gap-1">
+          <h2 className="text-sm font-semibold text-ink">岗位资料导入</h2>
+          <p className="text-sm leading-6 text-muted">
+            支持国内外招聘链接，例如 Boss 直聘、猎聘、拉勾、LinkedIn、Indeed、Greenhouse、Lever、Ashby、Workday。
+            公开页面会自动提取；需要登录或验证码的网站，请登录后复制可见 JD 粘贴到下方。
+          </p>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+          <Field
+            hint="只导入公网 HTTP(S) 页面；不会绕过登录、验证码或招聘网站安全验证。"
+            label="国内外招聘链接"
+            name="jobSourceUrl"
+            placeholder="https://www.linkedin.com/jobs/view/... 或 https://boards.greenhouse.io/..."
+            type="url"
+            value={jobSourceUrl}
+            onChange={(event) => setJobSourceUrl(event.target.value)}
+          />
+          <Button disabled={importState === "loading"} type="button" onClick={importJobPosting}>
+            {importState === "loading" ? "导入中..." : "从链接导入"}
+          </Button>
+        </div>
+        {importMessage ? (
+          <p className={importState === "error" ? "mt-2 text-sm text-red-600" : "mt-2 text-sm text-emerald-700"}>
+            {importMessage}
+          </p>
+        ) : null}
+        <div className="mt-4 grid gap-4">
+          <TextAreaField
+            hint="可以粘贴中文或英文 JD、任职要求、加分项、岗位职责。"
+            label="JD 正文 / 岗位要求"
+            name="jobDescription"
+            value={jobDescription}
+            onChange={(event) => setJobDescription(event.target.value)}
+          />
+          <TextAreaField
+            hint="用于补充招聘页面没有写清楚、但你希望面试官追问的内容。"
+            label="人工补充要求"
+            name="jobManualNotes"
+            value={jobManualNotes}
+            onChange={(event) => setJobManualNotes(event.target.value)}
+          />
+        </div>
+      </section>
       <Field
         label="Expected minutes"
         name="expectedMinutes"
