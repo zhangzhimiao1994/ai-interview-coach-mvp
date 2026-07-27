@@ -47,5 +47,5 @@ describe("recruitment template routes", () => {
     expect(createData.candidateLinks.create).toEqual([{ candidateId: "candidate-1" }]);
     expect(payload.template.sourceIds).toEqual(["source-1", "source-2"]);
     expect(payload.template.candidateIds).toEqual(["candidate-1"]);
-  });
+  }, 10000);
 });

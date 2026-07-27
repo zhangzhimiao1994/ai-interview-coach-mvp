@@ -227,3 +227,15 @@ export function serializeRecruitmentTemplate(template: RecruitmentTemplateRecord
     updatedAt: template.updatedAt.toISOString()
   };
 }
+
+export const recruitmentSyncRunInputSchema = z
+  .object({
+    templateId: z.string().trim().min(1, "Template id is required"),
+    sourceIds: z.array(z.string().trim().min(1)).optional(),
+    mode: z.enum(["MANUAL"]).default("MANUAL")
+  })
+  .strict();
+
+export function parseRecruitmentSyncRunInput(input: unknown) {
+  return recruitmentSyncRunInputSchema.parse(input);
+}
