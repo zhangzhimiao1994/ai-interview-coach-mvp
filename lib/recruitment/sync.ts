@@ -61,6 +61,26 @@ export type RunRecruitmentSyncResult = {
   logs: unknown[];
 };
 
+export type RecruitmentScheduleFrequency = "HOURLY" | "DAILY" | "WEEKLY";
+
+export type RecruitmentSyncScheduleRecord = {
+  id: string;
+  templateId: string;
+  frequency: string;
+  enabled: boolean;
+  nextRunAt: Date;
+  lockExpiresAt: Date | null;
+  template?: { enabled: boolean } | null;
+};
+
+type RecruitmentSchedulePrisma = {
+  recruitmentSyncSchedule: {
+    findMany(args: unknown): Promise<RecruitmentSyncScheduleRecord[]>;
+    updateMany(args: unknown): Promise<{ count: number }>;
+    update?(args: unknown): Promise<unknown>;
+  };
+};
+
 function parseSourceIds(value: string) {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -269,4 +289,100 @@ export async function runRecruitmentSync(options: RunRecruitmentSyncOptions): Pr
     skippedCount: saved.skippedCount,
     logs
   };
+}
+
+export function computeNextRecruitmentRunAt(from: Date, frequency: RecruitmentScheduleFrequency | string) {
+  const next = new Date(from);
+
+  if (frequency === "HOURLY") {
+    next.setUTCHours(next.getUTCHours() + 1);
+    return next;
+  }
+  if (frequency === "WEEKLY") {
+    next.setUTCDate(next.getUTCDate() + 7);
+    return next;
+  }
+
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next;
+}
+
+export async function claimDueRecruitmentSchedules({
+  prisma,
+  now = () => new Date(),
+  lockMinutes = 15
+}: {
+  prisma: RecruitmentSchedulePrisma;
+  now?: () => Date;
+  lockMinutes?: number;
+}) {
+  const current = now();
+  const lockExpiresAt = new Date(current.getTime() + lockMinutes * 60_000);
+  const candidates = await prisma.recruitmentSyncSchedule.findMany({
+    where: {
+      enabled: true,
+      nextRunAt: { lte: current },
+      OR: [{ lockExpiresAt: null }, { lockExpiresAt: { lt: current } }],
+      template: { enabled: true }
+    },
+    include: { template: true },
+    orderBy: { nextRunAt: "asc" },
+    take: 20
+  });
+  const claimed: RecruitmentSyncScheduleRecord[] = [];
+
+  for (const schedule of candidates) {
+    if (!schedule.enabled || schedule.nextRunAt > current || !schedule.template?.enabled) continue;
+    if (schedule.lockExpiresAt && schedule.lockExpiresAt > current) continue;
+
+    const result = await prisma.recruitmentSyncSchedule.updateMany({
+      where: {
+        id: schedule.id,
+        OR: [{ lockExpiresAt: null }, { lockExpiresAt: { lt: current } }]
+      },
+      data: { lockExpiresAt }
+    });
+
+    if (result.count === 1) {
+      claimed.push(schedule);
+    }
+  }
+
+  return claimed;
+}
+
+export async function runDueRecruitmentSchedules({
+  prisma,
+  now = () => new Date(),
+  runRecruitmentSync: runSync = runRecruitmentSync
+}: {
+  prisma: RecruitmentSchedulePrisma & RecruitmentSyncPrisma;
+  now?: () => Date;
+  runRecruitmentSync?: typeof runRecruitmentSync;
+}) {
+  const claimed = await claimDueRecruitmentSchedules({ prisma, now });
+  let startedCount = 0;
+
+  for (const schedule of claimed) {
+    try {
+      await runSync({
+        prisma,
+        templateId: schedule.templateId,
+        mode: "MANUAL",
+        now
+      });
+      startedCount += 1;
+    } finally {
+      await prisma.recruitmentSyncSchedule.update?.({
+        where: { id: schedule.id },
+        data: {
+          lastRunAt: now(),
+          nextRunAt: computeNextRecruitmentRunAt(now(), schedule.frequency),
+          lockExpiresAt: null
+        }
+      });
+    }
+  }
+
+  return { startedCount, claimedCount: claimed.length };
 }
