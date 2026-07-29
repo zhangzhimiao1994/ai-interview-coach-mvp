@@ -160,6 +160,30 @@ export const modelRecommendationGroups: ModelRecommendationGroup[] = [
       },
       {
         capability: "DIGITAL_HUMAN_VIDEO",
+        providerType: "LINGMOU",
+        providerName: "灵眸",
+        modelName: "lingmou-broadcast-video",
+        fit: "基于模板、音频和可选人物图生成播报视频，适合异步面试官视频。",
+        priceNote: "按灵眸播报视频实际开通规格计费，以阿里云控制台为准。",
+        howToUse: "选择灵眸服务商，填写模板 ID、音频变量名和可选人物图变量名。",
+        suggestedTemperature: 0.2,
+        suggestedMaxTokens: 1200,
+        suggestedTimeoutMs: 120000
+      },
+      {
+        capability: "DIGITAL_HUMAN_VIDEO",
+        providerType: "TONGYI",
+        providerName: "阿里百炼",
+        modelName: "emo-v1",
+        fit: "使用人物图片和音频生成 EMO 数字人视频，适合异步面试官视频。",
+        priceNote: "按百炼 EMO 实际调用量计费，以阿里云控制台为准。",
+        howToUse: "选择阿里百炼服务商并配置通用 DashScope API Key；旧 TTS Key 仅作兼容回退。",
+        suggestedTemperature: 0.2,
+        suggestedMaxTokens: 1200,
+        suggestedTimeoutMs: 120000
+      },
+      {
+        capability: "DIGITAL_HUMAN_VIDEO",
         providerType: "CUSTOM",
         providerName: "HeyGen / D-ID",
         modelName: "avatar-video-api",

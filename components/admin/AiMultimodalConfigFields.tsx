@@ -1,8 +1,12 @@
 import React from "react";
-import type { AiCapability } from "@/lib/domain/aiServiceConstants";
+import type {
+  AiCapability,
+  AiProviderType
+} from "@/lib/domain/aiServiceConstants";
 
 type CapabilitySettingsProps = {
   capability: AiCapability;
+  providerType?: AiProviderType;
   settings?: Record<string, unknown>;
 };
 
@@ -13,6 +17,7 @@ export function AlibabaProviderFields(): React.JSX.Element {
       <div className="grid gap-3 sm:grid-cols-2">
         <ConfigField label="地域" name="region" defaultValue="cn-beijing" />
         <ConfigField label="Workspace ID" name="workspaceId" placeholder="语音识别和合成必填" />
+        <ConfigField label="DashScope API Key" name="apiKey" type="password" placeholder="加密保存，EMO 优先使用" />
         <ConfigField label="ASR API Key" name="asrApiKey" type="password" placeholder="加密保存" />
         <ConfigField label="TTS API Key" name="ttsApiKey" type="password" placeholder="加密保存" />
       </div>
@@ -33,20 +38,11 @@ export function LingmouProviderFields(): React.JSX.Element {
   );
 }
 
-export function DuixProviderFields(): React.JSX.Element {
-  return (
-    <div className="grid gap-4 rounded-md border border-line p-4">
-      <h3 className="text-sm font-medium text-ink">硅基 DUIX 凭据</h3>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <ConfigField label="App ID" name="appId" type="password" />
-        <ConfigField label="App Secret" name="appSecret" type="password" />
-        <ConfigField label="平台域名" name="platform" defaultValue="duix.com" />
-      </div>
-    </div>
-  );
-}
-
-export function CapabilitySettings({ capability, settings = {} }: CapabilitySettingsProps) {
+export function CapabilitySettings({
+  capability,
+  providerType,
+  settings = {}
+}: CapabilitySettingsProps) {
   if (capability === "SPEECH_TO_TEXT") {
     return (
       <SettingsGrid>
@@ -82,12 +78,45 @@ export function CapabilitySettings({ capability, settings = {} }: CapabilitySett
       <SettingsGrid>
         <ConfigField label="配置 ID" name="configId" placeholder="灵眸数字人配置 ID" defaultValue={stringSetting(settings, "configId", "")} />
         <ConfigField label="实例 ID" name="instanceId" placeholder="灵眸数字人实例 ID" defaultValue={stringSetting(settings, "instanceId", "")} />
-        <ConfigField label="DUIX Conversation ID" name="conversationId" placeholder="DUIX 会话 ID" defaultValue={stringSetting(settings, "conversationId", "")} />
         <ConfigField label="渲染模式" name="renderMode" defaultValue={stringSetting(settings, "renderMode", "cloud")} readOnly />
         <ConfigField label="集成模式" name="integrationMode" defaultValue={stringSetting(settings, "integrationMode", "audio-driven")} readOnly />
-        <ConfigField label="DUIX 交互模式" name="interactionMode" defaultValue={stringSetting(settings, "interactionMode", "direct-drive")} readOnly />
-        <ConfigField label="DUIX 语音模式" name="speechMode" defaultValue={stringSetting(settings, "speechMode", "duix-managed")} readOnly />
         <ConfigField label="客户端" name="client" defaultValue={stringSetting(settings, "client", "web")} readOnly />
+      </SettingsGrid>
+    );
+  }
+
+  if (capability === "DIGITAL_HUMAN_VIDEO" && providerType === "LINGMOU") {
+    return (
+      <SettingsGrid>
+        <ConfigField label="模板 ID" name="templateId" defaultValue={stringSetting(settings, "templateId", "")} />
+        <ConfigField label="音频变量名" name="audioVariableName" defaultValue={stringSetting(settings, "audioVariableName", "audio_url")} />
+        <ConfigField label="人物图变量名（可选）" name="portraitVariableName" defaultValue={stringSetting(settings, "portraitVariableName", "")} />
+        <ConfigField label="分辨率" name="resolution" defaultValue={stringSetting(settings, "resolution", "1080p")} />
+        <ConfigField label="帧率" name="fps" type="number" defaultValue={numberSetting(settings, "fps", 30)} />
+        <ConfigField label="模式" name="mode" defaultValue={stringSetting(settings, "mode", "broadcast")} />
+        <label className="flex items-center gap-2 text-sm">
+          <input name="watermark" type="checkbox" defaultChecked={settings.watermark === true} />
+          <span className="font-medium text-ink">显示水印</span>
+        </label>
+      </SettingsGrid>
+    );
+  }
+
+  if (capability === "DIGITAL_HUMAN_VIDEO" && providerType === "TONGYI") {
+    return (
+      <SettingsGrid>
+        <ConfigField label="模型" name="model" defaultValue="emo-v1" readOnly />
+        <label className="grid gap-2 text-sm">
+          <span className="font-medium text-ink">画面比例</span>
+          <select
+            className="rounded-md border border-line px-3 py-2"
+            name="ratio"
+            defaultValue={stringSetting(settings, "ratio", "1:1")}
+          >
+            <option value="1:1">1:1</option>
+            <option value="3:4">3:4</option>
+          </select>
+        </label>
       </SettingsGrid>
     );
   }

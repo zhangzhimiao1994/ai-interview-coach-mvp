@@ -26,6 +26,10 @@ export type AlibabaTtsCredentials = {
   region: AlibabaRealtimeRegion;
 };
 
+export type AlibabaEmoCredentials = {
+  apiKey: string;
+};
+
 export function isAlibabaWorkspaceId(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -187,4 +191,38 @@ export function resolveAlibabaTtsCredentials(
     workspaceId,
     region: region as AlibabaRealtimeRegion
   };
+}
+
+export function resolveAlibabaEmoCredentials(
+  model: ResolvedMediaModel,
+  readConfigSecret: () => string = readAiConfigSecret
+): AlibabaEmoCredentials {
+  if (
+    model.capability !== "DIGITAL_HUMAN_VIDEO" ||
+    model.providerType !== "TONGYI"
+  ) {
+    throw new MediaConfigurationError(
+      "The selected video model is not an Alibaba EMO model",
+      {
+        provider: model.providerType,
+        code: "ALIBABA_EMO_PROVIDER_REQUIRED"
+      }
+    );
+  }
+
+  const decrypted = decryptCredentials(model, readConfigSecret);
+  const apiKey =
+    decrypted.apiKey || textSetting(decrypted.credentials.ttsApiKey);
+
+  if (!apiKey) {
+    throw new MediaConfigurationError(
+      "Alibaba DashScope API key is required",
+      {
+        provider: model.providerType,
+        code: "ALIBABA_EMO_API_KEY_REQUIRED"
+      }
+    );
+  }
+
+  return { apiKey };
 }

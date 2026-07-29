@@ -10,17 +10,11 @@ import {
   type LingmouSessionCloser
 } from "@/lib/media/providers/lingmou";
 import type { LingmouCloseCredentialSource } from "@/lib/media/providers/lingmouCredentials";
-import { createDuixProvider } from "@/lib/media/providers/duix";
 import {
   drainProviderSessionCloseRecoveries,
   enqueueProviderSessionCloseRecovery,
   type ProviderSessionCloseRecoveryInput
 } from "@/lib/media/providerSessionCloseRecoveries";
-import type {
-  DigitalHumanConnection,
-  DigitalHumanSessionInput,
-  RealtimeDigitalHumanProvider
-} from "@/lib/media/types";
 
 export const digitalHumanSessionStatuses = [
   "CONNECTING",
@@ -34,7 +28,6 @@ export const digitalHumanSessionStatuses = [
 export type DigitalHumanSessionStatus =
   (typeof digitalHumanSessionStatuses)[number];
 export type DigitalHumanSessionMode =
-  | "DUIX_H5"
   | "LINGMOU_CLOUD"
   | "LOCAL_AVATAR";
 
@@ -43,7 +36,7 @@ export type PublicDigitalHumanSession = {
   mode: DigitalHumanSessionMode;
   status: "READY";
   reasonCode: string | null;
-  connection: LingmouRtcConnection | DigitalHumanConnection | null;
+  connection: LingmouRtcConnection | null;
   expiresAt: string;
 };
 
@@ -126,7 +119,7 @@ export type DigitalHumanSessionRepository = {
 type DigitalHumanSessionServiceDependencies = {
   repository: DigitalHumanSessionRepository;
   resolveRealtimeModel: () => Promise<ResolvedMediaModel>;
-  createProvider: (model: ResolvedMediaModel) => RealtimeDigitalHumanProvider | LingmouProvider;
+  createProvider: (model: ResolvedMediaModel) => LingmouProvider;
   createSessionCloser: (
     source: LingmouCloseCredentialSource,
     persistedInstanceId: string
@@ -150,13 +143,14 @@ const inFlightSessionDowngrades = new Map<
 >();
 
 function runtimeAdapter(model: ResolvedMediaModel) {
-  if (model.providerType === "DUIX") {
-    return {
-      adapter: "DUIX_H5_SDK",
-      mode: "DUIX_H5" as const,
-      notConfiguredCode: "DUIX_NOT_CONFIGURED",
-      upstreamFailedCode: "DUIX_UPSTREAM_FAILED"
-    };
+  if (model.providerType !== "LINGMOU") {
+    throw new MediaConfigurationError(
+      "Selected digital-human provider is not adapted",
+      {
+        provider: model.providerType,
+        code: "DIGITAL_HUMAN_PROVIDER_NOT_ADAPTED"
+      }
+    );
   }
 
   return {
@@ -168,9 +162,6 @@ function runtimeAdapter(model: ResolvedMediaModel) {
 }
 
 function createRealtimeProvider(model: ResolvedMediaModel) {
-  if (model.providerType === "DUIX") {
-    return createDuixProvider(model);
-  }
   if (model.providerType === "LINGMOU") {
     return createLingmouProvider(model);
   }
@@ -653,7 +644,7 @@ export function createDigitalHumanSessionService(
       };
     }
     if (
-      !["LINGMOU_CLOUD", "DUIX_H5"].includes(record.mode) ||
+      record.mode !== "LINGMOU_CLOUD" ||
       !["READY", "SPEAKING", "FAILED"].includes(record.status)
     ) {
       throw new DigitalHumanSessionError(
@@ -844,14 +835,11 @@ export function createDigitalHumanSessionService(
       expiresAt: new Date(createdAt.getTime() + expiresAfterMs)
     });
 
-    let provider: RealtimeDigitalHumanProvider | LingmouProvider;
-    let cloud: {
-      providerSessionId?: string;
-      connection: LingmouRtcConnection | DigitalHumanConnection;
-    };
+    let provider: LingmouProvider;
+    let cloud: Awaited<ReturnType<LingmouProvider["createSession"]>>;
     try {
       provider = deps.createProvider(model);
-      cloud = await provider.createSession({ trainingSessionId } as DigitalHumanSessionInput);
+      cloud = await provider.createSession();
     } catch (error) {
       if (model.providerType === "LINGMOU" && error instanceof LingmouSessionRecoveryError) {
         const identity = error.recoveryIdentity();
@@ -939,11 +927,7 @@ export function createDigitalHumanSessionService(
     } catch {
       let compensationClosed = false;
       try {
-        if ("closeSession" in provider && cloud.providerSessionId) {
-          await provider.closeSession(cloud.providerSessionId);
-        } else if ("stopSession" in provider) {
-          await provider.stopSession(cloud.providerSessionId ?? connecting.id);
-        }
+        await provider.closeSession(cloud.providerSessionId);
         compensationClosed = true;
       } catch {
         compensationClosed = false;

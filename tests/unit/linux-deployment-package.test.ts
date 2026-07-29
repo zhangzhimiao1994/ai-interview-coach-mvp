@@ -105,15 +105,12 @@ describe("linux deployment package", () => {
     expect(dockerIgnore).not.toMatch(/^lib(?:\/|$)/m);
   });
 
-  it("keeps the DUIX H5 SDK dependency and browser adapter in the Docker source package", () => {
-    expect(readWorkspaceFile("package.json")).toContain('"duix-guiji"');
-    expect(readWorkspaceFile("package-lock.json")).toContain('"node_modules/duix-guiji"');
-    expect(existsSync(join(root, "lib/client/duixAvatarClient.ts"))).toBe(true);
-    expect(existsSync(join(root, "duix-guiji.d.ts"))).toBe(true);
-
-    const dockerIgnore = readWorkspaceFile(".dockerignore");
-    expect(dockerIgnore).not.toMatch(/^duix-guiji\.d\.ts$/m);
-    expect(dockerIgnore).not.toMatch(/^lib\/client(?:\/|$)/m);
+  it("packages the Alibaba OSS client without the retired DUIX browser runtime", () => {
+    expect(readWorkspaceFile("package.json")).toContain('"ali-oss"');
+    expect(readWorkspaceFile("package-lock.json")).toContain('"node_modules/ali-oss"');
+    expect(readWorkspaceFile("package.json")).not.toContain('"duix-guiji"');
+    expect(existsSync(join(root, "lib/client/duixAvatarClient.ts"))).toBe(false);
+    expect(existsSync(join(root, "duix-guiji.d.ts"))).toBe(false);
   });
 
   it("uses cached and retryable npm installs during Docker builds", () => {

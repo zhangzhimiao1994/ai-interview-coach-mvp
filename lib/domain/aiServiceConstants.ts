@@ -6,7 +6,6 @@ export const aiProviderTypes = [
   "DEEPSEEK",
   "TONGYI",
   "LINGMOU",
-  "DUIX",
   "VOLCANO_ARK",
   "ZHIPU",
   "MINIMAX",

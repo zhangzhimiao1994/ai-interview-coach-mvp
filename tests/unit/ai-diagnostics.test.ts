@@ -8,9 +8,7 @@ const {
   findFirst,
   findUnique,
   runtimeFindUnique,
-  createDuixProvider,
   createLingmouProvider,
-  createDuixSession,
   createSession,
   closeSession,
   enqueueProviderSessionCloseRecovery,
@@ -24,9 +22,7 @@ const {
     findFirst: vi.fn(),
     findUnique: vi.fn(),
     runtimeFindUnique: vi.fn(),
-    createDuixProvider: vi.fn(),
     createLingmouProvider: vi.fn(),
-    createDuixSession: vi.fn(),
     createSession: vi.fn(),
     closeSession: vi.fn(),
     enqueueProviderSessionCloseRecovery: vi.fn(),
@@ -48,12 +44,6 @@ vi.mock("@/lib/media/providers/lingmou", async (importOriginal) => {
     typeof import("@/lib/media/providers/lingmou")
   >();
   return { ...actual, createLingmouProvider };
-});
-vi.mock("@/lib/media/providers/duix", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("@/lib/media/providers/duix")
-  >();
-  return { ...actual, createDuixProvider };
 });
 vi.mock("@/lib/media/providerSessionCloseRecoveries", async (importOriginal) => {
   const actual = await importOriginal<
@@ -87,10 +77,8 @@ describe("AI configuration diagnostics", () => {
     findFirst.mockReset();
     findUnique.mockReset();
     runtimeFindUnique.mockReset().mockResolvedValue(null);
-    createDuixSession.mockReset();
     createSession.mockReset();
     closeSession.mockReset();
-    createDuixProvider.mockReset();
     createLingmouProvider.mockReset();
     enqueueProviderSessionCloseRecovery.mockReset();
     createProviderSessionCloseRecoveryClaim.mockReset();
@@ -98,24 +86,7 @@ describe("AI configuration diagnostics", () => {
     persistProviderSessionCloseRecoveryIdentity.mockReset();
     attachProviderSessionCloseRecovery.mockReset();
     releaseProviderSessionCloseRecovery.mockReset();
-    createDuixProvider.mockReturnValue({
-      createSession: createDuixSession,
-      speak: vi.fn(),
-      stopSession: vi.fn(),
-      checkConnection: vi.fn()
-    });
     createLingmouProvider.mockReturnValue({ createSession, closeSession });
-    createDuixSession.mockResolvedValue({
-      providerSessionId: "duix-sign-check-session",
-      connection: {
-        protocol: "webrtc",
-        metadata: {
-          sign: "safe-sign",
-          conversationId: "conv-1",
-          platform: "duix.com"
-        }
-      }
-    });
     closeSession.mockResolvedValue(undefined);
     enqueueProviderSessionCloseRecovery.mockResolvedValue({
       id: "fallback-recovery-1"
@@ -640,84 +611,6 @@ describe("AI configuration diagnostics", () => {
     expect(serialized).not.toContain("lingmou-ak-secret");
   });
 
-  it("validates complete DUIX configuration without creating a paid session", async () => {
-    const deps = dependencies(selectedDuixModel());
-
-    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
-      liveCheck: false,
-      dependencies: deps
-    });
-
-    expect(result).toMatchObject({
-      status: "CONFIG_VALID",
-      checkMode: "CONFIG",
-      code: "ADAPTER_AVAILABLE",
-      providerName: "硅基 DUIX",
-      modelDisplayName: "DUIX 2D 端渲染实时数字人",
-      modelName: "duix-h5-realtime"
-    });
-    expect(deps.probeDuixModel).not.toHaveBeenCalled();
-    expect(deps.probeLingmouModel).not.toHaveBeenCalled();
-    expect(JSON.stringify(result)).not.toContain("secret-1");
-  });
-
-  it.each([
-    ["appId", { appId: "", appSecret: "secret-1" }, {}, {}],
-    ["appSecret", { appId: "app-id-1", appSecret: "" }, {}, {}],
-    ["conversationId", completeDuixCredentials(), {}, { conversationId: "" }],
-    ["web client", completeDuixCredentials(), {}, { client: "native" }],
-    ["direct-drive mode", completeDuixCredentials(), {}, { interactionMode: "full-chain" }],
-    ["DUIX-managed speech", completeDuixCredentials(), {}, { speechMode: "external-audio" }]
-  ])("reports a DUIX model with invalid %s as not configured", async (
-    _field,
-    credentials,
-    providerSettings,
-    modelSettings
-  ) => {
-    const deps = dependencies(selectedDuixModel({
-      credentials,
-      providerSettings,
-      modelSettings
-    }));
-
-    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
-      liveCheck: false,
-      dependencies: deps
-    });
-
-    expect(result).toMatchObject({
-      status: "NOT_CONFIGURED",
-      code: "DUIX_NOT_CONFIGURED",
-      message: "DUIX 未配置，当前使用本地数字人"
-    });
-    expect(deps.probeDuixModel).not.toHaveBeenCalled();
-    expect(JSON.stringify(result)).not.toContain("secret-1");
-  });
-
-  it("runs the DUIX live sign check only for an explicit live check", async () => {
-    const deps = dependencies(selectedDuixModel(), {
-      duixProbeResult: {
-        ok: true,
-        code: "LIVE_AVAILABLE",
-        message: "DUIX 签名鉴权检查通过。"
-      }
-    });
-
-    const result = await diagnoseAiCapability("DIGITAL_HUMAN_REALTIME", {
-      liveCheck: true,
-      dependencies: deps
-    });
-
-    expect(deps.probeDuixModel).toHaveBeenCalledOnce();
-    expect(deps.probeLingmouModel).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      status: "LIVE_AVAILABLE",
-      checkMode: "LIVE",
-      code: "LIVE_AVAILABLE"
-    });
-    expect(JSON.stringify(result)).not.toContain("secret-1");
-  });
-
   it("runs the Lingmou paid probe only for an explicit live check", async () => {
     const deps = dependencies(selectedLingmouModel(), {
       lingmouProbeResult: {
@@ -1178,13 +1071,6 @@ function completeLingmouCredentials() {
   };
 }
 
-function completeDuixCredentials() {
-  return {
-    appId: "app-id-1",
-    appSecret: "secret-1"
-  };
-}
-
 function selectedLingmouModel({
   credentials = completeLingmouCredentials(),
   providerSettings = {},
@@ -1221,41 +1107,6 @@ function selectedLingmouModel({
   });
 }
 
-function selectedDuixModel({
-  credentials = completeDuixCredentials(),
-  providerSettings = {},
-  modelSettings = {},
-  modelName = "duix-h5-realtime"
-}: {
-  credentials?: Record<string, string>;
-  providerSettings?: Record<string, unknown>;
-  modelSettings?: Record<string, unknown>;
-  modelName?: string;
-} = {}) {
-  return selectedModel({
-    capability: "DIGITAL_HUMAN_REALTIME",
-    apiKey: null,
-    credentials,
-    providerSettings: { platform: "duix.com", ...providerSettings },
-    modelSettings: {
-      conversationId: "conv-1",
-      client: "web",
-      interactionMode: "direct-drive",
-      speechMode: "duix-managed",
-      ...modelSettings
-    },
-    modelOverrides: {
-      displayName: "DUIX 2D 端渲染实时数字人",
-      modelName
-    },
-    providerOverrides: {
-      displayName: "硅基 DUIX",
-      providerType: "DUIX",
-      baseUrl: null
-    }
-  });
-}
-
 function dependencies(
   model: ReturnType<typeof selectedModel> | null,
   options: {
@@ -1270,11 +1121,6 @@ function dependencies(
       ok: true,
       code: "LIVE_CHECK_SUCCEEDED",
       message: "真实连通测试通过。"
-    }),
-    probeDuixModel: vi.fn().mockResolvedValue(options.duixProbeResult ?? {
-      ok: true,
-      code: "LIVE_AVAILABLE",
-      message: "DUIX 签名鉴权检查通过。"
     }),
     probeLingmouModel: vi.fn().mockResolvedValue(options.lingmouProbeResult ?? {
       ok: true,

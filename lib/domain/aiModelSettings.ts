@@ -1,6 +1,28 @@
-import type { AiCapability } from "./aiServiceConstants";
+import type {
+  AiCapability,
+  AiProviderType
+} from "./aiServiceConstants";
 
-export function modelSettingsFromForm(capability: AiCapability, form: FormData) {
+export interface LingmouBroadcastVideoSettings {
+  templateId: string;
+  audioVariableName: string;
+  portraitVariableName: string | null;
+  resolution: string;
+  fps: number;
+  watermark: boolean;
+  mode: string;
+}
+
+export interface AlibabaEmoVideoSettings {
+  model: "emo-v1";
+  ratio: "1:1" | "3:4";
+}
+
+export function modelSettingsFromForm(
+  capability: AiCapability,
+  providerType: AiProviderType,
+  form: FormData
+) {
   switch (capability) {
     case "SPEECH_TO_TEXT":
       return {
@@ -20,13 +42,34 @@ export function modelSettingsFromForm(capability: AiCapability, form: FormData) 
       return {
         configId: String(form.get("configId") || ""),
         instanceId: String(form.get("instanceId") || ""),
-        conversationId: String(form.get("conversationId") || ""),
         renderMode: String(form.get("renderMode") || "cloud"),
         integrationMode: String(form.get("integrationMode") || "audio-driven"),
-        interactionMode: String(form.get("interactionMode") || "direct-drive"),
-        speechMode: String(form.get("speechMode") || "duix-managed"),
         client: "web"
       };
+    case "DIGITAL_HUMAN_VIDEO":
+      if (providerType === "LINGMOU") {
+        return {
+          templateId: String(form.get("templateId") || ""),
+          audioVariableName: String(form.get("audioVariableName") || "audio_url"),
+          portraitVariableName:
+            String(form.get("portraitVariableName") || "").trim() || null,
+          resolution: String(form.get("resolution") || "1080p"),
+          fps: Number(form.get("fps") || 30),
+          watermark: ["true", "on", "1"].includes(
+            String(form.get("watermark") || "")
+          ),
+          mode: String(form.get("mode") || "broadcast")
+        } satisfies LingmouBroadcastVideoSettings;
+      }
+
+      if (providerType === "TONGYI") {
+        return {
+          model: "emo-v1",
+          ratio: form.get("ratio") === "3:4" ? "3:4" : "1:1"
+        } satisfies AlibabaEmoVideoSettings;
+      }
+
+      return {};
     case "VISION_BEHAVIOR_ANALYSIS":
       return {
         minimumConfidence: Number(form.get("minimumConfidence") || 0.6),

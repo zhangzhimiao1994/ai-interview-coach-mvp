@@ -76,12 +76,13 @@ describe("Alibaba media model seed references", () => {
 
     await seedAlibabaMediaModels(prisma);
 
-    expect(prisma.aiModelConfig.create).toHaveBeenCalledTimes(6);
+    expect(prisma.aiModelConfig.create).toHaveBeenCalledTimes(7);
     const created = prisma.aiModelConfig.create.mock.calls.map(([args]) => args.data);
     expect(created.map((model) => model.modelName)).toEqual([
       "qwen3-asr-flash-realtime",
       "qwen-audio-3.0-tts-flash",
       "cosyvoice-v3-flash",
+      "emo-v1",
       "qwen3.6-flash",
       "qwen3.5-omni-plus",
       "qwen3.5-omni-plus"
@@ -139,7 +140,7 @@ describe("Lingmou digital-human seed reference", () => {
     expect(prisma.aiModelConfig.create).not.toHaveBeenCalled();
   });
 
-  it("creates the audio-driven cloud reference for an enabled LINGMOU provider", async () => {
+  it("creates realtime and broadcast-video references for an enabled LINGMOU provider", async () => {
     const prisma = {
       aiServiceProvider: { findFirst: vi.fn().mockResolvedValue({ id: "lingmou-provider" }) },
       aiModelConfig: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({}) }
@@ -159,6 +160,13 @@ describe("Lingmou digital-human seed reference", () => {
           integrationMode: "audio-driven",
           client: "web"
         })
+      })
+    }));
+    expect(prisma.aiModelConfig.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        id: "lingmou-media-lingmou-provider-digital-human-video",
+        modelName: "lingmou-broadcast-video",
+        capability: "DIGITAL_HUMAN_VIDEO"
       })
     }));
   });

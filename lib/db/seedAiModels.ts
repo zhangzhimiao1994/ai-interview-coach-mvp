@@ -58,6 +58,16 @@ const alibabaMediaReferences = [
     }
   },
   {
+    seedKey: "digital-human-video-emo",
+    displayName: "阿里百炼 EMO 数字人视频",
+    modelName: "emo-v1",
+    capability: "DIGITAL_HUMAN_VIDEO",
+    settings: {
+      model: "emo-v1",
+      ratio: "1:1"
+    }
+  },
+  {
     seedKey: "behavior-analysis",
     displayName: "阿里百炼 行为分析",
     modelName: "qwen3.6-flash",
@@ -101,6 +111,22 @@ const lingmouReference = {
     renderMode: "cloud",
     integrationMode: "audio-driven",
     client: "web"
+  }
+} as const;
+
+const lingmouVideoReference = {
+  seedKey: "digital-human-video",
+  displayName: "灵眸播报数字人视频",
+  modelName: "lingmou-broadcast-video",
+  capability: "DIGITAL_HUMAN_VIDEO",
+  settings: {
+    templateId: "",
+    audioVariableName: "audio_url",
+    portraitVariableName: null,
+    resolution: "1080p",
+    fps: 30,
+    watermark: false,
+    mode: "broadcast"
   }
 } as const;
 
@@ -199,34 +225,37 @@ export async function seedLingmouDigitalHumanModels(prisma: SeedLingmouMediaClie
     return;
   }
 
-  const existing = await prisma.aiModelConfig.findFirst({
-    where: { id: `lingmou-media-${provider.id}-${lingmouReference.seedKey}` },
-    select: { id: true }
-  });
+  for (const reference of [lingmouReference, lingmouVideoReference]) {
+    const existing = await prisma.aiModelConfig.findFirst({
+      where: { id: `lingmou-media-${provider.id}-${reference.seedKey}` },
+      select: { id: true }
+    });
 
-  if (existing) {
-    return;
-  }
-
-  const recommended = await prisma.aiModelConfig.findFirst({
-    where: { capability: lingmouReference.capability, isDefault: true },
-    select: { id: true }
-  });
-
-  await prisma.aiModelConfig.create({
-    data: {
-      id: `lingmou-media-${provider.id}-${lingmouReference.seedKey}`,
-      providerId: provider.id,
-      displayName: lingmouReference.displayName,
-      modelName: lingmouReference.modelName,
-      capability: lingmouReference.capability,
-      temperature: 0.2,
-      maxTokens: 1200,
-      timeoutMs: 60000,
-      settingsJson: JSON.stringify(lingmouReference.settings),
-      enabled: true,
-      isDefault: recommended === null,
-      isSelected: false
+    if (existing) {
+      continue;
     }
-  });
+
+    const recommended = await prisma.aiModelConfig.findFirst({
+      where: { capability: reference.capability, isDefault: true },
+      select: { id: true }
+    });
+
+    await prisma.aiModelConfig.create({
+      data: {
+        id: `lingmou-media-${provider.id}-${reference.seedKey}`,
+        providerId: provider.id,
+        displayName: reference.displayName,
+        modelName: reference.modelName,
+        capability: reference.capability,
+        temperature: 0.2,
+        maxTokens: 1200,
+        timeoutMs:
+          reference.capability === "DIGITAL_HUMAN_VIDEO" ? 120000 : 60000,
+        settingsJson: JSON.stringify(reference.settings),
+        enabled: true,
+        isDefault: recommended === null,
+        isSelected: false
+      }
+    });
+  }
 }

@@ -102,7 +102,7 @@ describe("AI service configuration form submissions", () => {
     expect(JSON.stringify(renderer.toJSON())).not.toContain("服务不可达，请稍后重试。");
   });
 
-  it("submits only Bailian ASR/TTS credentials and workspace settings for TONGYI", async () => {
+  it("submits generic DashScope and legacy ASR/TTS credentials for TONGYI", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ provider: { ...provider, id: "tongyi" } }));
     vi.stubGlobal("fetch", fetchMock);
     await selectProviderType("TONGYI");
@@ -110,7 +110,7 @@ describe("AI service configuration form submissions", () => {
     await act(async () => {
       await renderer.root.findAllByType("form")[1].props.onSubmit(releasedSubmitEvent({
         displayName: "Bailian",
-        apiKey: "must-not-submit",
+        apiKey: "dashscope-key",
         asrApiKey: "asr-key",
         ttsApiKey: "tts-key",
         workspaceId: "workspace-1",
@@ -123,10 +123,10 @@ describe("AI service configuration form submissions", () => {
 
     expect(requestPayload(fetchMock)).toMatchObject({
       providerType: "TONGYI",
+      apiKey: "dashscope-key",
       credentials: { asrApiKey: "asr-key", ttsApiKey: "tts-key" },
       settings: { workspaceId: "workspace-1", region: "cn-beijing" }
     });
-    expect(requestPayload(fetchMock)).not.toHaveProperty("apiKey");
     expect(requestPayload(fetchMock).credentials).not.toHaveProperty("rtcAppKey");
     expect(requestPayload(fetchMock).settings).not.toHaveProperty("rtcAppId");
   });

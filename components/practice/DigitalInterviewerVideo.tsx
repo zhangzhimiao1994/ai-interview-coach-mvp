@@ -7,12 +7,7 @@ import {
   type LingmouAvatarClient,
   type LingmouRtcConnection
 } from "@/lib/client/lingmouAvatarClient";
-import {
-  createDuixAvatarClient,
-  type DuixAvatarClient
-} from "@/lib/client/duixAvatarClient";
 import { Pcm16LeDecoder, pcm16LeToWavBlob } from "@/lib/client/pcm16";
-import type { DigitalHumanConnection } from "@/lib/media/types";
 
 type InterviewerExpression =
   | "neutral"
@@ -35,23 +30,23 @@ type DigitalInterviewerVideoProps = {
 };
 
 type SpeechState = "idle" | "loading" | "speaking" | "paused" | "unsupported";
-type SpeechMode = "DUIX" | "COSYVOICE" | "BROWSER_TTS_FALLBACK" | null;
-type AvatarMode = "CONNECTING" | "DUIX_H5" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
-type AvatarClient = DuixAvatarClient | LingmouAvatarClient;
+type SpeechMode = "COSYVOICE" | "BROWSER_TTS_FALLBACK" | null;
+type AvatarMode = "CONNECTING" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+type AvatarClient = LingmouAvatarClient;
 
 type PublicDigitalHumanSession = {
   id: string;
-  mode: "DUIX_H5" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+  mode: "LINGMOU_CLOUD" | "LOCAL_AVATAR";
   status: "READY";
   reasonCode: string | null;
-  connection: DigitalHumanConnection | LingmouRtcConnection | null;
+  connection: LingmouRtcConnection | null;
   expiresAt: string;
 };
 
 type DigitalHumanSessionActivation = {
   session: PublicDigitalHumanSession;
   avatarClient: AvatarClient | null;
-  avatarMode: "DUIX_H5" | "LINGMOU_CLOUD" | "LOCAL_AVATAR";
+  avatarMode: "LINGMOU_CLOUD" | "LOCAL_AVATAR";
   avatarMessage: string;
 };
 
@@ -142,11 +137,7 @@ function isDigitalHumanSession(value: unknown): value is PublicDigitalHumanSessi
   const session = value as Partial<PublicDigitalHumanSession>;
   return (
     typeof session.id === "string" &&
-    (
-      session.mode === "DUIX_H5" ||
-      session.mode === "LINGMOU_CLOUD" ||
-      session.mode === "LOCAL_AVATAR"
-    ) &&
+    (session.mode === "LINGMOU_CLOUD" || session.mode === "LOCAL_AVATAR") &&
     session.status === "READY" &&
     typeof session.expiresAt === "string" &&
     (session.connection === null || typeof session.connection === "object")
@@ -227,7 +218,7 @@ export function DigitalInterviewerVideo({
   const setActiveAvatarMode = useCallback((mode: AvatarMode) => {
     avatarModeRef.current = mode;
     setAvatarMode(mode);
-    setCloudReady(mode === "LINGMOU_CLOUD" || mode === "DUIX_H5");
+    setCloudReady(mode === "LINGMOU_CLOUD");
   }, []);
 
   const stopSpeech = useCallback(
@@ -483,59 +474,6 @@ export function DigitalInterviewerVideo({
           }
         }
 
-        if (createdSession.mode === "DUIX_H5" && createdSession.connection) {
-          try {
-            if (!root) throw new Error("DUIX_ROOT_UNAVAILABLE");
-            const client = await createDuixAvatarClient();
-            createdOwner.avatarClient = client;
-            if (createdOwner.finalized) {
-              void client.exit();
-              throw new DOMException("Session finalized", "AbortError");
-            }
-            await client.start(
-              createdSession.connection as DigitalHumanConnection,
-              root
-            );
-            if (createdOwner.finalized) {
-              void client.exit();
-              throw new DOMException("Session finalized", "AbortError");
-            }
-            return {
-              session: createdSession,
-              avatarClient: client,
-              avatarMode: "DUIX_H5",
-              avatarMessage: ""
-            };
-          } catch (error) {
-            if (
-              createdOwner.finalized ||
-              caughtErrorName(error) === "AbortError"
-            ) {
-              throw error;
-            }
-            const localSession = await requestOwnedDowngrade(
-              createdOwner,
-              "CLIENT_SDK_INIT_FAILED"
-            );
-            const ownershipChanged =
-              createdOwner.finalized ||
-              createdOwner.trainingSessionId !== sessionId ||
-              sessionOwnershipRef.current !== createdOwner;
-            if (ownershipChanged) {
-              deleteOwnedDigitalHumanSession(createdOwner);
-            }
-            if (ownershipChanged || createdOwner.session !== localSession) {
-              throw new DOMException("Session owner changed", "AbortError");
-            }
-            return {
-              session: localSession,
-              avatarClient: null,
-              avatarMode: "LOCAL_AVATAR",
-              avatarMessage: "数字人画面已降级"
-            };
-          }
-        }
-
         return {
           session: createdSession,
           avatarClient: null,
@@ -715,15 +653,6 @@ export function DigitalInterviewerVideo({
     abortRef.current = controller;
     setSpeechState("loading");
     try {
-      if (avatarModeRef.current === "DUIX_H5" && avatarClientRef.current) {
-        await (avatarClientRef.current as DuixAvatarClient).speak(prompt, true);
-        if (!playbackGuard.isCurrent(generation)) return;
-        setSpeechMode("DUIX");
-        setSpeechState("speaking");
-        setSpeechMessage("DUIX 数字人正在播报。");
-        return;
-      }
-
       const response = await fetch(
         `/api/digital-human/sessions/${encodeURIComponent(digitalSession.id)}/speech`,
         {
@@ -931,7 +860,7 @@ export function DigitalInterviewerVideo({
       setSpeechState("paused");
       return;
     }
-    if (avatarModeRef.current === "LINGMOU_CLOUD" || avatarModeRef.current === "DUIX_H5") {
+    if (avatarModeRef.current === "LINGMOU_CLOUD") {
       avatarClientRef.current?.interrupt();
       setSpeechState("paused");
       return;
@@ -944,12 +873,8 @@ export function DigitalInterviewerVideo({
 
   const modeText =
     speechState === "loading"
-      ? avatarMode === "DUIX_H5"
-        ? "DUIX 准备播报"
-        : "正在生成 CosyVoice"
-      : speechMode === "DUIX"
-        ? "DUIX"
-        : speechMode === "COSYVOICE"
+      ? "正在生成 CosyVoice"
+      : speechMode === "COSYVOICE"
         ? "CosyVoice"
         : speechMode === "BROWSER_TTS_FALLBACK"
           ? "浏览器语音降级"
@@ -1046,7 +971,7 @@ export function DigitalInterviewerVideo({
             />
             <div className="flex flex-wrap items-center gap-2 text-xs text-blue-100">
               <span className="rounded-full border border-emerald-200/30 bg-emerald-300/10 px-2 py-1">{modeText}</span>
-              <span>DUIX / 灵眸实时数字人</span>
+              <span>灵眸实时数字人</span>
               <span aria-hidden="true">·</span>
               <span>CosyVoice / 浏览器语音降级</span>
             </div>

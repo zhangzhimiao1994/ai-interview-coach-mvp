@@ -4,7 +4,7 @@ import { Cpu, KeyRound, Plus, Route, Server, Sparkles, Star, Trash2 } from "luci
 import React from "react";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { AlibabaProviderFields, CapabilitySettings, DuixProviderFields, LingmouProviderFields } from "./AiMultimodalConfigFields";
+import { AlibabaProviderFields, CapabilitySettings, LingmouProviderFields } from "./AiMultimodalConfigFields";
 import { modelSettingsFromForm } from "@/lib/domain/aiModelSettings";
 import {
   aiCapabilities,
@@ -74,7 +74,6 @@ const providerTypeLabels: Record<AiProviderType, string> = {
   DEEPSEEK: "DeepSeek",
   TONGYI: "通义千问 / 百炼",
   LINGMOU: "灵眸数字人",
-  DUIX: "硅基 DUIX 数字人",
   VOLCANO_ARK: "火山方舟",
   ZHIPU: "智谱",
   MINIMAX: "MiniMax",
@@ -160,6 +159,26 @@ function ttsSettingsForPreset(modelName: string) {
   return {};
 }
 
+function videoSettingsForPreset(providerType: AiProviderType) {
+  if (providerType === "LINGMOU") {
+    return {
+      templateId: "",
+      audioVariableName: "audio_url",
+      portraitVariableName: null,
+      resolution: "1080p",
+      fps: 30,
+      watermark: false,
+      mode: "broadcast"
+    };
+  }
+
+  if (providerType === "TONGYI") {
+    return { model: "emo-v1", ratio: "1:1" };
+  }
+
+  return {};
+}
+
 const modelPresetOptions = modelRecommendationGroups.flatMap((group) =>
   group.recommendations.map((recommendation) => ({
     value: modelPresetValue(recommendation),
@@ -207,9 +226,13 @@ export function AiServiceConfigPanel({
   const [baseUrl, setBaseUrl] = useState(providerBaseUrlPresets.OPENAI_COMPATIBLE ?? "");
   const [modelDraft, setModelDraft] = useState(initialModelDraft);
   const [modelPreset, setModelPreset] = useState(customModelPreset);
+  const [modelProviderId, setModelProviderId] = useState("");
   const [multimodalTakeover, setMultimodalTakeover] = useState(initialMultimodalTakeover);
 
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
+  const modelProviderType = enabledProviders.find(
+    (provider) => provider.id === modelProviderId
+  )?.providerType as AiProviderType | undefined;
   const omniModels = useMemo(
     () => models.filter((model) =>
       model.enabled &&
@@ -227,6 +250,11 @@ export function AiServiceConfigPanel({
     setModelPreset(modelPresetValue(recommendation));
     setProviderType(recommendation.providerType);
     setBaseUrl(providerBaseUrlPresets[recommendation.providerType] ?? "");
+    setModelProviderId(
+      enabledProviders.find(
+        (provider) => provider.providerType === recommendation.providerType
+      )?.id ?? ""
+    );
     setModelDraft({
       displayName: `${recommendation.providerName} ${capabilityLabels[recommendation.capability]}`,
       modelName: recommendation.modelName,
@@ -235,9 +263,12 @@ export function AiServiceConfigPanel({
       maxTokens: recommendation.suggestedMaxTokens,
       timeoutMs: recommendation.suggestedTimeoutMs,
       costNote: recommendation.priceNote,
-      settings: recommendation.capability === "TEXT_TO_SPEECH"
-        ? ttsSettingsForPreset(recommendation.modelName)
-        : {}
+      settings:
+        recommendation.capability === "TEXT_TO_SPEECH"
+          ? ttsSettingsForPreset(recommendation.modelName)
+          : recommendation.capability === "DIGITAL_HUMAN_VIDEO"
+            ? videoSettingsForPreset(recommendation.providerType)
+            : {}
     });
     setModelMessage("已填入推荐模型参数，请选择对应服务商后保存。");
   }
@@ -305,10 +336,13 @@ export function AiServiceConfigPanel({
     const payload = {
       displayName: String(form.get("displayName") || ""),
       providerType,
-      ...(providerType !== "TONGYI" && providerType !== "LINGMOU" && providerType !== "DUIX" ? {
+      ...(providerType !== "TONGYI" && providerType !== "LINGMOU" ? {
         baseUrl,
         apiKey: String(form.get("apiKey") || "")
       } : {}),
+      ...(providerType === "TONGYI"
+        ? { apiKey: String(form.get("apiKey") || "") }
+        : {}),
       credentials: providerType === "TONGYI"
         ? nonEmptyEntries({
             asrApiKey: String(form.get("asrApiKey") || ""),
@@ -319,11 +353,6 @@ export function AiServiceConfigPanel({
               accessKeyId: String(form.get("accessKeyId") || ""),
               accessKeySecret: String(form.get("accessKeySecret") || "")
             })
-        : providerType === "DUIX"
-          ? nonEmptyEntries({
-              appId: String(form.get("appId") || ""),
-              appSecret: String(form.get("appSecret") || "")
-            })
         : {},
       settings: providerType === "TONGYI"
         ? nonEmptyEntries({
@@ -332,8 +361,6 @@ export function AiServiceConfigPanel({
           })
         : providerType === "LINGMOU"
           ? nonEmptyEntries({ region: String(form.get("region") || "cn-beijing") })
-        : providerType === "DUIX"
-          ? nonEmptyEntries({ platform: String(form.get("platform") || "duix.com") })
         : {},
       enabled: form.get("enabled") === "on",
       notes: String(form.get("notes") || "")
@@ -372,6 +399,9 @@ export function AiServiceConfigPanel({
 
     const formElement = event.currentTarget;
     const form = new FormData(formElement);
+    const selectedProvider = providers.find(
+      (provider) => provider.id === String(form.get("providerId") || "")
+    );
     const payload = {
       providerId: String(form.get("providerId") || ""),
       displayName: String(form.get("displayName") || ""),
@@ -380,7 +410,11 @@ export function AiServiceConfigPanel({
       temperature: Number(form.get("temperature") || 0.4),
       maxTokens: Number(form.get("maxTokens") || 1200),
       timeoutMs: Number(form.get("timeoutMs") || 30000),
-      settings: modelSettingsFromForm(modelDraft.capability, form),
+      settings: modelSettingsFromForm(
+        modelDraft.capability,
+        (selectedProvider?.providerType as AiProviderType | undefined) ?? "CUSTOM",
+        form
+      ),
       costNote: String(form.get("costNote") || ""),
       enabled: form.get("enabled") === "on",
       isDefault: form.get("isDefault") === "on",
@@ -667,7 +701,7 @@ export function AiServiceConfigPanel({
                 ))}
               </select>
             </label>
-            {providerType !== "TONGYI" && providerType !== "LINGMOU" && providerType !== "DUIX" ? (
+            {providerType !== "TONGYI" && providerType !== "LINGMOU" ? (
               <>
                 <Field
                   label="Base URL"
@@ -681,7 +715,6 @@ export function AiServiceConfigPanel({
             ) : null}
             {providerType === "TONGYI" ? <AlibabaProviderFields /> : null}
             {providerType === "LINGMOU" ? <LingmouProviderFields /> : null}
-            {providerType === "DUIX" ? <DuixProviderFields /> : null}
             <Field label="备注" name="notes" placeholder="适合报告分析、备用模型等" />
             <label className="flex items-center gap-2 text-sm text-ink">
               <input name="enabled" type="checkbox" defaultChecked />
@@ -722,7 +755,13 @@ export function AiServiceConfigPanel({
             </label>
             <label className="grid gap-2 text-sm">
               <span className="font-medium text-ink">所属服务商</span>
-              <select name="providerId" className="rounded-md border border-line px-3 py-2" required>
+              <select
+                name="providerId"
+                className="rounded-md border border-line px-3 py-2"
+                value={modelProviderId}
+                onChange={(event) => setModelProviderId(event.target.value)}
+                required
+              >
                 <option value="">请选择服务商</option>
                 {enabledProviders.map((provider) => (
                   <option key={provider.id} value={provider.id}>
@@ -765,6 +804,7 @@ export function AiServiceConfigPanel({
             <CapabilitySettings
               key={`${modelDraft.capability}-${modelDraft.modelName}-${modelPreset}`}
               capability={modelDraft.capability}
+              providerType={modelProviderType}
               settings={modelDraft.settings}
             />
             <div className="grid gap-3 sm:grid-cols-3">

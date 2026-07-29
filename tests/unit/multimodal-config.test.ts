@@ -392,49 +392,22 @@ describe("multimodal provider and model validation", () => {
     });
   });
 
-  it("includes DUIX as a first-class provider type", () => {
-    expect(aiProviderTypes).toContain("DUIX");
-  });
-
-  it("accepts DUIX structured credentials and public platform settings", () => {
-    const result = parseAiServiceProviderInput({
-      displayName: "硅基 DUIX",
-      providerType: "DUIX",
-      credentials: {
-        appId: "app-id-1",
-        appSecret: "secret-1"
-      },
-      settings: {
-        platform: "duix.com"
-      }
-    });
-
-    expect(result).toMatchObject({
-      displayName: "硅基 DUIX",
-      providerType: "DUIX",
-      credentials: {
-        appId: "app-id-1",
-        appSecret: "secret-1"
-      },
-      settings: {
-        platform: "duix.com"
-      }
-    });
-  });
-
-  it("renders DUIX admin fields and excludes the generic API key branch", () => {
+  it("retires DUIX provider configuration and exposes generic Alibaba credentials", () => {
     const panel = readWorkspaceFile("components/admin/AiServiceConfigPanel.tsx");
     const fields = readWorkspaceFile("components/admin/AiMultimodalConfigFields.tsx");
     const settings = readWorkspaceFile("lib/domain/aiModelSettings.ts");
 
-    expect(panel).toContain("DuixProviderFields");
-    expect(panel).toContain('providerType !== "DUIX"');
-    expect(fields).toContain("appId");
-    expect(fields).toContain("appSecret");
-    expect(fields).toContain("conversationId");
-    expect(settings).toContain("conversationId");
-    expect(settings).toContain("duix-managed");
-    expect(settings).toContain("direct-drive");
+    expect(aiProviderTypes).not.toContain("DUIX");
+    expect(() =>
+      parseAiServiceProviderInput({
+        displayName: "Retired provider",
+        providerType: "DUIX"
+      })
+    ).toThrow();
+    expect(panel).not.toContain("DuixProviderFields");
+    expect(fields).toContain("DashScope API Key");
+    expect(fields).not.toContain("appSecret");
+    expect(settings).not.toContain("conversationId");
   });
 
   it("accepts primitive model settings", () => {
