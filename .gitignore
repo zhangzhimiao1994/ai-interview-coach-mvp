@@ -29,6 +29,7 @@ work/
 outputs/
 .codex/
 .superpowers/
+.worktrees/
 
 # logs
 *.log
