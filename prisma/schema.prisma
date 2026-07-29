@@ -262,6 +262,7 @@ model TrainingSession {
   report       CoachingReport?
   aiCalls      AiCallLog[]
   digitalHumanSessions DigitalHumanSession[]
+  digitalHumanRenderJobs DigitalHumanRenderJob[]
 
   @@index([taskId])
   @@index([candidateId])
@@ -290,6 +291,120 @@ model DigitalHumanSession {
   @@index([trainingSessionId])
   @@index([status, lastActivityAt])
   @@index([providerSessionId])
+}
+
+model MediaStorageConfig {
+  id                     String                   @id @default(cuid())
+  displayName            String
+  providerKind           String
+  endpoint               String
+  bucket                 String
+  region                 String?
+  credentialsCiphertext  String?
+  credentialsIv          String?
+  credentialsTag         String?
+  credentialsPreviewJson String?
+  enabled                Boolean                  @default(true)
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  assets                 DigitalHumanMediaAsset[]
+
+  @@unique([providerKind, displayName])
+  @@index([enabled])
+}
+
+model DigitalHumanMediaAsset {
+  id                String                       @id @default(cuid())
+  storageConfigId   String
+  storageConfig     MediaStorageConfig           @relation(fields: [storageConfigId], references: [id], onDelete: Restrict)
+  objectKey         String                       @unique
+  mimeType          String
+  byteLength        Int
+  purpose           String
+  expiresAt         DateTime?
+  cleanupStatus     String                       @default("ACTIVE")
+  cleanedAt         DateTime?
+  createdAt         DateTime                     @default(now())
+  updatedAt         DateTime                     @updatedAt
+  portraitProfiles  InterviewerAvatarProfile[]   @relation("InterviewerAvatarPortrait")
+  outputAttempts    DigitalHumanRenderAttempt[]
+
+  @@index([storageConfigId])
+  @@index([cleanupStatus, expiresAt])
+}
+
+model InterviewerAvatarProfile {
+  id                 String                  @id @default(cuid())
+  displayName        String
+  voice              String
+  styleJson          String                  @default("{}")
+  portraitAssetId    String?
+  portraitAsset      DigitalHumanMediaAsset? @relation("InterviewerAvatarPortrait", fields: [portraitAssetId], references: [id], onDelete: SetNull)
+  lingmouMappingJson String                  @default("{}")
+  emoMappingJson     String                  @default("{}")
+  providerRole       String
+  enabled            Boolean                 @default(true)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  renderJobs         DigitalHumanRenderJob[]
+
+  @@index([enabled])
+  @@index([providerRole])
+}
+
+model DigitalHumanRenderJob {
+  id                   String                      @id @default(cuid())
+  trainingSessionId    String
+  questionId           String
+  questionHash         String
+  cacheKey             String
+  kind                 String
+  mode                 String
+  status               String                      @default("PENDING")
+  interviewerProfileId String
+  deadlineAt           DateTime
+  winnerAttemptId      String?
+  fallbackReason       String?
+  createdAt            DateTime                    @default(now())
+  readyAt              DateTime?
+  expiredAt            DateTime?
+  updatedAt            DateTime                    @updatedAt
+
+  trainingSession    TrainingSession             @relation(fields: [trainingSessionId], references: [id], onDelete: Cascade)
+  interviewerProfile InterviewerAvatarProfile    @relation(fields: [interviewerProfileId], references: [id])
+  attempts           DigitalHumanRenderAttempt[]
+
+  @@unique([trainingSessionId, questionId, cacheKey])
+  @@index([status, deadlineAt])
+}
+
+model DigitalHumanRenderAttempt {
+  id                   String                 @id @default(cuid())
+  renderJobId          String
+  providerKind         String
+  providerId           String
+  modelId              String
+  interviewerName      String
+  status               String                 @default("PENDING")
+  upstreamTaskId       String?
+  traceId              String?
+  nextPollAt           DateTime?
+  submittedAt          DateTime?
+  firstQueriedAt       DateTime?
+  completedAt          DateTime?
+  outputAssetId        String?
+  outputUrlCiphertext  String?
+  outputUrlIv          String?
+  outputUrlTag         String?
+  safeErrorCode        String?
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  renderJob   DigitalHumanRenderJob   @relation(fields: [renderJobId], references: [id], onDelete: Cascade)
+  outputAsset DigitalHumanMediaAsset? @relation(fields: [outputAssetId], references: [id], onDelete: SetNull)
+
+  @@unique([renderJobId, providerKind])
+  @@index([status, nextPollAt])
 }
 
 model SessionTurn {
