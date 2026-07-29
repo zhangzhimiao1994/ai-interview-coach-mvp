@@ -1,5 +1,10 @@
 import React from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import {
+  act,
+  create,
+  type ReactTestInstance,
+  type ReactTestRenderer
+} from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AiServiceConfigPanel } from "@/components/admin/AiServiceConfigPanel";
 
@@ -159,6 +164,78 @@ describe("AI service configuration form submissions", () => {
     expect(requestPayload(fetchMock).settings).not.toHaveProperty("workspaceId");
   });
 
+  it("excludes historical DUIX providers from model creation and runtime selection", async () => {
+    const duixProvider = {
+      ...provider,
+      id: "duix-provider",
+      displayName: "Historical DUIX",
+      providerType: "DUIX"
+    };
+    const tongyiProvider = {
+      ...provider,
+      id: "tongyi-provider",
+      displayName: "Tongyi",
+      providerType: "TONGYI"
+    };
+    const modelBase = {
+      displayName: "Video model",
+      modelName: "video-model",
+      capability: "DIGITAL_HUMAN_VIDEO",
+      temperature: 0.4,
+      maxTokens: 1200,
+      timeoutMs: 30000,
+      costNote: null,
+      enabled: true,
+      isDefault: false,
+      isSelected: false
+    };
+
+    act(() => renderer.unmount());
+    await act(async () => {
+      renderer = create(
+        <AiServiceConfigPanel
+          initialProviders={[duixProvider, tongyiProvider]}
+          initialModels={[
+            {
+              ...modelBase,
+              id: "duix-model",
+              providerId: duixProvider.id,
+              provider: {
+                id: duixProvider.id,
+                displayName: duixProvider.displayName,
+                providerType: duixProvider.providerType,
+                enabled: true
+              }
+            },
+            {
+              ...modelBase,
+              id: "tongyi-model",
+              providerId: tongyiProvider.id,
+              provider: {
+                id: tongyiProvider.id,
+                displayName: tongyiProvider.displayName,
+                providerType: tongyiProvider.providerType,
+                enabled: true
+              }
+            }
+          ]}
+        />
+      );
+    });
+
+    const providerOptions = renderer.root
+      .findByProps({ name: "providerId" })
+      .findAllByType("option")
+      .map((option) => option.props.value);
+    const runtimeSelectionButtons = renderer.root
+      .findAllByType("button")
+      .filter((button) => renderedText(button).includes("设为当前使用"));
+
+    expect(providerOptions).toContain(tongyiProvider.id);
+    expect(providerOptions).not.toContain(duixProvider.id);
+    expect(runtimeSelectionButtons).toHaveLength(1);
+  });
+
   async function selectProviderType(providerType: "TONGYI" | "LINGMOU") {
     await act(async () => {
       renderer.root.findByProps({ name: "providerType" }).props.onChange({ target: { value: providerType } });
@@ -198,4 +275,10 @@ function jsonResponse(payload: unknown) {
 
 function requestPayload(fetchMock: ReturnType<typeof vi.fn>) {
   return JSON.parse(fetchMock.mock.calls[0][1].body);
+}
+
+function renderedText(node: ReactTestInstance): string {
+  return node.children
+    .map((child) => typeof child === "string" ? child : renderedText(child))
+    .join("");
 }

@@ -30,3 +30,7 @@ export const aiCapabilities = [
 
 export type AiProviderType = (typeof aiProviderTypes)[number];
 export type AiCapability = (typeof aiCapabilities)[number];
+
+export function isSelectableAiProviderType(value: string): value is AiProviderType {
+  return (aiProviderTypes as readonly string[]).includes(value);
+}

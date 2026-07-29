@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { ApiConflictError, postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
-import { aiModelConfigInputSchema } from "@/lib/validators/aiServices";
+import { isSelectableAiProviderType } from "@/lib/domain/aiServiceConstants";
+import {
+  aiModelConfigInputSchema,
+  validateAiModelSettingsForProvider
+} from "@/lib/validators/aiServices";
 import { serializeModel } from "../../serialization";
 
 type RouteContext = {
@@ -35,6 +39,14 @@ const updateModelSchema = aiModelConfigInputSchema
   .extend({ costNote: clearableNullableText.optional() })
   .strict();
 
+function parseStoredModelSettings(value: string | undefined) {
+  try {
+    return aiModelConfigInputSchema.shape.settings.parse(JSON.parse(value ?? "{}"));
+  } catch {
+    return {};
+  }
+}
+
 export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { modelId } = await context.params;
@@ -52,7 +64,9 @@ export async function PATCH(request: Request, context: RouteContext) {
         select: {
           id: true,
           providerId: true,
+          modelName: true,
           capability: true,
+          settingsJson: true,
           enabled: true,
           isDefault: true,
           isSelected: true
@@ -64,6 +78,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       }
 
       const targetCapability = input.capability ?? existing.capability;
+      const targetModelName = input.modelName ?? existing.modelName;
       let targetEnabled = input.enabled ?? existing.enabled;
       const targetIsDefault = input.isDefault ?? existing.isDefault;
       let targetIsSelected = input.isSelected ?? existing.isSelected;
@@ -84,13 +99,40 @@ export async function PATCH(request: Request, context: RouteContext) {
         throw new ApiConflictError("Select another model for this capability before changing the current model capability.");
       }
 
-      if (input.isSelected === true) {
-        const provider = await tx.aiServiceProvider.findUnique({
-          where: { id: existing.providerId },
-          select: { enabled: true }
-        });
+      const needsProvider =
+        input.isSelected === true ||
+        input.modelName !== undefined ||
+        input.capability !== undefined ||
+        input.settings !== undefined;
+      const provider = needsProvider
+        ? await tx.aiServiceProvider.findUnique({
+            where: { id: existing.providerId },
+            select: { enabled: true, providerType: true }
+          })
+        : null;
 
-        if (!provider?.enabled) {
+      if (needsProvider && !provider) {
+        throw new ApiConflictError("The selected provider is unavailable.");
+      }
+
+      if (
+        input.modelName !== undefined ||
+        input.capability !== undefined ||
+        input.settings !== undefined
+      ) {
+        validateAiModelSettingsForProvider({
+          capability: targetCapability,
+          modelName: targetModelName,
+          settings: input.settings ?? parseStoredModelSettings(existing.settingsJson)
+        }, provider!.providerType);
+      }
+
+      if (input.isSelected === true) {
+        if (!isSelectableAiProviderType(provider!.providerType)) {
+          throw new ApiConflictError("The selected provider type is retired.");
+        }
+
+        if (!provider!.enabled) {
           throw new ApiConflictError("Enable the provider before selecting this model for runtime use.");
         }
 

@@ -418,7 +418,7 @@ describe("multimodal provider and model validation", () => {
         topK: 20,
         enableThinking: false
       }
-    });
+    }, "OPENAI_COMPATIBLE");
 
     expect(result.settings).toEqual({
       responseFormat: "json",
@@ -446,7 +446,7 @@ describe("multimodal provider and model validation", () => {
         parseAiModelConfigInput({
           ...modelInput,
           settings: { topK: value }
-        })
+        }, "OPENAI_COMPATIBLE")
       ).toThrow();
     }
   );
@@ -482,7 +482,7 @@ describe("multimodal provider and model validation", () => {
         parseAiModelConfigInput({
           ...modelInput,
           settings: Object.fromEntries([[key, true]])
-        })
+        }, "OPENAI_COMPATIBLE")
       ).toThrow();
     }
   );
@@ -495,7 +495,7 @@ describe("multimodal provider and model validation", () => {
     ["model", () => parseAiModelConfigInput({
       ...modelInput,
       settings: { nested: ["unsupported"] }
-    })]
+    }, "OPENAI_COMPATIBLE")]
   ])("rejects nested non-primitive %s settings", (_kind, parse) => {
     expect(parse).toThrow();
   });
@@ -508,7 +508,7 @@ describe("multimodal provider and model validation", () => {
     ["model", () => parseAiModelConfigInput({
       ...modelInput,
       unexpected: "field"
-    })]
+    }, "OPENAI_COMPATIBLE")]
   ])("keeps %s validation strict at the top level", (_kind, parse) => {
     expect(parse).toThrow();
   });
@@ -518,6 +518,6 @@ describe("multimodal provider and model validation", () => {
       credentials: {},
       settings: {}
     });
-    expect(parseAiModelConfigInput(modelInput)).toMatchObject({ settings: {} });
+    expect(parseAiModelConfigInput(modelInput, "OPENAI_COMPATIBLE")).toMatchObject({ settings: {} });
   });
 });

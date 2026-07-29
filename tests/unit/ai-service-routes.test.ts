@@ -1103,6 +1103,12 @@ describe("AI service API routes", () => {
 
   it("creates a recommended model without changing other recommendations", async () => {
     const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({
+          enabled: true,
+          providerType: "OPENAI_COMPATIBLE"
+        })
+      },
       aiModelConfig: {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         create: vi.fn().mockResolvedValue(modelRow())
@@ -1149,8 +1155,75 @@ describe("AI service API routes", () => {
     expect(payload.model).not.toHaveProperty("settingsJson");
   });
 
+  it("rejects creating a model under a historical DUIX provider", async () => {
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({ enabled: true, providerType: "DUIX" })
+      },
+      aiModelConfig: {
+        updateMany: vi.fn(),
+        create: vi.fn()
+      }
+    };
+    const prisma = { $transaction: transactionMock(tx) };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/route");
+    const response = await route.POST(
+      new Request("http://localhost/api/ai-services/models", {
+        method: "POST",
+        body: JSON.stringify({
+          providerId: "duix-provider",
+          displayName: "Historical DUIX model",
+          modelName: "duix-avatar",
+          capability: "DIGITAL_HUMAN_REALTIME"
+        })
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(tx.aiModelConfig.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects persisting incomplete settings for a built-in Alibaba video model", async () => {
+    const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({ enabled: true, providerType: "TONGYI" })
+      },
+      aiModelConfig: {
+        updateMany: vi.fn(),
+        create: vi.fn()
+      }
+    };
+    const prisma = { $transaction: transactionMock(tx) };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/route");
+    const response = await route.POST(
+      new Request("http://localhost/api/ai-services/models", {
+        method: "POST",
+        body: JSON.stringify({
+          providerId: "tongyi-provider",
+          displayName: "Alibaba EMO",
+          modelName: "emo-v1",
+          capability: "DIGITAL_HUMAN_VIDEO",
+          settings: {}
+        })
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(tx.aiModelConfig.create).not.toHaveBeenCalled();
+  });
+
   it("keeps recommendation metadata independent from model enablement", async () => {
     const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({
+          enabled: true,
+          providerType: "OPENAI_COMPATIBLE"
+        })
+      },
       aiModelConfig: {
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         create: vi.fn().mockResolvedValue(modelRow({ enabled: false, isDefault: true, isSelected: false }))
@@ -1335,7 +1408,10 @@ describe("AI service API routes", () => {
         }))
       },
       aiServiceProvider: {
-        findUnique: vi.fn().mockResolvedValue({ enabled: true })
+        findUnique: vi.fn().mockResolvedValue({
+          enabled: true,
+          providerType: "OPENAI_COMPATIBLE"
+        })
       }
     };
     const prisma = {
@@ -1389,7 +1465,10 @@ describe("AI service API routes", () => {
         update: vi.fn()
       },
       aiServiceProvider: {
-        findUnique: vi.fn().mockResolvedValue({ enabled: false })
+        findUnique: vi.fn().mockResolvedValue({
+          enabled: false,
+          providerType: "OPENAI_COMPATIBLE"
+        })
       }
     };
     const prisma = {
@@ -1410,6 +1489,77 @@ describe("AI service API routes", () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: "Conflict" });
     expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(tx.aiModelConfig.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects selecting a historical DUIX model even when its provider is enabled", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "duix-model",
+          providerId: "duix-provider",
+          capability: "DIGITAL_HUMAN_REALTIME",
+          enabled: true,
+          isDefault: false,
+          isSelected: false
+        }),
+        updateMany: vi.fn(),
+        update: vi.fn()
+      },
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({ enabled: true, providerType: "DUIX" })
+      }
+    };
+    const prisma = { $transaction: transactionMock(tx) };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/duix-model", {
+        method: "PATCH",
+        body: JSON.stringify({ isSelected: true })
+      }),
+      { params: Promise.resolve({ modelId: "duix-model" }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(tx.aiModelConfig.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects patching a built-in Alibaba video model to incomplete settings", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "emo-model",
+          providerId: "tongyi-provider",
+          modelName: "custom-video",
+          capability: "DIGITAL_HUMAN_VIDEO",
+          settingsJson: "{}",
+          enabled: true,
+          isDefault: false,
+          isSelected: false
+        }),
+        updateMany: vi.fn(),
+        update: vi.fn()
+      },
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({ enabled: true, providerType: "TONGYI" })
+      }
+    };
+    const prisma = { $transaction: transactionMock(tx) };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/emo-model", {
+        method: "PATCH",
+        body: JSON.stringify({ modelName: "emo-v1", settings: {} })
+      }),
+      { params: Promise.resolve({ modelId: "emo-model" }) }
+    );
+
+    expect(response.status).toBe(400);
     expect(tx.aiModelConfig.update).not.toHaveBeenCalled();
   });
 
@@ -1449,9 +1599,16 @@ describe("AI service API routes", () => {
 
   it("edits recommended model settings without changing other recommendations", async () => {
     const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({
+          enabled: true,
+          providerType: "OPENAI_COMPATIBLE"
+        })
+      },
       aiModelConfig: {
         findUnique: vi.fn().mockResolvedValue({
           id: "model-1",
+          providerId: "provider-1",
           capability: "REPORT_ANALYSIS",
           enabled: true,
           isDefault: true,
@@ -1504,9 +1661,16 @@ describe("AI service API routes", () => {
 
   it("patches every editable model field without coupling recommendation to selection", async () => {
     const tx = {
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({
+          enabled: true,
+          providerType: "OPENAI_COMPATIBLE"
+        })
+      },
       aiModelConfig: {
         findUnique: vi.fn().mockResolvedValue({
           id: "model-2",
+          providerId: "provider-1",
           capability: "INTERVIEW_FOLLOW_UP",
           enabled: false,
           isDefault: false,

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { ApiConflictError, postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
-import { parseAiModelConfigInput } from "@/lib/validators/aiServices";
+import { isSelectableAiProviderType } from "@/lib/domain/aiServiceConstants";
+import {
+  aiModelConfigInputSchema,
+  validateAiModelConfigForProvider
+} from "@/lib/validators/aiServices";
 import { serializeModel } from "../serialization";
 
 const modelInclude = {
@@ -26,17 +30,30 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const input = parseAiModelConfigInput(await request.json());
-    const { settings, ...modelInput } = input;
+    const unvalidatedInput = aiModelConfigInputSchema.parse(await request.json());
 
     const model = await prisma.$transaction(async (tx) => {
-      if (input.isSelected) {
-        const provider = await tx.aiServiceProvider.findUnique({
-          where: { id: input.providerId },
-          select: { enabled: true }
-        });
+      const provider = await tx.aiServiceProvider.findUnique({
+        where: { id: unvalidatedInput.providerId },
+        select: { enabled: true, providerType: true }
+      });
 
-        if (!provider?.enabled) {
+      if (!provider) {
+        throw new ApiConflictError("The selected provider is unavailable.");
+      }
+
+      if (!isSelectableAiProviderType(provider.providerType)) {
+        throw new ApiConflictError("The selected provider type is retired.");
+      }
+
+      const input = validateAiModelConfigForProvider(
+        unvalidatedInput,
+        provider.providerType
+      );
+      const { settings, ...modelInput } = input;
+
+      if (input.isSelected) {
+        if (!provider.enabled) {
           throw new ApiConflictError("Enable the provider before selecting this model for runtime use.");
         }
 

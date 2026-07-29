@@ -84,7 +84,7 @@ describe("Alibaba digital human video model options", () => {
           watermark: false,
           mode: "broadcast"
         }
-      }).settings
+      }, "LINGMOU").settings
     ).toMatchObject({ portraitVariableName: null });
 
     expect(() =>
@@ -94,8 +94,38 @@ describe("Alibaba digital human video model options", () => {
         modelName: "emo-v1",
         capability: "DIGITAL_HUMAN_VIDEO",
         settings: { model: "emo-v1", ratio: "16:9" }
-      })
+      }, "TONGYI")
     ).toThrow();
+  });
+
+  it.each([
+    ["TONGYI", "emo-v1"],
+    ["LINGMOU", "lingmou-broadcast-video"]
+  ] as const)(
+    "requires complete %s settings for its built-in video model",
+    (providerType, modelName) => {
+      expect(() =>
+        parseAiModelConfigInput({
+          providerId: `${providerType.toLowerCase()}-provider`,
+          displayName: modelName,
+          modelName,
+          capability: "DIGITAL_HUMAN_VIDEO",
+          settings: {}
+        }, providerType)
+      ).toThrow();
+    }
+  );
+
+  it("keeps custom Alibaba video model settings compatible", () => {
+    expect(
+      parseAiModelConfigInput({
+        providerId: "tongyi-provider",
+        displayName: "Custom video model",
+        modelName: "custom-video-v2",
+        capability: "DIGITAL_HUMAN_VIDEO",
+        settings: { mode: "custom" }
+      }, "TONGYI").settings
+    ).toEqual({ mode: "custom" });
   });
 
   it("prefers the generic DashScope key and falls back to the legacy TTS key", () => {

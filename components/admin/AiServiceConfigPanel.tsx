@@ -9,6 +9,7 @@ import { modelSettingsFromForm } from "@/lib/domain/aiModelSettings";
 import {
   aiCapabilities,
   aiProviderTypes,
+  isSelectableAiProviderType,
   type AiCapability,
   type AiProviderType
 } from "@/lib/domain/aiServiceConstants";
@@ -229,14 +230,20 @@ export function AiServiceConfigPanel({
   const [modelProviderId, setModelProviderId] = useState("");
   const [multimodalTakeover, setMultimodalTakeover] = useState(initialMultimodalTakeover);
 
-  const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
-  const modelProviderType = enabledProviders.find(
+  const selectableProviders = useMemo(
+    () => providers.filter(
+      (provider) => provider.enabled && isSelectableAiProviderType(provider.providerType)
+    ),
+    [providers]
+  );
+  const modelProviderType = selectableProviders.find(
     (provider) => provider.id === modelProviderId
   )?.providerType as AiProviderType | undefined;
   const omniModels = useMemo(
     () => models.filter((model) =>
       model.enabled &&
       model.provider.enabled &&
+      isSelectableAiProviderType(model.provider.providerType) &&
       isSupportedMultimodalTakeoverModel(model.modelName)
     ),
     [models]
@@ -251,7 +258,7 @@ export function AiServiceConfigPanel({
     setProviderType(recommendation.providerType);
     setBaseUrl(providerBaseUrlPresets[recommendation.providerType] ?? "");
     setModelProviderId(
-      enabledProviders.find(
+      selectableProviders.find(
         (provider) => provider.providerType === recommendation.providerType
       )?.id ?? ""
     );
@@ -763,7 +770,7 @@ export function AiServiceConfigPanel({
                 required
               >
                 <option value="">请选择服务商</option>
-                {enabledProviders.map((provider) => (
+                {selectableProviders.map((provider) => (
                   <option key={provider.id} value={provider.id}>
                     {provider.displayName}
                   </option>
@@ -854,7 +861,7 @@ export function AiServiceConfigPanel({
             </div>
           </div>
           {modelMessage ? <p className="mt-4 text-sm text-muted">{modelMessage}</p> : null}
-          <Button className="mt-5 gap-2" disabled={savingModel || enabledProviders.length === 0}>
+          <Button className="mt-5 gap-2" disabled={savingModel || selectableProviders.length === 0}>
             <Plus className="h-4 w-4" aria-hidden="true" />
             {savingModel ? "保存中..." : "保存模型"}
           </Button>
@@ -918,7 +925,7 @@ export function AiServiceConfigPanel({
                 </div>
                 {model.costNote ? <p className="mt-2 text-xs text-muted">{model.costNote}</p> : null}
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {!model.isSelected ? (
+                  {!model.isSelected && isSelectableAiProviderType(model.provider.providerType) ? (
                     <Button className="min-h-8 gap-1 px-3 py-1 text-xs" variant="secondary" onClick={() => patchModel(model.id, { isSelected: true })}>
                       <Route className="h-3.5 w-3.5" aria-hidden="true" />
                       设为当前使用

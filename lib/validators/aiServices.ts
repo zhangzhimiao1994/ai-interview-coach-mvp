@@ -32,33 +32,7 @@ const alibabaEmoVideoSettingsSchema = z
   })
   .strict();
 
-const videoAwareModelSettingsSchema = z
-  .record(recordKey, modelPrimitiveSetting)
-  .superRefine((settings, context) => {
-    const looksLikeLingmouVideo = [
-      "templateId",
-      "audioVariableName",
-      "portraitVariableName"
-    ].some((key) => key in settings);
-    const schema =
-      settings.model === "emo-v1"
-        ? alibabaEmoVideoSettingsSchema
-        : looksLikeLingmouVideo
-          ? lingmouBroadcastVideoSettingsSchema
-          : null;
-    if (!schema) return;
-
-    const result = schema.safeParse(settings);
-    if (!result.success) {
-      for (const issue of result.error.issues) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: issue.path,
-          message: issue.message
-        });
-      }
-    }
-  });
+const modelSettingsSchema = z.record(recordKey, modelPrimitiveSetting);
 
 export const aiServiceProviderInputSchema = z
   .object({
@@ -82,7 +56,7 @@ export const aiModelConfigInputSchema = z
     temperature: z.number().finite().min(0).max(2).default(0.4),
     maxTokens: z.number().finite().int().positive().max(200000).default(1200),
     timeoutMs: z.number().finite().int().min(1000).max(300000).default(30000),
-    settings: videoAwareModelSettingsSchema.default({}),
+    settings: modelSettingsSchema.default({}),
     costNote: optionalText,
     enabled: z.boolean().default(true),
     isDefault: z.boolean().default(false),
@@ -97,6 +71,46 @@ export function parseAiServiceProviderInput(input: unknown): AiServiceProviderIn
   return aiServiceProviderInputSchema.parse(input);
 }
 
-export function parseAiModelConfigInput(input: unknown): AiModelConfigInput {
-  return aiModelConfigInputSchema.parse(input);
+export function validateAiModelSettingsForProvider(
+  input: {
+    capability: string;
+    modelName: string;
+    settings: AiModelConfigInput["settings"];
+  },
+  providerType: string
+): AiModelConfigInput["settings"] {
+  const videoSettingsSchema =
+    input.capability === "DIGITAL_HUMAN_VIDEO" &&
+    providerType === "TONGYI" &&
+    input.modelName === "emo-v1"
+      ? alibabaEmoVideoSettingsSchema
+      : input.capability === "DIGITAL_HUMAN_VIDEO" &&
+          providerType === "LINGMOU" &&
+          input.modelName === "lingmou-broadcast-video"
+        ? lingmouBroadcastVideoSettingsSchema
+        : null;
+
+  return videoSettingsSchema
+    ? videoSettingsSchema.parse(input.settings)
+    : input.settings;
+}
+
+export function validateAiModelConfigForProvider(
+  input: AiModelConfigInput,
+  providerType: string
+): AiModelConfigInput {
+  return {
+    ...input,
+    settings: validateAiModelSettingsForProvider(input, providerType)
+  };
+}
+
+export function parseAiModelConfigInput(
+  input: unknown,
+  providerType: string
+): AiModelConfigInput {
+  return validateAiModelConfigForProvider(
+    aiModelConfigInputSchema.parse(input),
+    providerType
+  );
 }

@@ -60,4 +60,14 @@ describe("DUIX runtime retirement", () => {
       expect(source, path).not.toContain("DuixProviderFields");
     }
   });
+
+  it("guards model creation, selection, and configuration UI from historical DUIX providers", () => {
+    for (const path of [
+      "app/api/ai-services/models/route.ts",
+      "app/api/ai-services/models/[modelId]/route.ts",
+      "components/admin/AiServiceConfigPanel.tsx"
+    ]) {
+      expect(readWorkspaceFile(path), path).toContain("isSelectableAiProviderType");
+    }
+  });
 });
