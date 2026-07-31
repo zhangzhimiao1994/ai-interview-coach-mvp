@@ -21,10 +21,20 @@ export type VideoProviderTaskStatus =
   | "SUCCEEDED"
   | "FAILED";
 
+export interface VideoAssetMetadata {
+  contentType: string;
+  byteLength: number;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
+}
+
 export interface VideoSubmitInput {
   requestName: string;
   audioUrl: string;
   portraitUrl: string | null;
+  audioMetadata?: VideoAssetMetadata;
+  portraitMetadata?: VideoAssetMetadata | null;
 }
 
 interface VideoQueryBase {
