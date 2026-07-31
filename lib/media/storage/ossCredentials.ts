@@ -57,6 +57,22 @@ export function decryptOssCredentials(
   return result;
 }
 
+const previewableCredentialFields = [
+  "accessKeyId",
+  "accessKeySecret",
+  "securityToken"
+] as const;
+
+type PreviewableCredentialField = (typeof previewableCredentialFields)[number];
+
+function isPreviewableCredentialField(value: string): value is PreviewableCredentialField {
+  return (previewableCredentialFields as readonly string[]).includes(value);
+}
+
+function isMaskedCredentialPreview(value: string) {
+  return /^[^*\s]{0,4}\*{4}[^*\s]{0,4}$/.test(value);
+}
+
 function parseCredentialPreview(value: string | null) {
   if (!value) {
     return {};
@@ -69,8 +85,11 @@ function parseCredentialPreview(value: string | null) {
     }
 
     return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, string] =>
-        typeof entry[1] === "string"
+      Object.entries(parsed).filter(
+        (entry): entry is [PreviewableCredentialField, string] =>
+          isPreviewableCredentialField(entry[0]) &&
+          typeof entry[1] === "string" &&
+          isMaskedCredentialPreview(entry[1])
       )
     );
   } catch {

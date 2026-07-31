@@ -86,4 +86,30 @@ describe("media storage configuration", () => {
     ]);
     expect(JSON.stringify(writes)).not.toContain("https://");
   });
+
+  it("drops raw and unknown persisted credential previews", () => {
+    const response = serializeMediaStorageConfig({
+      id: "storage-1",
+      displayName: "Interview media",
+      providerKind: "ALI_OSS",
+      endpoint: "oss-cn-beijing.aliyuncs.com",
+      bucket: "private-interview-media",
+      region: "cn-beijing",
+      credentialsCiphertext: "ciphertext",
+      credentialsIv: "iv",
+      credentialsTag: "tag",
+      credentialsPreviewJson: JSON.stringify({
+        accessKeyId: "actual-access-key-id",
+        accessKeySecret: "actual-secret",
+        securityToken: "toke****oken",
+        unexpected: "safe-looking-but-unknown"
+      }),
+      enabled: true
+    });
+
+    expect(response.credentialsPreview).toEqual({ securityToken: "toke****oken" });
+    expect(JSON.stringify(response)).not.toContain("actual-access-key-id");
+    expect(JSON.stringify(response)).not.toContain("actual-secret");
+    expect(JSON.stringify(response)).not.toContain("safe-looking-but-unknown");
+  });
 });

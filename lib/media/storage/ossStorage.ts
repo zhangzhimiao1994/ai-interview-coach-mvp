@@ -25,7 +25,12 @@ export type OssObjectClient = {
   put(
     objectKey: string,
     body: Buffer,
-    options: { headers: { "Content-Type": string } }
+    options: {
+      headers: {
+        "Content-Type": string;
+        "x-oss-object-acl": "private";
+      };
+    }
   ): Promise<unknown>;
   signatureUrl(
     objectKey: string,
@@ -88,7 +93,10 @@ export class OssPrivateMediaStorage implements PrivateMediaStorage {
     const objectKey = createPrivateObjectKey(format.category, format.extension);
 
     await this.client.put(objectKey, input.body, {
-      headers: { "Content-Type": input.contentType }
+      headers: {
+        "Content-Type": input.contentType,
+        "x-oss-object-acl": "private"
+      }
     });
 
     return { objectKey, byteLength: input.body.byteLength };

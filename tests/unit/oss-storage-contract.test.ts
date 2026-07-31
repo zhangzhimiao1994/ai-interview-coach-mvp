@@ -62,7 +62,12 @@ describe("private OSS storage contract", () => {
         args: [
           stored.objectKey,
           Buffer.from([1, 2, 3]),
-          { headers: { "Content-Type": "audio/wav" } }
+          {
+            headers: {
+              "Content-Type": "audio/wav",
+              "x-oss-object-acl": "private"
+            }
+          }
         ]
       },
       {
