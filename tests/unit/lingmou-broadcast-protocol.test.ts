@@ -60,6 +60,12 @@ describe("Lingmou broadcast protocol", () => {
     })).toEqual({ upstreamTaskId: "video-01", traceId: "trace-01" });
   });
 
+  it("preserves a request trace when a submission response is invalid", () => {
+    expect(parseLingmouBroadcastSubmission({
+      body: { success: false, requestId: "trace-invalid-submit" }
+    })).toEqual({ upstreamTaskId: null, traceId: "trace-invalid-submit" });
+  });
+
   it.each([
     ["PENDING", "PENDING"],
     ["PROCESSING", "RUNNING"]
@@ -82,6 +88,24 @@ describe("Lingmou broadcast protocol", () => {
       traceId: "trace-01"
     });
     expect(result.completedAt).toEqual(new Date("2026-07-29T12:00:00Z"));
+  });
+
+  it.each([
+    ["SDK no-zone time", "2025-11-28T13:41:31", new Date("2025-11-28T13:41:31Z")],
+    ["explicit offset", "2025-11-28T13:41:31+08:00", new Date("2025-11-28T05:41:31Z")],
+    ["impossible calendar day", "2025-02-31T13:41:31", null]
+  ])("uses the deterministic UTC completion-time policy for %s", (
+    _description,
+    modifiedTime,
+    completedAt
+  ) => {
+    const result = parseLingmouBroadcastVideo(listResponse({
+      status: "SUCCESS",
+      videoURL: "https://render.example/video.mp4",
+      modifiedTime
+    }), "video-01");
+
+    expect(result.completedAt).toEqual(completedAt);
   });
 
   it("turns provider failure into a safe failed result", () => {

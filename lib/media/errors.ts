@@ -23,7 +23,8 @@ export class MediaProviderError extends Error {
     message: string,
     readonly provider: string,
     readonly code = "MEDIA_PROVIDER_ERROR",
-    readonly retryable = false
+    readonly retryable = false,
+    readonly traceId: string | null = null
   ) {
     super(message);
     this.name = "MediaProviderError";

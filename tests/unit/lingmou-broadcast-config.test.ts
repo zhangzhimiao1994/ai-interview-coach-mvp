@@ -81,6 +81,73 @@ describe("Lingmou broadcast configuration", () => {
     })).rejects.toMatchObject({ code: "LINGMOU_BROADCAST_PORTRAIT_URL_REQUIRED" });
     expect(client.createBroadcastVideoFromTemplate).not.toHaveBeenCalled();
   });
+
+  it("sanitizes synchronous SDK construction failures while retaining their request trace", () => {
+    const rawMessage = "raw SDK failure lingmou-ak-secret https://signed.example/private";
+    let caught: unknown;
+
+    try {
+      createLingmouBroadcastProvider(model(), {
+        createClient: () => {
+          throw {
+            code: "InvalidAccessKeyId",
+            statusCode: 403,
+            requestId: "trace-construction",
+            message: rawMessage
+          };
+        },
+        readConfigSecret: () => configSecret
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      name: "MediaProviderError",
+      provider: "LINGMOU",
+      code: "LINGMOU_BROADCAST_AUTH_FAILED",
+      traceId: "trace-construction"
+    });
+    expect(String(caught)).not.toContain(rawMessage);
+    expect(JSON.stringify(caught)).not.toContain(rawMessage);
+  });
+
+  it("retains an SDK exception request trace without exposing its raw message", async () => {
+    const rawMessage = "raw upstream message https://signed.example/private";
+    const provider = createLingmouBroadcastProvider(model(), {
+      createClient: () => rejectingClient({
+        code: "UnexpectedCloudFailure",
+        requestId: "trace-sdk-exception",
+        message: rawMessage
+      }),
+      readConfigSecret: () => configSecret
+    });
+
+    const caught = await provider.submit(validSubmitInput()).catch((error: unknown) => error);
+
+    expect(caught).toMatchObject({
+      name: "MediaProviderError",
+      code: "LINGMOU_BROADCAST_UPSTREAM_FAILED",
+      traceId: "trace-sdk-exception"
+    });
+    expect(String(caught)).not.toContain(rawMessage);
+    expect(JSON.stringify(caught)).not.toContain(rawMessage);
+  });
+
+  it("retains the request trace on a malformed submission response", async () => {
+    const provider = createLingmouBroadcastProvider(model(), {
+      createClient: () => invalidSubmitClient(),
+      readConfigSecret: () => configSecret
+    });
+
+    const caught = await provider.submit(validSubmitInput()).catch((error: unknown) => error);
+
+    expect(caught).toMatchObject({
+      name: "MediaProviderError",
+      code: "LINGMOU_BROADCAST_SUBMIT_INVALID_RESPONSE",
+      traceId: "trace-invalid-submit"
+    });
+  });
 });
 
 function fakeClient() {
@@ -88,6 +155,32 @@ function fakeClient() {
     getBroadcastTemplate: vi.fn(),
     createBroadcastVideoFromTemplate: vi.fn(),
     listBroadcastVideosById: vi.fn()
+  };
+}
+
+function rejectingClient(error: unknown) {
+  return {
+    getBroadcastTemplate: async () => undefined,
+    createBroadcastVideoFromTemplate: async () => { throw error; },
+    listBroadcastVideosById: async () => undefined
+  };
+}
+
+function invalidSubmitClient() {
+  return {
+    getBroadcastTemplate: async () => undefined,
+    createBroadcastVideoFromTemplate: async () => ({
+      body: { success: false, requestId: "trace-invalid-submit" }
+    }),
+    listBroadcastVideosById: async () => undefined
+  };
+}
+
+function validSubmitInput() {
+  return {
+    requestName: "render-01",
+    audioUrl: "https://private.example/audio.wav",
+    portraitUrl: "https://private.example/portrait.png"
   };
 }
 

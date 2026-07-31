@@ -58,12 +58,14 @@ export function buildLingmouCreateRequest(
 
 export function parseLingmouBroadcastSubmission(
   response: LingmouResponse
-): { upstreamTaskId: string; traceId: string | null } | null {
+): { upstreamTaskId: string | null; traceId: string | null } {
   const body = response.body;
   const task = record(body?.data);
   const upstreamTaskId = text(task?.id);
 
-  if (body?.success !== true || !upstreamTaskId) return null;
+  if (body?.success !== true || !upstreamTaskId) {
+    return { upstreamTaskId: null, traceId: text(body?.requestId) };
+  }
 
   return { upstreamTaskId, traceId: text(body.requestId) };
 }
@@ -120,11 +122,39 @@ function text(value: unknown): string | null {
 
 function completionTime(value: unknown): Date | null {
   const timestamp = text(value);
-  if (!timestamp || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(timestamp)) {
+  const match = timestamp?.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$/
+  );
+  if (!match) {
     return null;
   }
 
-  const date = new Date(timestamp);
+  const [, year, month, day, hour, minute, second, fraction, timezone] = match;
+  const milliseconds = Number((fraction ?? "").padEnd(3, "0").slice(0, 3));
+  const calendar = new Date(Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+    milliseconds
+  ));
+  if (
+    calendar.getUTCFullYear() !== Number(year) ||
+    calendar.getUTCMonth() !== Number(month) - 1 ||
+    calendar.getUTCDate() !== Number(day) ||
+    calendar.getUTCHours() !== Number(hour) ||
+    calendar.getUTCMinutes() !== Number(minute) ||
+    calendar.getUTCSeconds() !== Number(second)
+  ) {
+    return null;
+  }
+
+  const normalizedTimestamp = match[0];
+  const date = new Date(
+    timezone ? normalizedTimestamp : `${normalizedTimestamp}Z`
+  );
   return Number.isFinite(date.getTime()) ? date : null;
 }
 

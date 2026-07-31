@@ -114,7 +114,12 @@ export function createLingmouBroadcastProvider(
     model,
     dependencyOverrides.readConfigSecret ?? readAiConfigSecret
   );
-  const client = (dependencyOverrides.createClient ?? createSdkClient)(config.credentials);
+  let client: LingmouBroadcastSdkClient;
+  try {
+    client = (dependencyOverrides.createClient ?? createSdkClient)(config.credentials);
+  } catch (error) {
+    throw providerError(error);
+  }
 
   return {
     async submit(input) {
@@ -138,14 +143,17 @@ export function createLingmouBroadcastProvider(
       }
 
       const submission = parseLingmouBroadcastSubmission(response as never);
-      if (!submission) {
+      const upstreamTaskId = submission.upstreamTaskId;
+      if (!upstreamTaskId) {
         throw new MediaProviderError(
           "Lingmou broadcast submission returned an invalid response",
           "LINGMOU",
-          "LINGMOU_BROADCAST_SUBMIT_INVALID_RESPONSE"
+          "LINGMOU_BROADCAST_SUBMIT_INVALID_RESPONSE",
+          false,
+          submission.traceId
         );
       }
-      return submission;
+      return { upstreamTaskId, traceId: submission.traceId };
     },
 
     async query(upstreamTaskId) {
@@ -185,7 +193,9 @@ export function createLingmouBroadcastProvider(
         throw new MediaProviderError(
           "Lingmou broadcast template diagnostics returned an invalid response",
           "LINGMOU",
-          "LINGMOU_BROADCAST_TEMPLATE_INVALID_RESPONSE"
+          "LINGMOU_BROADCAST_TEMPLATE_INVALID_RESPONSE",
+          false,
+          text(body?.requestId)
         );
       }
       const variables = template && Array.isArray(template.variables)
@@ -302,7 +312,13 @@ function providerError(error: unknown) {
     : /template.*(notfound|not_found|notexist)/.test(code)
       ? "LINGMOU_BROADCAST_TEMPLATE_NOT_FOUND"
       : "LINGMOU_BROADCAST_UPSTREAM_FAILED";
-  return new MediaProviderError("Lingmou broadcast request failed", "LINGMOU", safeCode, safeCode === "LINGMOU_BROADCAST_UPSTREAM_FAILED");
+  return new MediaProviderError(
+    "Lingmou broadcast request failed",
+    "LINGMOU",
+    safeCode,
+    safeCode === "LINGMOU_BROADCAST_UPSTREAM_FAILED",
+    errorTraceId(error)
+  );
 }
 
 function errorCode(error: unknown): string {
@@ -314,6 +330,11 @@ function errorCode(error: unknown): string {
 function errorStatus(error: unknown): number | undefined {
   const statusCode = object(error)?.statusCode;
   return typeof statusCode === "number" ? statusCode : undefined;
+}
+
+function errorTraceId(error: unknown): string | null {
+  const errorRecord = object(error);
+  return text(errorRecord?.requestId) ?? text(object(errorRecord?.data)?.requestId);
 }
 
 function responseBody(value: unknown): Record<string, unknown> | null {
