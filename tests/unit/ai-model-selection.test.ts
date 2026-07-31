@@ -72,7 +72,7 @@ describe("AI model runtime selection", () => {
       modelName: "qwen3.5-omni-plus",
       enabled: true,
       isSelected: true,
-      provider: { enabled: true }
+      provider: { enabled: true, providerType: "TONGYI" }
     };
     findFirst.mockResolvedValue(null);
     runtimeFindUnique.mockResolvedValue({

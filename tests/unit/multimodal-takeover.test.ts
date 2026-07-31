@@ -11,7 +11,7 @@ type RuntimeModel = {
   capability: string;
   modelName: string;
   enabled: boolean;
-  provider: { enabled: boolean };
+  provider: { enabled: boolean; providerType: string };
 };
 
 const omniModel: RuntimeModel = {
@@ -19,7 +19,7 @@ const omniModel: RuntimeModel = {
   capability: "INTERVIEW_FOLLOW_UP",
   modelName: "qwen3.5-omni-plus",
   enabled: true,
-  provider: { enabled: true }
+  provider: { enabled: true, providerType: "TONGYI" }
 };
 
 describe("multimodal takeover rules", () => {
@@ -97,6 +97,35 @@ describe("multimodal takeover rules", () => {
         }
       })
     ).toBeNull();
+  });
+
+  it("rejects retired provider candidates while preserving supported custom providers", () => {
+    const settings = {
+      enabled: true,
+      modelId: "model-omni",
+      coveredCapabilities: ["VISION_BEHAVIOR_ANALYSIS"] as const
+    };
+    const retiredModel = {
+      ...omniModel,
+      provider: { enabled: true, providerType: "DUIX" }
+    };
+    const customModel = {
+      ...omniModel,
+      provider: { enabled: true, providerType: "CUSTOM" }
+    };
+
+    expect(selectModelWithMultimodalTakeover({
+      capability: "VISION_BEHAVIOR_ANALYSIS",
+      directModel: null,
+      takeoverModel: retiredModel,
+      settings: { ...settings, coveredCapabilities: [...settings.coveredCapabilities] }
+    })).toBeNull();
+    expect(selectModelWithMultimodalTakeover({
+      capability: "VISION_BEHAVIOR_ANALYSIS",
+      directModel: null,
+      takeoverModel: customModel,
+      settings: { ...settings, coveredCapabilities: [...settings.coveredCapabilities] }
+    })).toBe(customModel);
   });
 
   it("parses persisted settings safely and filters unsupported capability names", () => {

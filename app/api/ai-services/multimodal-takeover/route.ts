@@ -4,6 +4,7 @@ import { ApiConflictError, postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import {
   aiCapabilities,
+  isSelectableAiProviderType,
   type AiCapability
 } from "@/lib/domain/aiServiceConstants";
 import {
@@ -58,7 +59,7 @@ export async function PUT(request: Request) {
           id: true,
           modelName: true,
           enabled: true,
-          provider: { select: { enabled: true } }
+          provider: { select: { enabled: true, providerType: true } }
         }
       });
 
@@ -66,6 +67,7 @@ export async function PUT(request: Request) {
         !model ||
         !model.enabled ||
         !model.provider.enabled ||
+        !isSelectableAiProviderType(model.provider.providerType) ||
         !isSupportedMultimodalTakeoverModel(model.modelName)
       ) {
         throw new ApiConflictError("Select an enabled Qwen Omni model before enabling multimodal takeover.");

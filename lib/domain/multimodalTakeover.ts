@@ -1,5 +1,6 @@
 import {
   aiCapabilities,
+  isSelectableAiProviderType,
   type AiCapability
 } from "@/lib/domain/aiServiceConstants";
 
@@ -21,7 +22,7 @@ type TakeoverCandidateModel = {
   capability: string;
   modelName: string;
   enabled: boolean;
-  provider: { enabled: boolean };
+  provider: { enabled: boolean; providerType: string };
 };
 
 const aiCapabilitySet = new Set<string>(aiCapabilities);
@@ -109,6 +110,7 @@ export function selectModelWithMultimodalTakeover<T extends TakeoverCandidateMod
     !takeoverModel ||
     !takeoverModel.enabled ||
     !takeoverModel.provider.enabled ||
+    !isSelectableAiProviderType(takeoverModel.provider.providerType) ||
     !isSupportedMultimodalTakeoverModel(takeoverModel.modelName)
   ) {
     return null;

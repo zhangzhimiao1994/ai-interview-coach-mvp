@@ -377,7 +377,7 @@ describe("AI service API routes", () => {
           id: "model-omni",
           modelName: "qwen3.5-omni-plus",
           enabled: true,
-          provider: { enabled: true },
+          provider: { enabled: true, providerType: "CUSTOM" },
           secretSentinel: "must-not-leak"
         })
       },
@@ -414,7 +414,7 @@ describe("AI service API routes", () => {
         id: true,
         modelName: true,
         enabled: true,
-        provider: { select: { enabled: true } }
+        provider: { select: { enabled: true, providerType: true } }
       }
     });
     expect(prisma.aiRuntimeSetting.upsert).toHaveBeenCalledWith({
@@ -432,6 +432,38 @@ describe("AI service API routes", () => {
     });
     expect(getPayload.settings).toEqual(putPayload.settings);
     expect(JSON.stringify(putPayload)).not.toContain("must-not-leak");
+  });
+
+  it("rejects a renamed Omni model owned by a historical DUIX provider for takeover", async () => {
+    const prisma = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "duix-model",
+          modelName: "qwen3.5-omni-plus",
+          enabled: true,
+          provider: { enabled: true, providerType: "DUIX" }
+        })
+      },
+      aiRuntimeSetting: {
+        upsert: vi.fn()
+      }
+    };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/multimodal-takeover/route");
+    const response = await route.PUT(
+      new Request("http://localhost/api/ai-services/multimodal-takeover", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: true,
+          modelId: "duix-model",
+          coveredCapabilities: ["VISION_BEHAVIOR_ANALYSIS"]
+        })
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(prisma.aiRuntimeSetting.upsert).not.toHaveBeenCalled();
   });
 
   it("preserves blank legacy keys and merges changed structured credentials", async () => {
@@ -1524,6 +1556,46 @@ describe("AI service API routes", () => {
 
     expect(response.status).toBe(409);
     expect(tx.aiModelConfig.updateMany).not.toHaveBeenCalled();
+    expect(tx.aiModelConfig.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects renaming a historical DUIX model into a supported Omni candidate", async () => {
+    const tx = {
+      aiModelConfig: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "duix-model",
+          providerId: "duix-provider",
+          modelName: "historical-duix-model",
+          capability: "REPORT_ANALYSIS",
+          settingsJson: "{}",
+          enabled: true,
+          isDefault: false,
+          isSelected: false
+        }),
+        updateMany: vi.fn(),
+        update: vi.fn().mockResolvedValue(modelRow({
+          id: "duix-model",
+          providerId: "duix-provider",
+          modelName: "qwen3.5-omni-plus"
+        }))
+      },
+      aiServiceProvider: {
+        findUnique: vi.fn().mockResolvedValue({ enabled: true, providerType: "DUIX" })
+      }
+    };
+    const prisma = { $transaction: transactionMock(tx) };
+    vi.doMock("@/lib/db/prisma", () => ({ prisma }));
+
+    const route = await import("@/app/api/ai-services/models/[modelId]/route");
+    const response = await route.PATCH(
+      new Request("http://localhost/api/ai-services/models/duix-model", {
+        method: "PATCH",
+        body: JSON.stringify({ modelName: "qwen3.5-omni-plus" })
+      }),
+      { params: Promise.resolve({ modelId: "duix-model" }) }
+    );
+
+    expect(response.status).toBe(409);
     expect(tx.aiModelConfig.update).not.toHaveBeenCalled();
   });
 

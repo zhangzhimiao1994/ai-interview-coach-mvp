@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ApiConflictError, postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { isSelectableAiProviderType } from "@/lib/domain/aiServiceConstants";
+import { isSupportedMultimodalTakeoverModel } from "@/lib/domain/multimodalTakeover";
 import {
   aiModelConfigInputSchema,
   validateAiModelSettingsForProvider
@@ -113,6 +114,15 @@ export async function PATCH(request: Request, context: RouteContext) {
 
       if (needsProvider && !provider) {
         throw new ApiConflictError("The selected provider is unavailable.");
+      }
+
+      if (
+        provider &&
+        !isSelectableAiProviderType(provider.providerType) &&
+        input.modelName !== undefined &&
+        isSupportedMultimodalTakeoverModel(targetModelName)
+      ) {
+        throw new ApiConflictError("A retired provider cannot own a multimodal takeover model.");
       }
 
       if (
