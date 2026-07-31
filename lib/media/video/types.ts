@@ -15,6 +15,48 @@ export type VideoRenderStatus =
   | "FAILED"
   | "EXPIRED";
 
+export type VideoProviderTaskStatus =
+  | "PENDING"
+  | "RUNNING"
+  | "SUCCEEDED"
+  | "FAILED";
+
+export interface VideoSubmitInput {
+  requestName: string;
+  audioUrl: string;
+  portraitUrl: string | null;
+}
+
+interface VideoQueryBase {
+  traceId: string | null;
+  completedAt: Date | null;
+}
+
+export type VideoQueryResult =
+  | (VideoQueryBase & {
+    status: "PENDING" | "RUNNING";
+    videoUrl: null;
+    safeErrorCode: null;
+  })
+  | (VideoQueryBase & {
+    status: "SUCCEEDED";
+    videoUrl: string;
+    safeErrorCode: null;
+  })
+  | (VideoQueryBase & {
+    status: "FAILED";
+    videoUrl: null;
+    safeErrorCode: string;
+  });
+
+export interface AsyncAvatarVideoProvider {
+  submit(input: VideoSubmitInput): Promise<{
+    upstreamTaskId: string;
+    traceId: string | null;
+  }>;
+  query(upstreamTaskId: string): Promise<VideoQueryResult>;
+}
+
 export interface DigitalHumanVideoRuntimeSettings {
   mode: VideoRenderMode;
   maxWaitMs: 8000;
