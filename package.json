@@ -24,6 +24,7 @@
     "@prisma/client": "^5.22.0",
     "ali-oss": "^6.23.0",
     "clsx": "^2.1.1",
+    "graceful-fs": "^4.2.11",
     "lm-avatar-chat-sdk": "1.1.4",
     "lucide-react": "^0.468.0",
     "next": "^15.0.0",
