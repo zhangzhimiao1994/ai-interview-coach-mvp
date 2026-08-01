@@ -32,6 +32,7 @@ cp .env.example .env
 ```env
 DATABASE_URL="file:./data/prod.db"
 PORT=3000
+APP_ORIGIN="https://interview.example.com"
 RUN_DB_SEED=false
 AI_PROVIDER=database
 AI_CONFIG_SECRET="replace-with-a-long-random-secret"
@@ -42,6 +43,7 @@ ADMIN_PASSWORD="replace-with-a-strong-password"
 
 `AI_CONFIG_SECRET` 不能使用 `change-this-before-production`。它用于加密后台保存的服务商 API Key。
 `RECRUITMENT_SESSION_SECRET` 不能使用占位值，生产环境至少 32 个字符。它独立于 `AI_CONFIG_SECRET`，用于加密 recruitment API credentials and browser session state。
+`APP_ORIGIN` 必须填写浏览器实际访问的唯一公开源（协议、域名和可选端口），例如 `https://interview.example.com`。不要填写路径、查询参数、账号密码或容器内部的 `http://0.0.0.0:3000`；反向代理内部使用 HTTP 时仍应填写外部 HTTPS 源。
 
 然后执行：
 
@@ -80,6 +82,7 @@ Docker 推荐 `.env`：
 ```env
 DATABASE_URL="file:/app/data/prod.db"
 PORT=3000
+APP_ORIGIN="https://interview.example.com"
 RUN_DB_SEED=false
 AI_PROVIDER=database
 AI_CONFIG_SECRET="replace-with-a-long-random-secret"

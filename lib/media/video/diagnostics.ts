@@ -12,7 +12,8 @@ import { createOssPrivateMediaStorage } from "@/lib/media/storage/ossStorage";
 import type { MediaStorageConfigRecord, PrivateMediaStorage } from "@/lib/media/storage/types";
 import {
   createVideoSpeechAsset,
-  parseVideoSpeechProfileStyle
+  parseVideoSpeechProfileStyle,
+  VideoSpeechAssetError
 } from "@/lib/media/video/speechAsset";
 import { parseDigitalHumanVideoRuntimeSettings } from "@/lib/media/video/settings";
 import type {
@@ -437,7 +438,6 @@ export interface DigitalHumanVideoConfigurationDependencies {
   findDefaultStorage: () => Promise<MediaStorageConfigRecord | null>;
   readConfigSecret: () => string;
   now: () => Date;
-  externalBoundary?: (name: string) => Promise<void>;
 }
 
 export async function inspectDigitalHumanVideoConfiguration(
@@ -506,7 +506,9 @@ export async function inspectDigitalHumanVideoConfiguration(
     return {
       configured: false,
       safeCode: sanitizeCode(
-        error instanceof MediaConfigurationError || error instanceof VideoConfigurationError
+        error instanceof MediaConfigurationError ||
+        error instanceof VideoConfigurationError ||
+        error instanceof VideoSpeechAssetError
           ? error.code
           : null,
         requested,

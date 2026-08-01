@@ -14,6 +14,11 @@ export function validateProductionEnvironment(env) {
   if (!env.DATABASE_URL?.trim()) {
     errors.push("DATABASE_URL must be set");
   }
+  if (!validApplicationOrigin(env.APP_ORIGIN)) {
+    errors.push(
+      "APP_ORIGIN must be an absolute http/https origin without credentials, path, query, or fragment"
+    );
+  }
   if (isMissingOrPlaceholder(env.ADMIN_PASSWORD)) {
     errors.push("ADMIN_PASSWORD must be set to a non-placeholder value");
   }
@@ -28,6 +33,24 @@ export function validateProductionEnvironment(env) {
 
   if (errors.length > 0) {
     throw new Error(`Invalid production configuration: ${errors.join("; ")}`);
+  }
+}
+
+function validApplicationOrigin(value) {
+  if (!value?.trim()) return false;
+  try {
+    const url = new URL(value.trim());
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      Boolean(url.hostname) &&
+      !url.username &&
+      !url.password &&
+      url.pathname === "/" &&
+      !url.search &&
+      !url.hash
+    );
+  } catch {
+    return false;
   }
 }
 

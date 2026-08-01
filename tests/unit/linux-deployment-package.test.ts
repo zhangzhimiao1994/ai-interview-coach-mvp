@@ -36,6 +36,7 @@ describe("linux deployment package", () => {
       ...process.env,
       NODE_ENV: "production",
       DATABASE_URL: "file:./data/prod.db",
+      APP_ORIGIN: "https://interview.example.com",
       AI_CONFIG_SECRET: "real-ai-config-secret",
       RECRUITMENT_SESSION_SECRET: "real-recruitment-session-secret-123456"
     };
@@ -111,6 +112,38 @@ describe("linux deployment package", () => {
     expect(readWorkspaceFile("package.json")).not.toContain('"duix-guiji"');
     expect(existsSync(join(root, "lib/client/duixAvatarClient.ts"))).toBe(false);
     expect(existsSync(join(root, "duix-guiji.d.ts"))).toBe(false);
+  });
+
+  it("requires a canonical public APP_ORIGIN in production", () => {
+    const script = join(root, "scripts/validate-production-env.mjs");
+    const baseEnvironment: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: "production",
+      DATABASE_URL: "file:./data/prod.db",
+      ADMIN_PASSWORD: "real-admin-password",
+      AI_CONFIG_SECRET: "real-ai-config-secret",
+      RECRUITMENT_SESSION_SECRET: "real-recruitment-session-secret-123456"
+    };
+
+    for (const APP_ORIGIN of [
+      undefined,
+      "https://interview.example.com/path",
+      "https://user:secret@interview.example.com",
+      "ftp://interview.example.com"
+    ]) {
+      const result = spawnSync(process.execPath, [script], {
+        env: { ...baseEnvironment, APP_ORIGIN },
+        encoding: "utf8"
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("APP_ORIGIN");
+    }
+
+    const valid = spawnSync(process.execPath, [script], {
+      env: { ...baseEnvironment, APP_ORIGIN: "https://interview.example.com" },
+      encoding: "utf8"
+    });
+    expect(valid.status).toBe(0);
   });
 
   it("uses cached and retryable npm installs during Docker builds", () => {

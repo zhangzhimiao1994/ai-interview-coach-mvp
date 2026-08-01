@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  createDigitalHumanVideoDiagnosticsHandler
+  createDigitalHumanVideoDiagnosticsHandler,
+  resolveDigitalHumanDiagnosticsExpectedOrigin
 } from "@/app/api/ai-services/digital-human-video-diagnostics/handler";
 
 describe("digital human video diagnostics route", () => {
@@ -59,6 +60,74 @@ describe("digital human video diagnostics route", () => {
         },
         body: validBody()
       }
+    ));
+
+    expect(response.status).toBe(403);
+    expect(serviceCalls).toBe(0);
+  });
+
+  it("allows browser localhost when an unconfigured development server binds to 0.0.0.0", async () => {
+    let serviceCalls = 0;
+    const handler = createDigitalHumanVideoDiagnosticsHandler({
+      authorizeAdmin: async () => ({ id: "admin-1", role: "ADMIN" }),
+      resolveExpectedOrigin: (request) =>
+        resolveDigitalHumanDiagnosticsExpectedOrigin(request, { NODE_ENV: "development" }),
+      runDiagnostic: async () => {
+        serviceCalls += 1;
+        return diagnostic();
+      }
+    });
+    const response = await handler(requestForUrl(
+      "http://0.0.0.0:3000/api/ai-services/digital-human-video-diagnostics",
+      "http://localhost:3000"
+    ));
+
+    expect(response.status).toBe(200);
+    expect(serviceCalls).toBe(1);
+  });
+
+  it("uses configured HTTPS public origin behind an internal HTTP reverse proxy", async () => {
+    const handler = createDigitalHumanVideoDiagnosticsHandler({
+      authorizeAdmin: async () => ({ id: "admin-1", role: "ADMIN" }),
+      resolveExpectedOrigin: (request) =>
+        resolveDigitalHumanDiagnosticsExpectedOrigin(request, {
+          NODE_ENV: "production",
+          APP_ORIGIN: "https://interview.example.com"
+        }),
+      runDiagnostic: async () => diagnostic()
+    });
+    const response = await handler(requestForUrl(
+      "http://127.0.0.1:3000/api/ai-services/digital-human-video-diagnostics",
+      "https://interview.example.com"
+    ));
+
+    expect(response.status).toBe(200);
+  });
+
+  it.each([
+    "https://interview.example.com/path",
+    "https://interview.example.com?query=1",
+    "https://user:secret@interview.example.com",
+    "ftp://interview.example.com",
+    "not-an-origin"
+  ])("fails closed for invalid configured APP_ORIGIN %s", async (appOrigin) => {
+    let serviceCalls = 0;
+    const handler = createDigitalHumanVideoDiagnosticsHandler({
+      authorizeAdmin: async () => ({ id: "admin-1", role: "ADMIN" }),
+      resolveExpectedOrigin: (request) =>
+        resolveDigitalHumanDiagnosticsExpectedOrigin(request, {
+          NODE_ENV: "production",
+          APP_ORIGIN: appOrigin
+        }),
+      runDiagnostic: async () => {
+        serviceCalls += 1;
+        return diagnostic();
+      }
+    });
+
+    const response = await handler(requestForUrl(
+      "http://127.0.0.1:3000/api/ai-services/digital-human-video-diagnostics",
+      "https://interview.example.com"
     ));
 
     expect(response.status).toBe(403);
@@ -185,5 +254,18 @@ function request(body: string, origin = "http://localhost") {
       Origin: origin
     },
     body
+  });
+}
+
+function requestForUrl(url: string, origin: string) {
+  return new Request(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Origin: origin,
+      "x-forwarded-host": "evil.example",
+      "x-forwarded-proto": "https"
+    },
+    body: validBody()
   });
 }

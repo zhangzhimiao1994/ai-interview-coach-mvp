@@ -202,19 +202,26 @@ describe("digital human video diagnostics", () => {
     expect(calls.audit).toBe(1);
   });
 
-  it("validates both providers for AUTO_RACE without calling external boundaries", async () => {
+  it("validates both providers for AUTO_RACE through only explicit local-data dependencies", async () => {
     const snapshot = configurationSnapshot("AUTO_RACE");
-    const result = await inspectDigitalHumanVideoConfiguration(undefined, {
-      ...configurationDependencies(snapshot),
-      externalBoundary: async () => {
-        throw new Error("CONFIG validation must not call an external boundary");
-      }
-    });
+    const localDependencies = configurationDependencies(snapshot);
+    const result = await inspectDigitalHumanVideoConfiguration(undefined, localDependencies);
 
     expect(result).toMatchObject({ configured: true, validatedProviders: [
       "LINGMOU_BROADCAST",
       "ALIBABA_EMO"
     ] });
+    expect(Object.keys(localDependencies).sort()).toEqual([
+      "findAsset",
+      "findDefaultStorage",
+      "findProfile",
+      "findStorage",
+      "loadRuntimeSettings",
+      "now",
+      "readConfigSecret",
+      "resolveTtsModel",
+      "resolveVideoModel"
+    ]);
   });
 
   it.each([
@@ -287,7 +294,11 @@ describe("digital human video diagnostics", () => {
       inspectDigitalHumanVideoConfiguration(undefined, configurationDependencies(badMapping))
     ]);
 
-    expect(results.every((result) => result.configured === false)).toBe(true);
+    expect(results[0]).toMatchObject({
+      configured: false,
+      safeCode: "VIDEO_SPEECH_PROFILE_STYLE_INVALID"
+    });
+    expect(results[1].configured).toBe(false);
   });
 
   it("returns NOT_CONFIGURED without preparing or submitting paid assets", async () => {

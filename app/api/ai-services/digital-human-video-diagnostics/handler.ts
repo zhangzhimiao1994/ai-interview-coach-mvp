@@ -37,6 +37,7 @@ export interface DigitalHumanVideoDiagnosticsRouteDependencies {
     input: DigitalHumanVideoDiagnosticRequest,
     actorId: string
   ) => Promise<DigitalHumanVideoDiagnosticResult>;
+  resolveExpectedOrigin: (request: Request) => readonly string[] | null;
 }
 
 export function createDigitalHumanVideoDiagnosticsHandler(
@@ -46,6 +47,8 @@ export function createDigitalHumanVideoDiagnosticsHandler(
     authorizeAdmin: authorizeDefaultAdmin,
     runDiagnostic: (input, actorId) =>
       runDigitalHumanVideoDiagnostic(input, actorId),
+    resolveExpectedOrigin: (request) =>
+      resolveDigitalHumanDiagnosticsExpectedOrigin(request, process.env),
     ...dependencyOverrides
   };
 
@@ -57,7 +60,7 @@ export function createDigitalHumanVideoDiagnosticsHandler(
     if (actor.role !== "ADMIN" && actor.role !== "SUPER_ADMIN") {
       return noStoreJson({ error: "Forbidden" }, 403);
     }
-    if (!isSameOrigin(request)) {
+    if (!isSameOrigin(request, deps.resolveExpectedOrigin(request))) {
       return noStoreJson({ error: "CSRF validation failed" }, 403);
     }
 
@@ -93,16 +96,73 @@ function noStoreJson(body: unknown, status: number) {
   });
 }
 
-function isSameOrigin(request: Request) {
-  const expected = effectiveOrigin(request);
+function isSameOrigin(request: Request, expectedOrigins: readonly string[] | null) {
+  if (!expectedOrigins || expectedOrigins.length === 0) return false;
   const origin = request.headers.get("origin");
-  if (origin) return normalizedOrigin(origin) === expected;
+  if (origin) return expectedOrigins.includes(normalizedOrigin(origin));
   const referer = request.headers.get("referer");
-  return referer ? normalizedOrigin(referer) === expected : false;
+  return referer ? expectedOrigins.includes(normalizedOrigin(referer)) : false;
 }
 
-function effectiveOrigin(request: Request) {
-  return new URL(request.url).origin;
+export function resolveDigitalHumanDiagnosticsExpectedOrigin(
+  request: Request,
+  env: { NODE_ENV?: string; APP_ORIGIN?: string } = process.env
+): readonly string[] | null {
+  const configured = env.APP_ORIGIN?.trim();
+  if (configured) {
+    const origin = configuredApplicationOrigin(configured);
+    return origin ? [origin] : null;
+  }
+  if (env.NODE_ENV === "production") return null;
+
+  let requestUrl: URL;
+  try {
+    requestUrl = new URL(request.url);
+  } catch {
+    return null;
+  }
+  if (
+    (requestUrl.protocol !== "http:" && requestUrl.protocol !== "https:") ||
+    !isLocalBindHostname(requestUrl.hostname)
+  ) {
+    return null;
+  }
+  const port = requestUrl.port ? `:${requestUrl.port}` : "";
+  return [
+    `${requestUrl.protocol}//localhost${port}`,
+    `${requestUrl.protocol}//127.0.0.1${port}`,
+    `${requestUrl.protocol}//[::1]${port}`,
+    `${requestUrl.protocol}//0.0.0.0${port}`
+  ];
+}
+
+function configuredApplicationOrigin(value: string) {
+  try {
+    const url = new URL(value);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      !url.hostname ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLocalBindHostname(hostname: string) {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "0.0.0.0" ||
+    normalized === "[::1]" ||
+    normalized === "::1";
 }
 
 function normalizedOrigin(value: string) {
