@@ -5,6 +5,7 @@ import { PrismaClient } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import { createPrismaRenderRepository } from "@/lib/media/video/renderRepository";
 import { createRenderOrchestrator } from "@/lib/media/video/renderOrchestrator";
+import { cacheProviderVideoOutput, deterministicVideoObjectKey } from "@/lib/media/video/renderCache";
 import type { AsyncAvatarVideoProvider, DigitalHumanVideoRuntimeSettings } from "@/lib/media/video/types";
 import { MediaConfigurationError, MediaProviderError } from "@/lib/media/errors";
 
@@ -41,12 +42,50 @@ describe("persistent video render orchestration", () => {
         'PRAGMA foreign_key_list("DigitalHumanRenderAttempt")'
       );
       expect(jobForeignKeys).toEqual(expect.arrayContaining([
-        expect.objectContaining({ from: "audioAssetId", table: "DigitalHumanMediaAsset" })
+        expect.objectContaining({ from: "audioAssetId", table: "DigitalHumanMediaAsset" }),
+        expect.objectContaining({ from: "winnerAttemptId", table: "DigitalHumanRenderAttempt" })
       ]));
       expect(attemptForeignKeys).toEqual(expect.arrayContaining([
         expect.objectContaining({ from: "interviewerProfileId", table: "InterviewerAvatarProfile" }),
         expect.objectContaining({ from: "portraitAssetId", table: "DigitalHumanMediaAsset" })
       ]));
+      const jobIndexes = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+        'PRAGMA index_list("DigitalHumanRenderJob")'
+      );
+      const attemptIndexes = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+        'PRAGMA index_list("DigitalHumanRenderAttempt")'
+      );
+      expect(jobIndexes.map(({ name }) => name)).toEqual(expect.arrayContaining([
+        "DigitalHumanRenderJob_audioAssetId_idx",
+        "DigitalHumanRenderJob_interviewerProfileId_idx",
+        "DigitalHumanRenderJob_winnerAttemptId_idx"
+      ]));
+      expect(attemptIndexes.map(({ name }) => name)).toEqual(expect.arrayContaining([
+        "DigitalHumanRenderAttempt_interviewerProfileId_idx",
+        "DigitalHumanRenderAttempt_portraitAssetId_idx"
+      ]));
+      await expect(prisma.$queryRawUnsafe('PRAGMA foreign_key_check')).resolves.toEqual([]);
+    });
+  });
+
+  it("migrates pre-hardening render and audit data then safely adopts an identical legacy plan", async () => {
+    await withLegacyHardenMigration(async (prisma) => {
+      expect(await prisma.digitalHumanVideoDiagnosticAudit.findUnique({ where: { id: "audit-legacy" } }))
+        .toMatchObject({ providerKind: "ALIBABA_EMO", billingOperationsJson: '["QUERY"]' });
+      expect(await prisma.digitalHumanRenderAttempt.findUnique({ where: { id: "attempt-legacy" } }))
+        .toMatchObject({ modelId: "model-lingmou", interviewerProfileId: "profile-primary" });
+      await expect(prisma.$queryRawUnsafe('PRAGMA foreign_key_check')).resolves.toEqual([]);
+
+      const repository = createPrismaRenderRepository(prisma);
+      await expect(repository.ensureJob(renderInput())).resolves.toMatchObject({ id: "render-legacy" });
+      expect(await prisma.digitalHumanRenderJob.findUnique({ where: { id: "render-legacy" } }))
+        .toMatchObject({ planFingerprint: "plan-fingerprint-1", audioAssetId: "audio-asset" });
+
+      await expect(repository.ensureJob({
+        ...renderInput(),
+        questionHash: "different-immutable-question-hash",
+        planFingerprint: "different-plan-fingerprint"
+      })).rejects.toMatchObject({ code: "VIDEO_RENDER_IDEMPOTENCY_CONFLICT" });
     });
   });
 
@@ -99,6 +138,81 @@ describe("persistent video render orchestration", () => {
           upstreamTaskId: null,
           claimToken: null
         });
+    });
+  });
+
+  it("sets firstQueriedAt atomically when the first query claim is acquired", async () => {
+    await withTemporaryPrisma(async (prisma) => {
+      await seedRenderParents(prisma);
+      const repository = createPrismaRenderRepository(prisma, { makeClaimToken: sequence("claim") });
+      await repository.ensureJob(renderInput());
+      const attempt = await prisma.digitalHumanRenderAttempt.findFirstOrThrow();
+      const observedAt = new Date("2026-08-01T00:00:03.000Z");
+      await prisma.digitalHumanRenderAttempt.update({
+        where: { id: attempt.id },
+        data: { status: "SUBMITTED", nextPollAt: observedAt }
+      });
+
+      await expect(repository.claimQuery(attempt.id, observedAt)).resolves.toMatchObject({ attemptId: attempt.id });
+      expect(await prisma.digitalHumanRenderAttempt.findUnique({ where: { id: attempt.id } }))
+        .toMatchObject({ status: "QUERYING", firstQueriedAt: observedAt });
+    });
+  });
+
+  it.each([
+    ["earlier trustworthy provider completion", "2026-08-01T00:00:02.500Z", "2026-08-01T00:00:02.000Z", "ALIBABA_EMO"],
+    ["a trustworthy completion tie", "2026-08-01T00:00:02.000Z", "2026-08-01T00:00:02.000Z", "LINGMOU_BROADCAST"],
+    ["an untrusted pre-submission EMO timestamp", null, "2026-07-31T23:59:59.000Z", "LINGMOU_BROADCAST"]
+  ] as const)("selects the production SQLite winner for %s", async (
+    _scenario,
+    lingmouCompletedAt,
+    emoCompletedAt,
+    expectedProvider
+  ) => {
+    await withTemporaryPrisma(async (prisma) => {
+      await seedRenderParents(prisma);
+      await seedSecondProviderProfile(prisma);
+      const repository = createPrismaRenderRepository(prisma);
+      const createdAt = new Date("2026-08-01T00:00:00.000Z");
+      const job = await repository.ensureJob({
+        ...renderInput(createdAt),
+        kind: "DYNAMIC",
+        planFingerprint: `winner-${expectedProvider}-${String(emoCompletedAt)}`,
+        attempts: [
+          renderInput(createdAt).attempts[0],
+          {
+            providerKind: "ALIBABA_EMO",
+            providerId: "provider-emo",
+            modelId: "model-emo",
+            interviewerProfileId: "profile-secondary",
+            interviewerName: "Secondary",
+            portraitAssetId: "portrait-secondary"
+          }
+        ]
+      });
+      await prisma.digitalHumanMediaAsset.createMany({ data: [
+        { id: "winner-video-lingmou", storageConfigId: "storage-1", objectKey: "winner-video-lingmou", mimeType: "video/mp4", byteLength: 200, purpose: "VIDEO_OUTPUT", updatedAt: new Date() },
+        { id: "winner-video-emo", storageConfigId: "storage-1", objectKey: "winner-video-emo", mimeType: "video/mp4", byteLength: 200, purpose: "VIDEO_OUTPUT", updatedAt: new Date() }
+      ] });
+      const observedAt = new Date("2026-08-01T00:00:03.000Z");
+      for (const providerKind of ["LINGMOU_BROADCAST", "ALIBABA_EMO"] as const) {
+        await prisma.digitalHumanRenderAttempt.update({
+          where: { renderJobId_providerKind: { renderJobId: job.id, providerKind } },
+          data: {
+            status: "SUCCEEDED",
+            submittedAt: createdAt,
+            completedAt: new Date(providerKind === "LINGMOU_BROADCAST" ? lingmouCompletedAt ?? "2026-08-01T00:00:03.500Z" : emoCompletedAt),
+            successObservedAt: observedAt,
+            outputAssetId: providerKind === "LINGMOU_BROADCAST" ? "winner-video-lingmou" : "winner-video-emo"
+          }
+        });
+      }
+
+      await repository.chooseWinner(job.id, observedAt);
+      await expect(repository.getSnapshot(job.id)).resolves.toMatchObject({
+        status: "READY",
+        winnerProvider: expectedProvider
+      });
     });
   });
 
@@ -203,7 +317,6 @@ describe("persistent video render orchestration", () => {
           } });
           return { assetId: id };
         },
-        discardCachedOutput: async () => undefined,
         encryptOutputUrl: (url) => ({ ciphertext: Buffer.from(url).toString("base64"), iv: "safe-iv", tag: "safe-tag" }),
         decryptOutputUrl: (envelope) => Buffer.from(envelope.ciphertext, "base64").toString("utf8")
       });
@@ -444,6 +557,38 @@ describe("persistent video render orchestration", () => {
     });
   });
 
+  it("keeps an EMO transport timeout retryable without terminalizing or falling back", async () => {
+    await withTemporaryPrisma(async (prisma) => {
+      await seedRenderParents(prisma);
+      await seedSecondProviderProfile(prisma);
+      const calls = { submit: [] as string[], query: [] as string[], signed: [] as string[] };
+      const providers = providerBoundaries(calls, { LINGMOU_BROADCAST: [], ALIBABA_EMO: [] });
+      providers.ALIBABA_EMO.query = async () => {
+        calls.query.push("ALIBABA_EMO");
+        throw new MediaProviderError("EMO transport timed out", "TONGYI", "ALIBABA_EMO_TIMEOUT", true);
+      };
+      const input = orchestratorInput("DYNAMIC");
+      input.runtimeSettings.mode = "EMO_ONLY";
+      const orchestrator = testOrchestrator(prisma, calls, providers);
+      const initial = await orchestrator.startDynamicRace(input);
+
+      await orchestrator.collectLateResults(initial.id, new Date("2026-08-01T00:00:08.000Z"));
+
+      expect(await prisma.digitalHumanRenderJob.findUnique({ where: { id: initial.id } }))
+        .toMatchObject({ status: "SUBMITTED", winnerAttemptId: null, fallbackReason: null });
+      expect(await prisma.digitalHumanRenderAttempt.findUnique({
+        where: { renderJobId_providerKind: { renderJobId: initial.id, providerKind: "ALIBABA_EMO" } }
+      })).toMatchObject({
+        status: "RUNNING",
+        failureKind: "RETRYABLE_QUERY",
+        safeErrorCode: "ALIBABA_EMO_TIMEOUT",
+        nextPollAt: new Date("2026-08-01T00:00:11.000Z"),
+        completedAt: null
+      });
+      expect(calls.query).toEqual(["ALIBABA_EMO"]);
+    });
+  });
+
   it("retries a transient cache failure from OUTPUT_PENDING without claiming READY", async () => {
     await withTemporaryPrisma(async (prisma) => {
       await seedRenderParents(prisma);
@@ -480,7 +625,7 @@ describe("persistent video render orchestration", () => {
     });
   });
 
-  it("compensates an unattached cache asset when completeCache loses ownership", async () => {
+  it("retains a deterministic cache asset when completeCache loses ownership", async () => {
     await withTemporaryPrisma(async (prisma) => {
       await seedRenderParents(prisma);
       await seedSecondProviderProfile(prisma);
@@ -490,29 +635,23 @@ describe("persistent video render orchestration", () => {
         ALIBABA_EMO: []
       });
       const base = createPrismaRenderRepository(prisma, { makeClaimToken: sequence("claim") });
-      const discarded: string[] = [];
       const dependencies = testDependencies(prisma, calls, providers);
       const orchestrator = createRenderOrchestrator({
         ...dependencies,
-        repository: { ...base, completeCache: async () => false },
-        discardCachedOutput: async ({ assetId }) => {
-          discarded.push(assetId);
-          await prisma.digitalHumanMediaAsset.delete({ where: { id: assetId } });
-        }
+        repository: { ...base, completeCache: async () => false }
       });
       const initial = await orchestrator.startDynamicRace(orchestratorInput("DYNAMIC"));
       const result = await orchestrator.advance(initial.id, new Date("2026-08-01T00:00:03.000Z"));
 
       expect(result.status).not.toBe("READY");
-      expect(discarded).toHaveLength(1);
-      expect(await prisma.digitalHumanMediaAsset.count({ where: { purpose: "VIDEO_OUTPUT" } })).toBe(0);
+      expect(await prisma.digitalHumanMediaAsset.count({ where: { purpose: "VIDEO_OUTPUT" } })).toBe(1);
       expect(await prisma.digitalHumanRenderAttempt.findUnique({
         where: { renderJobId_providerKind: { renderJobId: initial.id, providerKind: "LINGMOU_BROADCAST" } }
       })).toMatchObject({ status: "OUTPUT_PENDING", outputAssetId: null, failureKind: "RETRYABLE_CACHE" });
     });
   });
 
-  it("compensates a cache asset when the database attach transaction fails", async () => {
+  it("retains a deterministic cache asset when the attach outcome is uncertain", async () => {
     await withTemporaryPrisma(async (prisma) => {
       await seedRenderParents(prisma);
       await seedSecondProviderProfile(prisma);
@@ -522,7 +661,6 @@ describe("persistent video render orchestration", () => {
         ALIBABA_EMO: []
       });
       const base = createPrismaRenderRepository(prisma, { makeClaimToken: sequence("claim") });
-      const discarded: string[] = [];
       const dependencies = testDependencies(prisma, calls, providers);
       const orchestrator = createRenderOrchestrator({
         ...dependencies,
@@ -531,20 +669,163 @@ describe("persistent video render orchestration", () => {
           completeCache: async () => {
             throw new Error("database attach transaction unavailable");
           }
-        },
-        discardCachedOutput: async ({ assetId }) => {
-          discarded.push(assetId);
-          await prisma.digitalHumanMediaAsset.delete({ where: { id: assetId } });
         }
       });
       const initial = await orchestrator.startDynamicRace(orchestratorInput("DYNAMIC"));
       await orchestrator.advance(initial.id, new Date("2026-08-01T00:00:03.000Z"));
 
-      expect(discarded).toHaveLength(1);
-      expect(await prisma.digitalHumanMediaAsset.count({ where: { purpose: "VIDEO_OUTPUT" } })).toBe(0);
+      expect(await prisma.digitalHumanMediaAsset.count({ where: { purpose: "VIDEO_OUTPUT" } })).toBe(1);
       expect(await prisma.digitalHumanRenderAttempt.findUnique({
         where: { renderJobId_providerKind: { renderJobId: initial.id, providerKind: "LINGMOU_BROADCAST" } }
       })).toMatchObject({ status: "OUTPUT_PENDING", outputAssetId: null, failureKind: "RETRYABLE_CACHE" });
+    });
+  });
+
+  it("never lets an expired cache owner delete the asset attached by its successor", async () => {
+    await withTemporaryPrisma(async (prisma) => {
+      await seedRenderParents(prisma);
+      await seedSecondProviderProfile(prisma);
+      const calls = { submit: [] as string[], query: [] as string[], signed: [] as string[] };
+      const providers = providerBoundaries(calls, {
+        LINGMOU_BROADCAST: [{ status: "SUCCEEDED", videoUrl: "opaque-interleaved-cache", completedAt: null, traceId: null, safeErrorCode: null }],
+        ALIBABA_EMO: []
+      });
+      const repository = createPrismaRenderRepository(prisma, {
+        claimLeaseMs: 30_000,
+        makeClaimToken: sequence("claim")
+      });
+      const dependencies = testDependencies(prisma, calls, providers);
+      let releaseFirstOwner!: () => void;
+      let firstAssetReady!: () => void;
+      const firstAssetReadyPromise = new Promise<void>((resolve) => { firstAssetReady = resolve; });
+      const firstOwnerGate = new Promise<void>((resolve) => { releaseFirstOwner = resolve; });
+      let sharedAssetId = "";
+      const firstOwner = createRenderOrchestrator({
+        ...dependencies,
+        repository,
+        cacheOutput: async ({ attemptId }) => {
+          sharedAssetId = `video-${attemptId}`;
+          await prisma.digitalHumanMediaAsset.create({ data: {
+            id: sharedAssetId,
+            storageConfigId: "storage-1",
+            objectKey: `output-${attemptId}`,
+            mimeType: "video/mp4",
+            byteLength: 200,
+            purpose: "VIDEO_OUTPUT",
+            expiresAt: new Date("2026-08-02T00:00:00.000Z"),
+            updatedAt: new Date()
+          } });
+          firstAssetReady();
+          await firstOwnerGate;
+          return { assetId: sharedAssetId };
+        }
+      });
+      const secondOwner = createRenderOrchestrator({
+        ...dependencies,
+        repository,
+        cacheOutput: async () => ({ assetId: sharedAssetId })
+      });
+      const initial = await firstOwner.startDynamicRace(orchestratorInput("DYNAMIC"));
+      const firstAdvance = firstOwner.advance(initial.id, new Date("2026-08-01T00:00:03.000Z"));
+      await firstAssetReadyPromise;
+
+      await secondOwner.collectLateResults(initial.id, new Date("2026-08-01T00:00:33.000Z"));
+      releaseFirstOwner();
+      await firstAdvance;
+
+      const attempt = await prisma.digitalHumanRenderAttempt.findUnique({
+        where: { renderJobId_providerKind: { renderJobId: initial.id, providerKind: "LINGMOU_BROADCAST" } }
+      });
+      expect(attempt).toMatchObject({ status: "SUCCEEDED", outputAssetId: sharedAssetId });
+      expect(await prisma.digitalHumanMediaAsset.findUnique({ where: { id: sharedAssetId } }))
+        .toMatchObject({ cleanupStatus: "ACTIVE", purpose: "VIDEO_OUTPUT" });
+    });
+  });
+
+  it("replaces invalid deterministic cache metadata and reuses only a current valid asset", async () => {
+    await withTemporaryPrisma(async (prisma) => {
+      await seedRenderParents(prisma);
+      await prisma.mediaStorageConfig.create({ data: {
+        id: "storage-2",
+        displayName: "Other private storage",
+        providerKind: "ALI_OSS",
+        endpoint: "other-oss.example.invalid",
+        bucket: "other-private-bucket",
+        updatedAt: new Date()
+      } });
+      const observedAt = new Date("2026-08-01T00:00:03.000Z");
+      const uploads: string[] = [];
+      let fetchCalls = 0;
+      const dependencies = {
+        client: prisma,
+        readConfigSecret: () => "not-used-by-controlled-storage",
+        createStorage: () => ({
+          putObject: async (input: { objectKey?: string; body: Buffer }) => {
+            uploads.push(input.objectKey!);
+            return { objectKey: input.objectKey!, byteLength: input.body.byteLength };
+          },
+          removeObject: async () => undefined
+        })
+      };
+      const invalidCases = [
+        { name: "expired", changes: { expiresAt: observedAt } },
+        { name: "purpose", changes: { purpose: "PORTRAIT" } },
+        { name: "mime", changes: { mimeType: "video/webm" } },
+        { name: "storage", changes: { storageConfigId: "storage-2" } },
+        { name: "cleanup", changes: { cleanupStatus: "PENDING" } }
+      ];
+
+      for (const invalid of invalidCases) {
+        const attemptId = `attempt-${invalid.name}`;
+        const objectKey = deterministicVideoObjectKey(attemptId, "storage-1");
+        await prisma.digitalHumanMediaAsset.create({ data: {
+          id: `asset-${invalid.name}`,
+          storageConfigId: "storage-1",
+          objectKey,
+          mimeType: "video/mp4",
+          byteLength: 200,
+          purpose: "VIDEO_OUTPUT",
+          cleanupStatus: "ACTIVE",
+          expiresAt: new Date("2026-08-02T00:00:00.000Z"),
+          updatedAt: new Date(),
+          ...invalid.changes
+        } });
+        const cached = await cacheProviderVideoOutput({
+          attemptId,
+          videoUrl: `https://provider.example.invalid/${invalid.name}.mp4`,
+          observedAt,
+          fetcher: async () => {
+            fetchCalls += 1;
+            return new Response(Buffer.from([1, 2, 3]), {
+              status: 200,
+              headers: { "content-type": "video/mp4", "content-length": "3" }
+            });
+          }
+        }, dependencies);
+        expect(cached.assetId).toBe(`asset-${invalid.name}`);
+        expect(await prisma.digitalHumanMediaAsset.findUnique({ where: { id: cached.assetId } }))
+          .toMatchObject({
+            storageConfigId: "storage-1",
+            objectKey,
+            mimeType: "video/mp4",
+            byteLength: 3,
+            purpose: "VIDEO_OUTPUT",
+            cleanupStatus: "ACTIVE",
+            expiresAt: new Date("2026-08-02T00:00:03.000Z")
+          });
+
+        await cacheProviderVideoOutput({
+          attemptId,
+          videoUrl: `https://provider.example.invalid/${invalid.name}.mp4`,
+          observedAt,
+          fetcher: async () => {
+            throw new Error("a valid cache row must not be downloaded again");
+          }
+        }, dependencies);
+      }
+
+      expect(fetchCalls).toBe(invalidCases.length);
+      expect(uploads).toHaveLength(invalidCases.length);
     });
   });
 
@@ -713,7 +994,6 @@ function testDependencies(
       } });
       return { assetId: id };
     },
-    discardCachedOutput: async () => undefined,
     encryptOutputUrl: (url) => ({ ciphertext: Buffer.from(url).toString("base64"), iv: "safe-iv", tag: "safe-tag" }),
     decryptOutputUrl: (envelope) => Buffer.from(envelope.ciphertext, "base64").toString("utf8")
   };
@@ -797,6 +1077,74 @@ async function withTemporaryPrisma(run: (prisma: PrismaClient) => Promise<void>)
       .join("\n");
     writeFileSync(setupPath, sql, "utf8");
     execFileSync(process.execPath, [prismaCliPath, "db", "execute", "--file", setupPath, "--url", databaseUrl], {
+      cwd: prismaDirectory,
+      stdio: "pipe"
+    });
+    prisma = new PrismaClient({ datasourceUrl: databaseUrl });
+    await run(prisma);
+  } finally {
+    try {
+      await prisma?.$disconnect();
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }
+}
+
+async function withLegacyHardenMigration(run: (prisma: PrismaClient) => Promise<void>) {
+  const temporaryDirectory = mkdtempSync(join(prismaDirectory, ".video-render-legacy-"));
+  const databaseUrl = `file:./${basename(temporaryDirectory)}/service.db`;
+  let prisma: PrismaClient | undefined;
+  try {
+    const migrationNames = readdirSync(migrationsDirectory)
+      .filter((directory) => /^\d/.test(directory))
+      .sort();
+    const hardeningMigration = "20260801150000_harden_video_render_state";
+    const beforeHardeningPath = join(temporaryDirectory, "before-hardening.sql");
+    writeFileSync(beforeHardeningPath, migrationNames
+      .filter((directory) => directory < hardeningMigration)
+      .map((directory) => readFileSync(join(migrationsDirectory, directory, "migration.sql"), "utf8"))
+      .join("\n"), "utf8");
+    execFileSync(process.execPath, [prismaCliPath, "db", "execute", "--file", beforeHardeningPath, "--url", databaseUrl], {
+      cwd: prismaDirectory,
+      stdio: "pipe"
+    });
+
+    prisma = new PrismaClient({ datasourceUrl: databaseUrl });
+    await seedRenderParents(prisma);
+    await prisma.digitalHumanVideoDiagnosticAudit.create({ data: {
+      id: "audit-legacy",
+      actorId: "admin-legacy",
+      providerKind: "ALIBABA_EMO",
+      status: "PASSED",
+      safeCode: "VIDEO_DIAGNOSTIC_OK",
+      checkedAt: new Date("2026-08-01T00:00:00.000Z"),
+      billingOperationsJson: '["QUERY"]',
+      costSemantics: "BILLABLE"
+    } });
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO "DigitalHumanRenderJob" (
+        "id", "trainingSessionId", "questionId", "questionHash", "cacheKey", "kind", "mode", "status",
+        "interviewerProfileId", "audioAssetId", "deadlineAt", "createdAt", "updatedAt"
+      ) VALUES (
+        'render-legacy', 'session-1', 'question-1', 'hash-1', 'cache-1', 'PRESET', 'AUTO_RACE', 'PENDING',
+        'profile-primary', 'audio-asset', '2026-08-01T00:00:08.000Z', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO "DigitalHumanRenderAttempt" (
+        "id", "renderJobId", "providerKind", "providerId", "modelId", "interviewerName",
+        "interviewerProfileId", "portraitAssetId", "status", "createdAt", "updatedAt"
+      ) VALUES (
+        'attempt-legacy', 'render-legacy', 'LINGMOU_BROADCAST', 'provider-lingmou', 'model-lingmou', 'Primary',
+        'profile-primary', 'portrait-asset', 'PENDING', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z'
+      )
+    `);
+    await prisma.$disconnect();
+    prisma = undefined;
+
+    const hardeningPath = join(migrationsDirectory, hardeningMigration, "migration.sql");
+    execFileSync(process.execPath, [prismaCliPath, "db", "execute", "--file", hardeningPath, "--url", databaseUrl], {
       cwd: prismaDirectory,
       stdio: "pipe"
     });

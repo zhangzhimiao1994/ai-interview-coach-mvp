@@ -500,7 +500,7 @@ describe("Alibaba EMO configuration", () => {
     expect(JSON.stringify(caught)).not.toContain(signedPortraitUrl);
   });
 
-  it("maps an aborted query request to the shared timeout result", async () => {
+  it("throws a retryable provider error when a query transport times out", async () => {
     let observedSignal: AbortSignal | null = null;
     let canceled = 0;
     const provider = createAlibabaEmoProvider(model(), {
@@ -516,12 +516,11 @@ describe("Alibaba EMO configuration", () => {
       readConfigSecret: () => configSecret
     });
 
-    await expect(provider.query("task-01")).resolves.toEqual({
-      status: "FAILED",
-      videoUrl: null,
-      safeErrorCode: "ALIBABA_EMO_TIMEOUT",
-      traceId: null,
-      completedAt: null
+    await expect(provider.query("task-01")).rejects.toMatchObject({
+      name: "MediaProviderError",
+      code: "ALIBABA_EMO_TIMEOUT",
+      retryable: true,
+      traceId: null
     });
     expect(observedSignal?.aborted).toBe(true);
     expect(canceled).toBe(1);
@@ -557,7 +556,7 @@ describe("Alibaba EMO configuration", () => {
     }]);
   });
 
-  it("maps query fetch failures into a safe shared failed result", async () => {
+  it("throws a retryable provider error when a query transport fails", async () => {
     const provider = createAlibabaEmoProvider(model(), {
       fetcher: async () => {
         throw new Error(`network ${apiKey} ${signedAudioUrl}`);
@@ -565,12 +564,25 @@ describe("Alibaba EMO configuration", () => {
       readConfigSecret: () => configSecret
     });
 
-    await expect(provider.query("task-01")).resolves.toEqual({
-      status: "FAILED",
-      videoUrl: null,
-      safeErrorCode: "ALIBABA_EMO_UPSTREAM_FAILED",
-      traceId: null,
-      completedAt: null
+    await expect(provider.query("task-01")).rejects.toMatchObject({
+      name: "MediaProviderError",
+      code: "ALIBABA_EMO_UPSTREAM_FAILED",
+      retryable: true,
+      traceId: null
+    });
+  });
+
+  it("throws a retryable provider error for a query HTTP upstream failure", async () => {
+    const provider = createAlibabaEmoProvider(model(), {
+      fetcher: async () => response({ request_id: "trace-upstream" }, 503),
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.query("task-01")).rejects.toMatchObject({
+      name: "MediaProviderError",
+      code: "ALIBABA_EMO_UPSTREAM_FAILED",
+      retryable: true,
+      traceId: "trace-upstream"
     });
   });
 

@@ -209,9 +209,27 @@ export function createPrismaRenderRepository(
               questionId: input.questionId,
               cacheKey: input.cacheKey
             }
-          }
+          },
+          include: { attempts: true }
         });
-        if (!existing || existing.planFingerprint !== input.planFingerprint) {
+        if (!existing) {
+          throw new RenderPersistenceError("VIDEO_RENDER_IDEMPOTENCY_CONFLICT");
+        }
+        if (existing.planFingerprint === "") {
+          if (!matchesLegacyPlan(existing, input)) {
+            throw new RenderPersistenceError("VIDEO_RENDER_IDEMPOTENCY_CONFLICT");
+          }
+          const adopted = await client.digitalHumanRenderJob.updateMany({
+            where: { id: existing.id, planFingerprint: "" },
+            data: { planFingerprint: input.planFingerprint }
+          });
+          if (adopted.count !== 1) {
+            const raced = await client.digitalHumanRenderJob.findUnique({ where: { id: existing.id } });
+            if (raced?.planFingerprint !== input.planFingerprint) {
+              throw new RenderPersistenceError("VIDEO_RENDER_IDEMPOTENCY_CONFLICT");
+            }
+          }
+        } else if (existing.planFingerprint !== input.planFingerprint) {
           throw new RenderPersistenceError("VIDEO_RENDER_IDEMPOTENCY_CONFLICT");
         }
         return snapshot(client, existing.id);
@@ -377,10 +395,6 @@ export function createPrismaRenderRepository(
     },
 
     async recordQuery(input) {
-      const current = await client.digitalHumanRenderAttempt.findUnique({
-        where: { id: input.attemptId },
-        select: { firstQueriedAt: true, queryAttemptCount: true }
-      });
       const result = await client.digitalHumanRenderAttempt.updateMany({
         where: {
           id: input.attemptId,
@@ -391,8 +405,7 @@ export function createPrismaRenderRepository(
         data: {
           status: input.status === "SUCCEEDED" ? "OUTPUT_PENDING" : input.status,
           traceId: input.traceId,
-          firstQueriedAt: current?.firstQueriedAt ?? input.observedAt,
-          queryAttemptCount: (current?.queryAttemptCount ?? 0) + 1,
+          queryAttemptCount: { increment: 1 },
           completedAt: input.completedAt,
           successObservedAt: input.status === "SUCCEEDED" ? input.observedAt : null,
           nextPollAt: input.status === "FAILED"
@@ -416,10 +429,6 @@ export function createPrismaRenderRepository(
     },
 
     async releaseQuery(input) {
-      const current = await client.digitalHumanRenderAttempt.findUnique({
-        where: { id: input.attemptId },
-        select: { firstQueriedAt: true, queryAttemptCount: true }
-      });
       const result = await client.digitalHumanRenderAttempt.updateMany({
         where: {
           id: input.attemptId,
@@ -429,8 +438,7 @@ export function createPrismaRenderRepository(
         },
         data: {
           status: "RUNNING",
-          firstQueriedAt: current?.firstQueriedAt ?? input.observedAt,
-          queryAttemptCount: (current?.queryAttemptCount ?? 0) + 1,
+          queryAttemptCount: { increment: 1 },
           nextPollAt: input.nextPollAt,
           safeErrorCode: finiteSafeCode(input.safeErrorCode),
           failureKind: "RETRYABLE_QUERY",
@@ -478,10 +486,6 @@ export function createPrismaRenderRepository(
     },
 
     async releaseCache(input) {
-      const current = await client.digitalHumanRenderAttempt.findUnique({
-        where: { id: input.attemptId },
-        select: { cacheAttemptCount: true }
-      });
       const result = await client.digitalHumanRenderAttempt.updateMany({
         where: {
           id: input.attemptId,
@@ -491,7 +495,7 @@ export function createPrismaRenderRepository(
         },
         data: {
           status: "OUTPUT_PENDING",
-          cacheAttemptCount: (current?.cacheAttemptCount ?? 0) + 1,
+          cacheAttemptCount: { increment: 1 },
           nextPollAt: input.nextPollAt,
           safeErrorCode: finiteSafeCode(input.safeErrorCode),
           failureKind: "RETRYABLE_CACHE",
@@ -582,34 +586,91 @@ async function claimOperation(
 ): Promise<RenderOperationClaim | null> {
   const claimToken = input.makeClaimToken();
   const claimExpiresAt = new Date(input.observedAt.getTime() + input.claimLeaseMs);
-  const result = await client.digitalHumanRenderAttempt.updateMany({
-    where: {
-      id: input.attemptId,
-      ...(input.requireDuePoll ? { nextPollAt: { lte: input.observedAt } } : {}),
-      OR: [
-        { status: { in: input.eligible }, claimOperation: null },
-        ...(input.allowExpiredReclaim === false ? [] : [{
-          status: input.activeStatus,
-          claimOperation: input.operation,
-          claimExpiresAt: { lte: input.observedAt }
-        }])
-      ]
-    },
-    data: {
-      status: input.activeStatus,
-      claimOperation: input.operation,
-      claimToken,
-      claimExpiresAt
+  return client.$transaction(async (tx) => {
+    const result = await tx.digitalHumanRenderAttempt.updateMany({
+      where: {
+        id: input.attemptId,
+        ...(input.requireDuePoll ? { nextPollAt: { lte: input.observedAt } } : {}),
+        OR: [
+          { status: { in: input.eligible }, claimOperation: null },
+          ...(input.allowExpiredReclaim === false ? [] : [{
+            status: input.activeStatus,
+            claimOperation: input.operation,
+            claimExpiresAt: { lte: input.observedAt }
+          }])
+        ]
+      },
+      data: {
+        status: input.activeStatus,
+        claimOperation: input.operation,
+        claimToken,
+        claimExpiresAt
+      }
+    });
+    if (result.count !== 1) return null;
+    if (input.operation === "QUERY") {
+      await tx.digitalHumanRenderAttempt.updateMany({
+        where: { id: input.attemptId, claimToken, firstQueriedAt: null },
+        data: { firstQueriedAt: input.observedAt }
+      });
     }
+    const attempt = await tx.digitalHumanRenderAttempt.findUnique({
+      where: { id: input.attemptId },
+      select: { renderJobId: true }
+    });
+    return attempt
+      ? { attemptId: input.attemptId, renderJobId: attempt.renderJobId, claimToken, claimExpiresAt }
+      : null;
   });
-  if (result.count !== 1) return null;
-  const attempt = await client.digitalHumanRenderAttempt.findUnique({
-    where: { id: input.attemptId },
-    select: { renderJobId: true }
+}
+
+function matchesLegacyPlan(
+  existing: {
+    trainingSessionId: string;
+    questionId: string;
+    questionHash: string;
+    cacheKey: string;
+    kind: string;
+    mode: string;
+    interviewerProfileId: string;
+    audioAssetId: string | null;
+    createdAt: Date;
+    deadlineAt: Date;
+    attempts: Array<{
+      providerKind: string;
+      providerId: string;
+      modelId: string;
+      interviewerProfileId: string | null;
+      interviewerName: string;
+      portraitAssetId: string | null;
+    }>;
+  },
+  input: EnsurePersistedRenderInput
+) {
+  if (
+    existing.trainingSessionId !== input.trainingSessionId ||
+    existing.questionId !== input.questionId ||
+    existing.questionHash !== input.questionHash ||
+    existing.cacheKey !== input.cacheKey ||
+    existing.kind !== input.kind ||
+    existing.mode !== input.mode ||
+    existing.interviewerProfileId !== input.interviewerProfileId ||
+    existing.audioAssetId !== input.audioAssetId ||
+    existing.createdAt.getTime() !== input.createdAt.getTime() ||
+    existing.deadlineAt.getTime() !== input.deadlineAt.getTime() ||
+    existing.attempts.length !== input.attempts.length
+  ) return false;
+  const persistedAttempts = [...existing.attempts].sort((a, b) => a.providerKind.localeCompare(b.providerKind));
+  const requestedAttempts = [...input.attempts].sort((a, b) => a.providerKind.localeCompare(b.providerKind));
+  return persistedAttempts.every((attempt, index) => {
+    const requested = requestedAttempts[index];
+    return attempt.providerKind === requested.providerKind &&
+      attempt.providerId === requested.providerId &&
+      attempt.modelId === requested.modelId &&
+      attempt.interviewerProfileId === requested.interviewerProfileId &&
+      attempt.interviewerName === requested.interviewerName &&
+      attempt.portraitAssetId === requested.portraitAssetId;
   });
-  return attempt
-    ? { attemptId: input.attemptId, renderJobId: attempt.renderJobId, claimToken, claimExpiresAt }
-    : null;
 }
 
 async function snapshot(client: RenderPrisma, id: string): Promise<RenderSnapshot> {

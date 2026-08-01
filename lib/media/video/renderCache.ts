@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/db/prisma";
+import type { PrismaClient } from "@prisma/client";
+import { prisma as defaultPrisma } from "@/lib/db/prisma";
 import { readAiConfigSecret } from "@/lib/domain/aiServices";
-import { persistDigitalHumanMediaAsset } from "@/lib/media/storage/mediaAssets";
 import { createOssPrivateMediaStorage } from "@/lib/media/storage/ossStorage";
+import type { MediaStorageConfigRecord, PrivateMediaStorage } from "@/lib/media/storage/types";
 
 const maxVideoBytes = 100 * 1024 * 1024;
 const outputLifetimeMs = 24 * 60 * 60 * 1000;
@@ -13,17 +13,20 @@ export async function cacheProviderVideoOutput(input: {
   videoUrl: string;
   observedAt: Date;
   fetcher?: typeof fetch;
-}) {
+}, dependencyOverrides: Partial<RenderCacheDependencies> = {}) {
+  const client = dependencyOverrides.client ?? defaultPrisma;
+  const readConfigSecret = dependencyOverrides.readConfigSecret ?? readAiConfigSecret;
+  const createStorage = dependencyOverrides.createStorage ?? createOssPrivateMediaStorage;
   const url = new URL(input.videoUrl);
   if (url.protocol !== "https:") throw new Error("VIDEO_OUTPUT_URL_INVALID");
-  const config = await prisma.mediaStorageConfig.findFirst({
+  const config = await client.mediaStorageConfig.findFirst({
     where: { enabled: true, providerKind: "ALI_OSS" },
     orderBy: { createdAt: "asc" }
   });
   if (!config) throw new Error("VIDEO_OUTPUT_STORAGE_NOT_CONFIGURED");
-  const objectKey = deterministicVideoObjectKey(input.attemptId);
-  const existing = await prisma.digitalHumanMediaAsset.findUnique({ where: { objectKey } });
-  if (existing?.cleanupStatus === "ACTIVE") {
+  const objectKey = deterministicVideoObjectKey(input.attemptId, config.id);
+  const existing = await client.digitalHumanMediaAsset.findUnique({ where: { objectKey } });
+  if (isReusableVideoAsset(existing, config.id, input.observedAt)) {
     return { assetId: existing.id, objectKey, created: false };
   }
   const response = await (input.fetcher ?? fetch)(url, { redirect: "error" });
@@ -35,7 +38,7 @@ export async function cacheProviderVideoOutput(input: {
   const body = Buffer.from(await response.arrayBuffer());
   if (body.length === 0 || body.length > maxVideoBytes) throw new Error("VIDEO_OUTPUT_TOO_LARGE");
   const expiresAt = new Date(input.observedAt.getTime() + outputLifetimeMs);
-  const storage = createOssPrivateMediaStorage(config, readAiConfigSecret());
+  const storage = createStorage(config, readConfigSecret());
   const uploaded = await storage.putObject({
     purpose: "VIDEO_OUTPUT",
     body,
@@ -43,46 +46,67 @@ export async function cacheProviderVideoOutput(input: {
     expiresAt,
     objectKey
   });
-  try {
-    const asset = await persistDigitalHumanMediaAsset({
+  const asset = await client.$transaction((tx) => tx.digitalHumanMediaAsset.upsert({
+    where: { objectKey },
+    create: {
       storageConfigId: config.id,
       objectKey: uploaded.objectKey,
       mimeType: "video/mp4",
       byteLength: uploaded.byteLength,
       purpose: "VIDEO_OUTPUT",
       expiresAt
-    });
-    return { assetId: asset.id, objectKey, created: true };
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const raced = await prisma.digitalHumanMediaAsset.findUnique({ where: { objectKey } });
-      if (raced?.cleanupStatus === "ACTIVE") {
-        return { assetId: raced.id, objectKey, created: false };
-      }
+    },
+    update: {
+      storageConfigId: config.id,
+      mimeType: "video/mp4",
+      byteLength: uploaded.byteLength,
+      purpose: "VIDEO_OUTPUT",
+      expiresAt,
+      cleanupStatus: "ACTIVE",
+      cleanedAt: null
     }
-    await storage.removeObject(uploaded.objectKey).catch(() => undefined);
-    throw error;
-  }
+  }));
+  return { assetId: asset.id, objectKey, created: existing === null };
 }
 
-export function deterministicVideoObjectKey(attemptId: string) {
-  const digest = createHash("sha256").update(attemptId).digest("hex");
+export function deterministicVideoObjectKey(attemptId: string, storageConfigId: string) {
+  const digest = createHash("sha256")
+    .update(storageConfigId)
+    .update("\0")
+    .update(attemptId)
+    .digest("hex");
   return `media/video/render/${digest}.mp4`;
 }
 
-export async function discardCachedVideoOutput(input: {
-  assetId: string;
-  objectKey?: string;
-  created?: boolean;
-}) {
-  if (input.created === false) return;
-  const asset = await prisma.digitalHumanMediaAsset.findUnique({ where: { id: input.assetId } });
-  if (!asset || (input.objectKey && asset.objectKey !== input.objectKey)) return;
-  const references = await prisma.digitalHumanRenderAttempt.count({ where: { outputAssetId: asset.id } });
-  if (references > 0) return;
-  const config = await prisma.mediaStorageConfig.findUnique({ where: { id: asset.storageConfigId } });
-  await prisma.digitalHumanMediaAsset.deleteMany({ where: { id: asset.id } });
-  if (config?.enabled) {
-    await createOssPrivateMediaStorage(config, readAiConfigSecret()).removeObject(asset.objectKey);
-  }
+type RenderCacheDependencies = {
+  client: PrismaClient;
+  readConfigSecret: () => string;
+  createStorage: (
+    config: MediaStorageConfigRecord,
+    configSecret: string
+  ) => Pick<PrivateMediaStorage, "putObject">;
+};
+
+type ReusableVideoAsset = {
+  id: string;
+  storageConfigId: string;
+  mimeType: string;
+  byteLength: number;
+  purpose: string;
+  expiresAt: Date | null;
+  cleanupStatus: string;
+};
+
+function isReusableVideoAsset(
+  asset: ReusableVideoAsset | null,
+  storageConfigId: string,
+  observedAt: Date
+): asset is ReusableVideoAsset {
+  return asset?.storageConfigId === storageConfigId &&
+    asset.purpose === "VIDEO_OUTPUT" &&
+    asset.mimeType === "video/mp4" &&
+    asset.byteLength > 0 &&
+    asset.cleanupStatus === "ACTIVE" &&
+    asset.expiresAt !== null &&
+    asset.expiresAt > observedAt;
 }

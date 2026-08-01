@@ -24,7 +24,8 @@ CREATE TABLE "DigitalHumanRenderJob" (
     "updatedAt" DATETIME NOT NULL,
     FOREIGN KEY ("trainingSessionId") REFERENCES "TrainingSession"("id") ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY ("interviewerProfileId") REFERENCES "InterviewerAvatarProfile"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
-    FOREIGN KEY ("audioAssetId") REFERENCES "DigitalHumanMediaAsset"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+    FOREIGN KEY ("audioAssetId") REFERENCES "DigitalHumanMediaAsset"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+    FOREIGN KEY ("winnerAttemptId") REFERENCES "DigitalHumanRenderAttempt"("id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 CREATE TABLE "DigitalHumanRenderAttempt" (
@@ -87,8 +88,13 @@ DROP TABLE "_OldDigitalHumanRenderJob";
 
 CREATE UNIQUE INDEX "DigitalHumanRenderJob_trainingSessionId_questionId_cacheKey_key" ON "DigitalHumanRenderJob"("trainingSessionId", "questionId", "cacheKey");
 CREATE INDEX "DigitalHumanRenderJob_status_deadlineAt_idx" ON "DigitalHumanRenderJob"("status", "deadlineAt");
+CREATE INDEX "DigitalHumanRenderJob_audioAssetId_idx" ON "DigitalHumanRenderJob"("audioAssetId");
+CREATE INDEX "DigitalHumanRenderJob_interviewerProfileId_idx" ON "DigitalHumanRenderJob"("interviewerProfileId");
+CREATE INDEX "DigitalHumanRenderJob_winnerAttemptId_idx" ON "DigitalHumanRenderJob"("winnerAttemptId");
 CREATE UNIQUE INDEX "DigitalHumanRenderAttempt_renderJobId_providerKind_key" ON "DigitalHumanRenderAttempt"("renderJobId", "providerKind");
 CREATE INDEX "DigitalHumanRenderAttempt_status_nextPollAt_idx" ON "DigitalHumanRenderAttempt"("status", "nextPollAt");
 CREATE INDEX "DigitalHumanRenderAttempt_claimOperation_claimExpiresAt_idx" ON "DigitalHumanRenderAttempt"("claimOperation", "claimExpiresAt");
+CREATE INDEX "DigitalHumanRenderAttempt_interviewerProfileId_idx" ON "DigitalHumanRenderAttempt"("interviewerProfileId");
+CREATE INDEX "DigitalHumanRenderAttempt_portraitAssetId_idx" ON "DigitalHumanRenderAttempt"("portraitAssetId");
 
 PRAGMA foreign_keys=ON;

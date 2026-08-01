@@ -370,6 +370,7 @@ model DigitalHumanRenderJob {
   planFingerprint       String                      @default("")
   deadlineAt           DateTime
   winnerAttemptId      String?
+  winnerAttempt        DigitalHumanRenderAttempt? @relation("RenderJobWinner", fields: [winnerAttemptId], references: [id], onDelete: SetNull)
   fallbackReason       String?
   createdAt            DateTime                    @default(now())
   readyAt              DateTime?
@@ -378,10 +379,13 @@ model DigitalHumanRenderJob {
 
   trainingSession    TrainingSession             @relation(fields: [trainingSessionId], references: [id], onDelete: Cascade)
   interviewerProfile InterviewerAvatarProfile    @relation(fields: [interviewerProfileId], references: [id])
-  attempts           DigitalHumanRenderAttempt[]
+  attempts           DigitalHumanRenderAttempt[] @relation("RenderJobAttempts")
 
   @@unique([trainingSessionId, questionId, cacheKey])
   @@index([status, deadlineAt])
+  @@index([audioAssetId])
+  @@index([interviewerProfileId])
+  @@index([winnerAttemptId])
 }
 
 model DigitalHumanRenderAttempt {
@@ -417,12 +421,15 @@ model DigitalHumanRenderAttempt {
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
 
-  renderJob   DigitalHumanRenderJob   @relation(fields: [renderJobId], references: [id], onDelete: Cascade)
+  renderJob   DigitalHumanRenderJob   @relation("RenderJobAttempts", fields: [renderJobId], references: [id], onDelete: Cascade)
+  winnerForJobs DigitalHumanRenderJob[] @relation("RenderJobWinner")
   outputAsset DigitalHumanMediaAsset? @relation(fields: [outputAssetId], references: [id], onDelete: SetNull)
 
   @@unique([renderJobId, providerKind])
   @@index([status, nextPollAt])
   @@index([claimOperation, claimExpiresAt])
+  @@index([interviewerProfileId])
+  @@index([portraitAssetId])
 }
 
 model DigitalHumanVideoDiagnosticAudit {

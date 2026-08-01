@@ -198,29 +198,32 @@ export function createAlibabaEmoProvider(
         });
       }
       const request = buildEmoQueryRequest(taskId);
-      try {
-        return await requestWithTimeout(
-          fetcher,
-          request,
-          config,
-          scheduleTimeout,
-          cancelTimeout,
-          parseEmoQueryResponse
+      const result = await requestWithTimeout(
+        fetcher,
+        request,
+        config,
+        scheduleTimeout,
+        cancelTimeout,
+        parseEmoQueryResponse
+      );
+      if (
+        result.status === "FAILED" &&
+        !isOfficialTerminalQueryCode(result.safeErrorCode)
+      ) {
+        throw providerError(
+          result.safeErrorCode ?? "ALIBABA_EMO_QUERY_INVALID_RESPONSE",
+          result.traceId
         );
-      } catch (error) {
-        return {
-          status: "FAILED",
-          videoUrl: null,
-          safeErrorCode: error instanceof MediaProviderError &&
-            error.code === "ALIBABA_EMO_TIMEOUT"
-            ? "ALIBABA_EMO_TIMEOUT"
-            : "ALIBABA_EMO_UPSTREAM_FAILED",
-          traceId: null,
-          completedAt: null
-        };
       }
+      return result;
     }
   };
+}
+
+function isOfficialTerminalQueryCode(code: string | null): boolean {
+  return code === "ALIBABA_EMO_RENDER_FAILED" ||
+    code === "ALIBABA_EMO_TASK_CANCELED" ||
+    code === "ALIBABA_EMO_TASK_UNKNOWN";
 }
 
 type EmoHttpRequest =

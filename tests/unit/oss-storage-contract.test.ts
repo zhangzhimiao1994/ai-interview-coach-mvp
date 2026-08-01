@@ -101,6 +101,13 @@ describe("private OSS storage contract", () => {
       expiresAt: new Date("2026-08-01T00:00:00.000Z"),
       objectKey: "media/video/render/candidate-name.mp4"
     })).rejects.toThrow("deterministic object key");
+    await expect(storage.putObject({
+      purpose: "VIDEO_OUTPUT",
+      body: Buffer.from([1]),
+      contentType: "video/webm",
+      expiresAt: new Date("2026-08-01T00:00:00.000Z"),
+      objectKey: key
+    })).rejects.toThrow("deterministic object key");
     expect(puts).toEqual([key]);
   });
 });

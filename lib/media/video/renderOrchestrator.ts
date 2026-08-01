@@ -13,7 +13,7 @@ import {
   type RenderRepository,
   type RenderSnapshot
 } from "./renderRepository";
-import { cacheProviderVideoOutput, discardCachedVideoOutput } from "./renderCache";
+import { cacheProviderVideoOutput } from "./renderCache";
 import { getDueProviders } from "./renderSchedule";
 export { chooseVideoRenderWinner } from "./renderWinner";
 import type {
@@ -83,7 +83,6 @@ export interface RenderOrchestratorDependencies {
     objectKey?: string;
     created?: boolean;
   }>;
-  discardCachedOutput(input: { assetId: string; objectKey?: string; created?: boolean }): Promise<void>;
   encryptOutputUrl(url: string): OutputEnvelope;
   decryptOutputUrl(envelope: OutputEnvelope): string;
 }
@@ -98,7 +97,6 @@ export function createRenderOrchestrator(
     loadAsset: defaultLoadAsset,
     createReadUrl: defaultCreateReadUrl,
     cacheOutput: ({ attemptId, videoUrl, observedAt }) => cacheProviderVideoOutput({ attemptId, videoUrl, observedAt }),
-    discardCachedOutput: discardCachedVideoOutput,
     encryptOutputUrl: (url) => encryptSecret(url, readAiConfigSecret()),
     decryptOutputUrl: (envelope) => decryptSecret(envelope, readAiConfigSecret()),
     ...dependencyOverrides
@@ -346,7 +344,6 @@ async function cachePending(renderJobId: string, observedAt: Date, deps: RenderO
         outputAssetId: cached.assetId
       });
       if (!attached) {
-        await deps.discardCachedOutput(cached);
         await deps.repository.releaseCache({
           attemptId: attempt.id,
           claimToken: claim.claimToken,
@@ -356,7 +353,6 @@ async function cachePending(renderJobId: string, observedAt: Date, deps: RenderO
         });
       }
     } catch {
-      if (cached) await deps.discardCachedOutput(cached).catch(() => undefined);
       await deps.repository.releaseCache({
         attemptId: attempt.id,
         claimToken: claim.claimToken,
