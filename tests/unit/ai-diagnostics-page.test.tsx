@@ -2,10 +2,12 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { providerFindMany, modelFindMany, runtimeSettingFindUnique, getAllAiDiagnostics } = vi.hoisted(() => ({
+const { providerFindMany, modelFindMany, runtimeSettingFindUnique, profileFindMany, storageFindFirst, getAllAiDiagnostics } = vi.hoisted(() => ({
   providerFindMany: vi.fn(),
   modelFindMany: vi.fn(),
   runtimeSettingFindUnique: vi.fn(),
+  profileFindMany: vi.fn(),
+  storageFindFirst: vi.fn(),
   getAllAiDiagnostics: vi.fn()
 }));
 
@@ -13,7 +15,9 @@ vi.mock("@/lib/db/prisma", () => ({
   prisma: {
     aiServiceProvider: { findMany: providerFindMany },
     aiModelConfig: { findMany: modelFindMany },
-    aiRuntimeSetting: { findUnique: runtimeSettingFindUnique }
+    aiRuntimeSetting: { findUnique: runtimeSettingFindUnique },
+    interviewerAvatarProfile: { findMany: profileFindMany },
+    mediaStorageConfig: { findFirst: storageFindFirst }
   }
 }));
 
@@ -24,6 +28,8 @@ describe("AI services admin page diagnostics", () => {
     vi.stubGlobal("React", React);
     providerFindMany.mockReset().mockResolvedValue([]);
     modelFindMany.mockReset().mockResolvedValue([]);
+    profileFindMany.mockReset().mockResolvedValue([]);
+    storageFindFirst.mockReset().mockResolvedValue(null);
     runtimeSettingFindUnique.mockReset().mockResolvedValue({
       valueJson: JSON.stringify({
         enabled: true,

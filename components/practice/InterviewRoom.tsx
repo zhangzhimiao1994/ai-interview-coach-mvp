@@ -17,7 +17,7 @@ import {
   CandidateMediaPanel,
   type CandidateSpeechActivity
 } from "./CandidateMediaPanel";
-import { DigitalInterviewerVideo } from "./DigitalInterviewerVideo";
+import { DigitalHumanVideoPlayback } from "./DigitalHumanVideoPlayback";
 import { StageTimeline } from "./StageTimeline";
 
 type InterviewRoomProps = {
@@ -363,14 +363,12 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
 
         {currentQuestion ? (
           <>
-            <DigitalInterviewerVideo
-              interviewerName="AI 面试官"
+            <DigitalHumanVideoPlayback
+              question={displayPrompt}
               stage={stageDisplayName(currentQuestion.stage)}
-              prompt={displayPrompt}
-              status={allAnswered ? "listening" : "speaking"}
               sessionId={storedSession.sessionId}
               questionId={activeFollowUp ? `${currentQuestion.id}::follow-up::1` : currentQuestion.id}
-              expression={activeFollowUp ? "probing" : "neutral"}
+              kind={activeFollowUp ? "DYNAMIC" : "PRESET"}
             />
 
             <CandidateMediaPanel

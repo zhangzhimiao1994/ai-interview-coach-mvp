@@ -8,6 +8,7 @@ import {
   type LingmouRtcConnection
 } from "@/lib/client/lingmouAvatarClient";
 import { Pcm16LeDecoder, pcm16LeToWavBlob } from "@/lib/client/pcm16";
+import { BoundedTtlMap } from "@/lib/client/boundedTtlMap";
 
 type InterviewerExpression =
   | "neutral"
@@ -27,6 +28,7 @@ type DigitalInterviewerVideoProps = {
   sessionId?: string;
   questionId?: string;
   expression?: InterviewerExpression;
+  localOnly?: boolean;
 };
 
 type SpeechState = "idle" | "loading" | "speaking" | "paused" | "unsupported";
@@ -68,6 +70,43 @@ const statusText = {
   speaking: "正在提问",
   listening: "等待回答"
 };
+
+const localQwenRequests = new BoundedTtlMap<string, Promise<Uint8Array>>(128, 30_000);
+const localQwenPlayed = new BoundedTtlMap<string, true>(128, 30 * 60_000);
+
+export function LocalQwenInterviewer({ interviewerName, stage, prompt, sessionId, questionId }: { interviewerName: string; stage: string; prompt: string; sessionId: string; questionId: string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [message, setMessage] = useState("正在生成 Qwen 情绪语音…");
+  const [manualPlay, setManualPlay] = useState(false);
+  const key = `${sessionId}:${questionId}:${prompt}`;
+  useEffect(() => {
+    let active = true; let objectUrl: string | null = null;
+    const ownedAudio = audioRef.current;
+    let request = localQwenRequests.get(key);
+    if (!request) {
+      request = fetch("/api/digital-human/fallback-speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, questionId, text: prompt }) }).then(async (response) => {
+        if (!response.ok || response.headers.get("content-type")?.split(";", 1)[0] !== "audio/pcm") throw new Error("QWEN_SPEECH_UNAVAILABLE");
+        const bytes = new Uint8Array(await response.arrayBuffer()); if (bytes.byteLength === 0) throw new Error("QWEN_SPEECH_EMPTY"); return bytes;
+      });
+      localQwenRequests.set(key, request);
+    }
+    void request.then(async (pcm) => {
+      if (!active || localQwenPlayed.get(key)) return;
+      const audio = audioRef.current; if (!audio || typeof URL.createObjectURL !== "function") throw new Error("LOCAL_AUDIO_UNAVAILABLE");
+      objectUrl = URL.createObjectURL(pcm16LeToWavBlob(pcm)); audio.src = objectUrl; audio.currentTime = 0; audio.load(); localQwenPlayed.set(key, true);
+      try { await audio.play(); if (active) setMessage("Qwen 情绪语音播放中"); }
+      catch { if (active) { setManualPlay(true); setMessage("自动播放被拦截，请点击播放问题。"); } }
+    }).catch(() => { if (active) setMessage("Qwen 语音暂不可用，请直接阅读题目。"); });
+    return () => { active = false; ownedAudio?.pause(); ownedAudio?.removeAttribute("src"); if (ownedAudio) { ownedAudio.currentTime = 0; ownedAudio.load(); } if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [key, prompt, questionId, sessionId]);
+  return <section className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-950 p-5 text-white" data-testid="local-qwen-interviewer">
+    <div className="flex min-h-64 flex-col items-center justify-center"><div className="h-24 w-24 rounded-full bg-gradient-to-b from-amber-100 to-amber-600" /><div className="mt-3 h-28 w-36 rounded-t-[3rem] bg-slate-700" /><h2 className="mt-4 font-semibold">{interviewerName}</h2><p className="text-xs text-blue-100">{stage} · 本地数字人 / Qwen 情绪语音</p></div>
+    <audio ref={audioRef} className="sr-only" aria-label="Qwen fallback speech" />
+    {manualPlay ? <button type="button" aria-label="Play Qwen fallback speech" onClick={() => { setManualPlay(false); void audioRef.current?.play().catch(() => setManualPlay(true)); }}>播放问题语音</button> : null}
+    <p className="mt-3 text-xs text-amber-100">{message}</p>
+    <p className="mt-2 text-base leading-7">{prompt}</p>
+  </section>;
+}
 
 function canUseSpeechSynthesis() {
   return (
@@ -179,9 +218,11 @@ export function DigitalInterviewerVideo({
   prompt,
   status = "speaking",
   compact = false,
-  sessionId,
-  questionId
+  sessionId: suppliedSessionId,
+  questionId,
+  localOnly = false
 }: DigitalInterviewerVideoProps) {
+  const sessionId = localOnly ? undefined : suppliedSessionId;
   const [speechState, setSpeechState] = useState<SpeechState>("idle");
   const [speechMode, setSpeechMode] = useState<SpeechMode>(null);
   const [speechMessage, setSpeechMessage] = useState("");

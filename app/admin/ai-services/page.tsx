@@ -1,8 +1,12 @@
 import { AdminShell } from "@/components/admin/AdminShell";
 import { AiDiagnosticsPanel } from "@/components/admin/AiDiagnosticsPanel";
 import { AiServiceConfigPanel } from "@/components/admin/AiServiceConfigPanel";
+import { DigitalHumanVideoConfigPanel } from "@/components/admin/DigitalHumanVideoConfigPanel";
 import { getAllAiDiagnostics } from "@/lib/ai/diagnostics";
 import { prisma } from "@/lib/db/prisma";
+import { serializeMediaStorageConfig } from "@/lib/media/storage/ossCredentials";
+import { digitalHumanVideoRuntimeSettingKey } from "@/lib/media/video/diagnostics";
+import { parseDigitalHumanVideoRuntimeSettings } from "@/lib/media/video/settings";
 import {
   multimodalTakeoverSettingKey,
   parseMultimodalTakeoverSettings
@@ -22,7 +26,7 @@ const modelInclude = {
 } as const;
 
 export default async function AiServicesPage() {
-  const [providers, models, diagnostics, multimodalTakeoverRow] = await Promise.all([
+  const [providers, models, diagnostics, multimodalTakeoverRow, videoRuntimeRow, videoProfiles, videoStorage] = await Promise.all([
     prisma.aiServiceProvider.findMany({
       orderBy: { createdAt: "desc" },
       select: {
@@ -42,7 +46,10 @@ export default async function AiServicesPage() {
     getAllAiDiagnostics(),
     prisma.aiRuntimeSetting.findUnique({
       where: { key: multimodalTakeoverSettingKey }
-    })
+    }),
+    prisma.aiRuntimeSetting.findUnique({ where: { key: digitalHumanVideoRuntimeSettingKey } }),
+    prisma.interviewerAvatarProfile.findMany({ orderBy: { createdAt: "asc" } }),
+    prisma.mediaStorageConfig.findFirst({ where: { providerKind: "ALI_OSS" }, orderBy: { updatedAt: "desc" } })
   ]);
 
   return (
@@ -55,6 +62,12 @@ export default async function AiServicesPage() {
       backLabel="返回后台"
     >
       <div className="grid gap-6">
+        <DigitalHumanVideoConfigPanel
+          initialConfig={safeVideoRuntime(videoRuntimeRow?.valueJson)}
+          models={models.filter((model) => model.capability === "DIGITAL_HUMAN_VIDEO" && model.enabled && model.provider.enabled).map((model) => ({ id: model.id, displayName: model.displayName, modelName: model.modelName, providerType: model.provider.providerType }))}
+          profiles={videoProfiles.map((profile) => ({ id: profile.id, displayName: profile.displayName, enabled: profile.enabled, voice: profile.voice, portraitAssetId: profile.portraitAssetId, style: safeObject(profile.styleJson), lingmouMapping: safeObject(profile.lingmouMappingJson), emoMapping: safeObject(profile.emoMappingJson), providerRole: profile.providerRole, complete: Boolean(profile.portraitAssetId && profile.voice.trim() && profile.lingmouMappingJson !== "{}" && profile.emoMappingJson !== "{}") }))}
+          storage={videoStorage ? serializeMediaStorageConfig(videoStorage) : null}
+        />
         <AiDiagnosticsPanel initialDiagnostics={diagnostics} />
         <AiServiceConfigPanel
           initialProviders={providers}
@@ -64,4 +77,12 @@ export default async function AiServicesPage() {
       </div>
     </AdminShell>
   );
+}
+
+function safeVideoRuntime(value: string | null | undefined) {
+  try { return value ? parseDigitalHumanVideoRuntimeSettings(value) : null; } catch { return null; }
+}
+
+function safeObject(value: string): Record<string, unknown> {
+  try { const parsed = JSON.parse(value); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; }
 }

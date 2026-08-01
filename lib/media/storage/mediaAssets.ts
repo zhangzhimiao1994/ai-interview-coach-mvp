@@ -13,7 +13,7 @@ export async function persistDigitalHumanMediaAsset(
     mimeType: string;
     byteLength: number;
     purpose: PrivateMediaPurpose;
-    expiresAt: Date;
+    expiresAt: Date | null;
   },
   assets: DigitalHumanMediaAssetWriter = prisma.digitalHumanMediaAsset
 ) {
