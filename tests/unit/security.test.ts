@@ -5,6 +5,8 @@ import {
   authenticateBasicRequest,
   consumeRateLimit,
   isProtectedPath,
+  isCandidateApiPath,
+  isCandidateEntryPath,
   pruneExpiredRateLimits,
   resetRateLimits
 } from "@/lib/security/requestGuards";
@@ -18,6 +20,18 @@ describe("request security guards", () => {
     expect(isProtectedPath("/api/health")).toBe(false);
     expect(isProtectedPath("/")).toBe(false);
     expect(isProtectedPath("/_next/static/chunk.js")).toBe(false);
+  });
+
+  it("exposes only candidate entry and capability-scoped API paths", () => {
+    expect(isCandidateEntryPath("/practice/task-1", "GET")).toBe(true);
+    expect(isCandidateEntryPath("/api/sessions", "POST")).toBe(true);
+    expect(isCandidateEntryPath("/api/sessions", "GET")).toBe(false);
+    expect(isCandidateApiPath("/api/sessions/session-1/answer", "session-1")).toBe(true);
+    expect(isCandidateApiPath("/api/sessions/session-2/answer", "session-1")).toBe(false);
+    expect(isCandidateApiPath("/api/digital-human/renders/render-1", "session-1")).toBe(true);
+    expect(isCandidateApiPath("/api/admin/users", "session-1")).toBe(false);
+    expect(isCandidateApiPath("/api/ai-services/providers", "session-1")).toBe(false);
+    expect(isCandidateApiPath("/api/digital-human/sessions/private", "session-1")).toBe(false);
   });
 
   it("authenticates matching Basic Auth credentials", () => {

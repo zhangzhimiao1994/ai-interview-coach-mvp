@@ -31,6 +31,19 @@ export function isProtectedPath(pathname: string) {
   );
 }
 
+export function isCandidateEntryPath(pathname: string, method: string) {
+  return pathname.startsWith("/practice/") ||
+    (method === "POST" && pathname === "/api/sessions");
+}
+
+export function isCandidateApiPath(pathname: string, trainingSessionId: string) {
+  if (pathname === "/api/digital-human/renders" || pathname.startsWith("/api/digital-human/renders/")) {
+    return true;
+  }
+  return pathname === `/api/sessions/${trainingSessionId}/answer` ||
+    pathname === `/api/sessions/${trainingSessionId}/complete`;
+}
+
 export function authenticateBasicRequest(authorization: string | null, config: AuthConfig) {
   if (!authorization?.startsWith("Basic ")) {
     return { ok: false };

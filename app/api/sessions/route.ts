@@ -5,6 +5,13 @@ import { resolveAiProviderLabel } from "@/lib/ai/configResolver";
 import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { buildStagePlan, parseStageConfigInput } from "@/lib/domain/stages";
+import { persistSessionWithRenderPlaceholders } from "@/lib/media/video/sessionPlaceholders";
+import { readAiConfigSecret } from "@/lib/domain/aiServices";
+import {
+  candidateSessionCookieName,
+  candidateSessionCookieOptions,
+  createCandidateSessionCookie
+} from "@/lib/security/candidateSession";
 
 const createSessionSchema = z
   .object({
@@ -21,6 +28,7 @@ export async function POST(request: Request) {
   const startedAt = Date.now();
 
   try {
+    const cookieSecret = readAiConfigSecret();
     const input = createSessionSchema.parse(await request.json());
     taskId = input.taskId;
 
@@ -53,17 +61,11 @@ export async function POST(request: Request) {
       preferredLanguage: preferredLanguageFromTemplate(task.interviewerTemplate?.languageMode)
     });
 
-    const session = await prisma.trainingSession.create({
-      data: {
-        taskId: task.id,
-        candidateId: task.candidateId,
-        currentStage: stagePlan[0].type
-      }
-    });
-
-    await prisma.trainingSession.update({
-      where: { id: session.id },
-      data: { outlineJson: JSON.stringify(outline) }
+    const session = await persistSessionWithRenderPlaceholders(prisma, {
+      taskId: task.id,
+      candidateId: task.candidateId,
+      currentStage: stagePlan[0].type,
+      outline
     });
 
     await prisma.aiCallLog.create({
@@ -78,7 +80,20 @@ export async function POST(request: Request) {
       }
     });
 
-    return NextResponse.json({ session, outline }, { status: 201 });
+    const response = NextResponse.json({
+      session,
+      outline,
+      digitalHumanVideo: { status: "PENDING", fallbackAvailable: true }
+    }, { status: 201 });
+    response.cookies.set(
+      candidateSessionCookieName,
+      await createCandidateSessionCookie({
+        trainingSessionId: session.id,
+        candidateId: task.candidateId
+      }, cookieSecret),
+      candidateSessionCookieOptions()
+    );
+    return response;
   } catch (error) {
     if (taskId) {
       await prisma.aiCallLog

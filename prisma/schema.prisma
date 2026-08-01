@@ -263,6 +263,7 @@ model TrainingSession {
   aiCalls      AiCallLog[]
   digitalHumanSessions DigitalHumanSession[]
   digitalHumanRenderJobs DigitalHumanRenderJob[]
+  digitalHumanRenderPlaceholders DigitalHumanRenderPlaceholder[]
 
   @@index([taskId])
   @@index([candidateId])
@@ -291,6 +292,37 @@ model DigitalHumanSession {
   @@index([trainingSessionId])
   @@index([status, lastActivityAt])
   @@index([providerSessionId])
+}
+
+model DigitalHumanRenderPlaceholder {
+  id                  String          @id @default(cuid())
+  trainingSessionId   String
+  trainingSession     TrainingSession @relation(fields: [trainingSessionId], references: [id], onDelete: Cascade)
+  questionId          String
+  questionHash        String
+  cacheKey            String
+  kind                String
+  stage               String
+  questionText        String
+  behaviorSignalsJson String?
+  status              String          @default("PENDING")
+  renderJobId         String?         @unique
+  renderJob           DigitalHumanRenderJob? @relation("RenderPlaceholderJob", fields: [renderJobId], references: [id], onDelete: SetNull)
+  audioAssetId        String?
+  audioAsset          DigitalHumanMediaAsset? @relation("RenderPlaceholderAudio", fields: [audioAssetId], references: [id], onDelete: SetNull)
+  runtimeSettingsJson String?
+  renderCreatedAt     DateTime?
+  deadlineAt          DateTime?
+  claimToken          String?
+  claimExpiresAt      DateTime?
+  fallbackReason      String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@unique([trainingSessionId, questionId, cacheKey])
+  @@index([trainingSessionId, status])
+  @@index([claimExpiresAt])
+  @@index([audioAssetId])
 }
 
 model MediaStorageConfig {
@@ -330,6 +362,7 @@ model DigitalHumanMediaAsset {
   outputAttempts    DigitalHumanRenderAttempt[]
   inputAudioJobs    DigitalHumanRenderJob[]       @relation("RenderJobAudio")
   attemptPortraits  DigitalHumanRenderAttempt[]   @relation("RenderAttemptPortrait")
+  placeholderAudio  DigitalHumanRenderPlaceholder[] @relation("RenderPlaceholderAudio")
 
   @@index([storageConfigId])
   @@index([cleanupStatus, expiresAt])
@@ -380,6 +413,7 @@ model DigitalHumanRenderJob {
   trainingSession    TrainingSession             @relation(fields: [trainingSessionId], references: [id], onDelete: Cascade)
   interviewerProfile InterviewerAvatarProfile    @relation(fields: [interviewerProfileId], references: [id])
   attempts           DigitalHumanRenderAttempt[] @relation("RenderJobAttempts")
+  placeholder        DigitalHumanRenderPlaceholder? @relation("RenderPlaceholderJob")
 
   @@unique([trainingSessionId, questionId, cacheKey])
   @@index([status, deadlineAt])

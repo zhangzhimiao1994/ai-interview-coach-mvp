@@ -89,6 +89,10 @@ async function loadRoutes() {
       findUnique: vi.fn(),
       create: vi.fn()
     },
+    digitalHumanRenderPlaceholder: {
+      create: vi.fn().mockResolvedValue({}),
+      createMany: vi.fn().mockResolvedValue({ count: 1 })
+    },
     coachingReport: {
       upsert: vi.fn()
     },
@@ -176,12 +180,18 @@ describe("session API routes", () => {
       data: {
         taskId: "task-1",
         candidateId: "candidate-1",
-        currentStage: "WARM_UP"
+        currentStage: "WARM_UP",
+        outlineJson: JSON.stringify(outline)
       }
     });
-    expect(prisma.trainingSession.update).toHaveBeenCalledWith({
-      where: { id: "session-1" },
-      data: { outlineJson: JSON.stringify(outline) }
+    expect(prisma.digitalHumanRenderPlaceholder.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({
+        trainingSessionId: "session-1",
+        questionId: "warm-up-1",
+        questionText: "Introduce yourself.",
+        kind: "PRESET",
+        status: "PENDING"
+      })]
     });
     expect(prisma.aiCallLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -201,7 +211,8 @@ describe("session API routes", () => {
         status: "IN_PROGRESS",
         currentStage: "WARM_UP"
       },
-      outline
+      outline,
+      digitalHumanVideo: { status: "PENDING", fallbackAvailable: true }
     });
   }, 15_000);
 
@@ -329,6 +340,14 @@ describe("session API routes", () => {
         feedback: JSON.stringify(coaching)
       })
     });
+    expect(prisma.digitalHumanRenderPlaceholder.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        trainingSessionId: "session-1",
+        questionId: "warm-up-1::follow-up::1",
+        questionText: coaching.followUpQuestion,
+        kind: "DYNAMIC"
+      })
+    });
     expect(prisma.aiCallLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -340,6 +359,10 @@ describe("session API routes", () => {
       })
     );
     expect(body.coaching).toEqual(coaching);
+    expect(body.followUp).toEqual({
+      id: "warm-up-1::follow-up::1",
+      text: coaching.followUpQuestion
+    });
   }, 15_000);
 
   it("preserves the saved parent-turn stage boundary for follow-up questions", async () => {

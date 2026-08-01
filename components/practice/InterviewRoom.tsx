@@ -4,7 +4,7 @@ import type { Route } from "next";
 import Link from "next/link";
 import { CheckCircle2, Send } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import type { TrainingOutline, TrainingQuestion } from "@/lib/ai";
 import type { BehaviorSignals } from "@/lib/domain/behaviorSignals";
@@ -128,6 +128,7 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   const [speechActivity, setSpeechActivity] =
     useState<CandidateSpeechActivity>("idle");
   const [questionStartedAt, setQuestionStartedAt] = useState(() => Date.now());
+  const prewarmedQuestionId = useRef<string | null>(null);
 
   useEffect(() => {
     let raw: string | null = null;
@@ -164,6 +165,22 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
   const questions = useMemo(() => storedSession?.outline.questions ?? [], [storedSession]);
   const currentQuestion: TrainingQuestion | undefined = questions[currentIndex];
   const currentStage = currentQuestion?.stage ?? stages[0]?.type;
+
+  useEffect(() => {
+    if (!storedSession || !currentQuestion || prewarmedQuestionId.current === currentQuestion.id) return;
+    prewarmedQuestionId.current = currentQuestion.id;
+    const controller = new AbortController();
+    void fetch("/api/digital-human/renders/prewarm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: storedSession.sessionId,
+        currentQuestionId: currentQuestion.id
+      }),
+      signal: controller.signal
+    }).catch(() => undefined);
+    return () => controller.abort();
+  }, [currentQuestion, storedSession]);
 
   useEffect(() => {
     setQuestionStartedAt(Date.now());
@@ -209,6 +226,7 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
         error?: string;
         message?: string;
         coaching?: FollowUpCoaching;
+        followUp?: { id: string; text: string };
       } | null;
 
       if (!response.ok) {
@@ -219,6 +237,17 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
       const nextCoaching = payload?.coaching ?? null;
 
       if (!activeFollowUp && nextCoaching?.followUpQuestion) {
+        if (payload?.followUp?.text === nextCoaching.followUpQuestion) {
+          await fetch("/api/digital-human/renders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: storedSession.sessionId,
+              questionId: payload.followUp.id,
+              kind: "DYNAMIC"
+            })
+          }).catch(() => undefined);
+        }
         setCoaching(nextCoaching);
         setActiveFollowUp(nextCoaching.followUpQuestion);
         setAnswer("");

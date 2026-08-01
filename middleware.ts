@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   authenticateBasicRequest,
   consumeRateLimit,
+  isCandidateApiPath,
+  isCandidateEntryPath,
   isPlaceholderSecret,
   isProtectedPath
 } from "@/lib/security/requestGuards";
@@ -9,6 +11,10 @@ import {
   adminSessionCookieName,
   verifyAdminSessionCookie
 } from "@/lib/security/adminSession";
+import {
+  candidateSessionCookieName,
+  verifyCandidateSessionCookie
+} from "@/lib/security/candidateSession";
 
 function unauthorized() {
   return new NextResponse("Authentication required", {
@@ -55,7 +61,7 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  if (isPublicAuthPath(pathname) || !isProtectedPath(pathname)) {
+  if (isPublicAuthPath(pathname) || isCandidateEntryPath(pathname, request.method) || !isProtectedPath(pathname)) {
     return NextResponse.next();
   }
 
@@ -67,6 +73,14 @@ export async function middleware(request: NextRequest) {
     );
 
     if (session.ok) {
+      return NextResponse.next();
+    }
+
+    const candidate = await verifyCandidateSessionCookie(
+      request.cookies.get(candidateSessionCookieName)?.value,
+      sessionSecret
+    );
+    if (candidate.ok && isCandidateApiPath(pathname, candidate.session.trainingSessionId)) {
       return NextResponse.next();
     }
   }

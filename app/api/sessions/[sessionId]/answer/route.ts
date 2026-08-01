@@ -11,6 +11,8 @@ import {
 } from "@/lib/domain/trainingQuestions";
 import { trainingStageTypes } from "@/lib/domain/stages";
 import type { SessionTurnInput, TrainingOutline } from "@/lib/ai";
+import { buildDynamicRenderPlaceholder, followUpRenderQuestion } from "@/lib/media/video/renderRequests";
+import { persistAnswerWithDynamicPlaceholder } from "@/lib/media/video/sessionPlaceholders";
 
 type RouteContext = {
   params: Promise<{
@@ -24,12 +26,7 @@ const answerSchema = z
     stage: z.enum(trainingStageTypes),
     question: z.string().trim().min(1, "Question is required"),
     answer: z.string().trim().min(1, "Answer is required"),
-    behaviorSignals: behaviorSignalsSchema.optional(),
-    feedback: z
-      .string()
-      .trim()
-      .optional()
-      .transform((value) => (value ? value : undefined))
+    behaviorSignals: behaviorSignalsSchema.optional()
   })
   .strict();
 
@@ -139,26 +136,26 @@ export async function POST(request: Request, context: RouteContext) {
       )
     });
     const feedback = JSON.stringify(coaching);
+    const followUp = !input.questionId.includes("::follow-up::")
+      ? followUpRenderQuestion(input.questionId, coaching.followUpQuestion)
+      : null;
+    const dynamicPlaceholder = followUp ? buildDynamicRenderPlaceholder({
+      trainingSessionId: normalizedSessionId,
+      parentQuestionId: input.questionId,
+      stage: input.stage,
+      text: coaching.followUpQuestion,
+      behaviorSignals: input.behaviorSignals
+    }) : null;
 
-    const turn = await prisma.$transaction(async (tx) => {
-      const createdTurn = await tx.sessionTurn.create({
-        data: {
-          sessionId: normalizedSessionId,
-          questionId: input.questionId,
-          stage: input.stage,
-          question: input.question,
-          answer: input.answer,
-          behaviorSignalsJson: input.behaviorSignals ? JSON.stringify(input.behaviorSignals) : undefined,
-          feedback: input.feedback ?? feedback
-        }
-      });
-
-      await tx.trainingSession.update({
-        where: { id: normalizedSessionId },
-        data: { currentStage: input.stage }
-      });
-
-      return createdTurn;
+    const turn = await persistAnswerWithDynamicPlaceholder(prisma, {
+      sessionId: normalizedSessionId,
+      questionId: input.questionId,
+      stage: input.stage,
+      question: input.question,
+      answer: input.answer,
+      behaviorSignalsJson: input.behaviorSignals ? JSON.stringify(input.behaviorSignals) : undefined,
+      feedback,
+      dynamicPlaceholder
     });
 
     await prisma.aiCallLog.create({
@@ -173,7 +170,11 @@ export async function POST(request: Request, context: RouteContext) {
       }
     });
 
-    return NextResponse.json({ turn, coaching }, { status: 201 });
+    return NextResponse.json({
+      turn,
+      coaching,
+      ...(followUp ? { followUp } : {})
+    }, { status: 201 });
   } catch (error) {
     const { sessionId } = await context.params.catch(() => ({ sessionId: "" }));
 
