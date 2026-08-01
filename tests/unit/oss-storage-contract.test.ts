@@ -77,4 +77,30 @@ describe("private OSS storage contract", () => {
       { name: "delete", args: [stored.objectKey] }
     ]);
   });
+
+  it("accepts only an opaque deterministic render key when cache idempotency requires one", async () => {
+    const puts: string[] = [];
+    const storage = new OssPrivateMediaStorage({
+      put: async (key) => { puts.push(key); },
+      signatureUrl: () => "opaque-read-handle",
+      delete: async () => undefined
+    });
+    const key = `media/video/render/${"a".repeat(64)}.mp4`;
+
+    await expect(storage.putObject({
+      purpose: "VIDEO_OUTPUT",
+      body: Buffer.from([1]),
+      contentType: "video/mp4",
+      expiresAt: new Date("2026-08-01T00:00:00.000Z"),
+      objectKey: key
+    })).resolves.toEqual({ objectKey: key, byteLength: 1 });
+    await expect(storage.putObject({
+      purpose: "VIDEO_OUTPUT",
+      body: Buffer.from([1]),
+      contentType: "video/mp4",
+      expiresAt: new Date("2026-08-01T00:00:00.000Z"),
+      objectKey: "media/video/render/candidate-name.mp4"
+    })).rejects.toThrow("deterministic object key");
+    expect(puts).toEqual([key]);
+  });
 });

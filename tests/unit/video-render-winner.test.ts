@@ -23,6 +23,16 @@ describe("video render winner selection", () => {
       candidate("LINGMOU_BROADCAST", null)
     ], observedAt)?.providerKind).toBe("LINGMOU_BROADCAST");
   });
+
+  it("never lets a later observation steal the winner with an earlier provider timestamp", () => {
+    expect(chooseVideoRenderWinner([
+      candidate("LINGMOU_BROADCAST", null),
+      {
+        ...candidate("ALIBABA_EMO", "2026-08-01T00:00:01.000Z"),
+        successObservedAt: new Date("2026-08-01T00:00:06.000Z")
+      }
+    ], new Date("2026-08-01T00:00:06.000Z"))?.providerKind).toBe("LINGMOU_BROADCAST");
+  });
 });
 
 function candidate(providerKind: "LINGMOU_BROADCAST" | "ALIBABA_EMO", completedAt: string | null) {

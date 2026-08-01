@@ -328,6 +328,8 @@ model DigitalHumanMediaAsset {
   updatedAt         DateTime                     @updatedAt
   portraitProfiles  InterviewerAvatarProfile[]   @relation("InterviewerAvatarPortrait")
   outputAttempts    DigitalHumanRenderAttempt[]
+  inputAudioJobs    DigitalHumanRenderJob[]       @relation("RenderJobAudio")
+  attemptPortraits  DigitalHumanRenderAttempt[]   @relation("RenderAttemptPortrait")
 
   @@index([storageConfigId])
   @@index([cleanupStatus, expiresAt])
@@ -347,6 +349,7 @@ model InterviewerAvatarProfile {
   createdAt          DateTime                @default(now())
   updatedAt          DateTime                @updatedAt
   renderJobs         DigitalHumanRenderJob[]
+  renderAttempts     DigitalHumanRenderAttempt[] @relation("RenderAttemptInterviewer")
 
   @@index([enabled])
   @@index([providerRole])
@@ -363,6 +366,8 @@ model DigitalHumanRenderJob {
   status               String                      @default("PENDING")
   interviewerProfileId String
   audioAssetId          String?
+  audioAsset            DigitalHumanMediaAsset?       @relation("RenderJobAudio", fields: [audioAssetId], references: [id], onDelete: Restrict)
+  planFingerprint       String                      @default("")
   deadlineAt           DateTime
   winnerAttemptId      String?
   fallbackReason       String?
@@ -388,6 +393,8 @@ model DigitalHumanRenderAttempt {
   interviewerName      String
   interviewerProfileId String?
   portraitAssetId      String?
+  interviewerProfile  InterviewerAvatarProfile? @relation("RenderAttemptInterviewer", fields: [interviewerProfileId], references: [id], onDelete: Restrict)
+  portraitAsset       DigitalHumanMediaAsset?    @relation("RenderAttemptPortrait", fields: [portraitAssetId], references: [id], onDelete: SetNull)
   status               String                 @default("PENDING")
   upstreamTaskId       String?
   traceId              String?
@@ -400,6 +407,9 @@ model DigitalHumanRenderAttempt {
   outputUrlIv          String?
   outputUrlTag         String?
   safeErrorCode        String?
+  failureKind          String?
+  queryAttemptCount    Int                    @default(0)
+  cacheAttemptCount    Int                    @default(0)
   successObservedAt    DateTime?
   claimOperation       String?
   claimToken           String?

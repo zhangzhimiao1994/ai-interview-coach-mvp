@@ -6,6 +6,7 @@ export interface PrivateMediaStorage {
     body: Buffer;
     contentType: string;
     expiresAt: Date;
+    objectKey?: string;
   }): Promise<{ objectKey: string; byteLength: number }>;
   createReadUrl(objectKey: string, expiresInSeconds: number): Promise<string>;
   removeObject(objectKey: string): Promise<void>;

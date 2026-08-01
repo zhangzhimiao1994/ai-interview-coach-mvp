@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { decryptSecret, encryptSecret, readAiConfigSecret } from "@/lib/domain/aiServices";
 import { prisma } from "@/lib/db/prisma";
 import { resolveMediaModelById } from "@/lib/media/config";
@@ -12,52 +13,15 @@ import {
   type RenderRepository,
   type RenderSnapshot
 } from "./renderRepository";
-import { cacheProviderVideoOutput } from "./renderCache";
+import { cacheProviderVideoOutput, discardCachedVideoOutput } from "./renderCache";
 import { getDueProviders } from "./renderSchedule";
+export { chooseVideoRenderWinner } from "./renderWinner";
 import type {
   AsyncAvatarVideoProvider,
   DigitalHumanVideoRuntimeSettings,
   VideoAssetMetadata,
   VideoProviderKind
 } from "./types";
-
-export type VideoRenderWinnerCandidate = {
-  attemptId: string;
-  providerKind: VideoProviderKind;
-  submittedAt: Date;
-  completedAt: Date | null;
-  successObservedAt: Date;
-};
-
-export function chooseVideoRenderWinner(
-  candidates: VideoRenderWinnerCandidate[],
-  observedAt: Date
-): VideoRenderWinnerCandidate | null {
-  const ordered = [...candidates].sort((left, right) => {
-    const leftCompletion = trustworthyCompletion(left, observedAt);
-    const rightCompletion = trustworthyCompletion(right, observedAt);
-    if (leftCompletion !== rightCompletion) return leftCompletion - rightCompletion;
-    if (left.providerKind === right.providerKind) return 0;
-    return left.providerKind === "LINGMOU_BROADCAST" ? -1 : 1;
-  });
-  return ordered[0] ?? null;
-}
-
-function trustworthyCompletion(
-  candidate: VideoRenderWinnerCandidate,
-  observedAt: Date
-) {
-  const value = candidate.completedAt?.getTime();
-  if (
-    value === undefined ||
-    !Number.isFinite(value) ||
-    value < candidate.submittedAt.getTime() ||
-    value > observedAt.getTime()
-  ) {
-    return Number.POSITIVE_INFINITY;
-  }
-  return value;
-}
 
 export type EnsureRenderInput = {
   trainingSessionId: string;
@@ -114,7 +78,12 @@ export interface RenderOrchestratorDependencies {
   resolveVideoModel(id: string, providerKind: VideoProviderKind): Promise<ResolvedVideoProvider>;
   loadAsset(id: string): Promise<InternalRenderAsset | null>;
   createReadUrl(asset: InternalRenderAsset): Promise<string>;
-  cacheOutput(input: { attemptId: string; videoUrl: string; observedAt: Date }): Promise<{ assetId: string }>;
+  cacheOutput(input: { attemptId: string; videoUrl: string; observedAt: Date }): Promise<{
+    assetId: string;
+    objectKey?: string;
+    created?: boolean;
+  }>;
+  discardCachedOutput(input: { assetId: string; objectKey?: string; created?: boolean }): Promise<void>;
   encryptOutputUrl(url: string): OutputEnvelope;
   decryptOutputUrl(envelope: OutputEnvelope): string;
 }
@@ -128,7 +97,8 @@ export function createRenderOrchestrator(
     resolveVideoModel: defaultResolveVideoModel,
     loadAsset: defaultLoadAsset,
     createReadUrl: defaultCreateReadUrl,
-    cacheOutput: ({ videoUrl, observedAt }) => cacheProviderVideoOutput({ videoUrl, observedAt }),
+    cacheOutput: ({ attemptId, videoUrl, observedAt }) => cacheProviderVideoOutput({ attemptId, videoUrl, observedAt }),
+    discardCachedOutput: discardCachedVideoOutput,
     encryptOutputUrl: (url) => encryptSecret(url, readAiConfigSecret()),
     decryptOutputUrl: (envelope) => decryptSecret(envelope, readAiConfigSecret()),
     ...dependencyOverrides
@@ -137,6 +107,7 @@ export function createRenderOrchestrator(
   async function ensure(input: EnsureRenderInput, expectedKind: RenderJobKind) {
     validateRenderInput(input, expectedKind);
     const prepared = await prepare(input, deps);
+    const planFingerprint = renderPlanFingerprint(input, prepared.definitions);
     const snapshot = await deps.repository.ensureJob({
       trainingSessionId: input.trainingSessionId,
       questionId: input.questionId,
@@ -148,15 +119,20 @@ export function createRenderOrchestrator(
       audioAssetId: input.audioAssetId,
       createdAt: input.createdAt,
       deadlineAt: input.deadlineAt,
+      planFingerprint,
       attempts: prepared.definitions
     });
     const context = await deps.repository.loadContext(snapshot.id);
     if (!context) throw new Error("VIDEO_RENDER_NOT_FOUND");
-    const submitProviders = new Set(initialSubmitProviders(expectedKind, input.runtimeSettings.mode));
+    const persistedSettings = settingsFromPersisted(context);
+    const submitProviders = new Set(initialSubmitProviders(
+      context.job.kind as RenderJobKind,
+      context.job.mode as DigitalHumanVideoRuntimeSettings["mode"]
+    ));
     await Promise.all(context.attempts
       .filter((attempt) => submitProviders.has(attempt.providerKind as VideoProviderKind))
       .map((attempt) =>
-      submitAttempt(attempt.id, input.createdAt, input.runtimeSettings, deps)
+      submitAttempt(attempt.id, context.job.createdAt, persistedSettings, deps)
     ));
     await deps.repository.refreshActiveStatus(snapshot.id);
     return (await deps.repository.getSnapshot(snapshot.id))!;
@@ -167,6 +143,7 @@ export function createRenderOrchestrator(
     startDynamicRace: (input) => ensure(input, "DYNAMIC"),
 
     async advance(renderJobId, observedAt) {
+      await deps.repository.expireSubmissionClaims(renderJobId, observedAt);
       await advanceQueries(renderJobId, observedAt, deps, false);
       await cachePending(renderJobId, observedAt, deps);
       await ensurePresetFailureFallback(renderJobId, observedAt, deps);
@@ -221,6 +198,7 @@ async function submitAttempt(
   if (!claim) return;
   const context = await loadAttemptContext(claim.renderJobId, attemptId, deps);
   if (!context) return;
+  let providerCallStarted = false;
   try {
     const audio = await deps.loadAsset(context.job.audioAssetId!);
     validateAsset(audio, "TTS_AUDIO", observedAt);
@@ -235,6 +213,7 @@ async function submitAttempt(
     if (resolved.requiresPortrait) validateAsset(portrait, "PORTRAIT", observedAt);
     const audioUrl = await deps.createReadUrl(audio!);
     const portraitUrl = portrait ? await deps.createReadUrl(portrait) : null;
+    providerCallStarted = true;
     const submission = await resolved.provider.submit({
       requestName: `render-${context.job.id}-${context.attempt.providerKind}`,
       audioUrl,
@@ -242,21 +221,45 @@ async function submitAttempt(
       audioMetadata: audioMetadata(audio!),
       portraitMetadata: portrait ? portraitMetadata(portrait, profile) : null
     });
-    await deps.repository.completeSubmission({
+    const persistence = {
       attemptId,
-      claimToken: claim.claimToken,
       upstreamTaskId: submission.upstreamTaskId,
       traceId: safeTrace(submission.traceId),
       submittedAt: observedAt,
       nextPollAt: firstPollAt(context.job.createdAt, context.attempt.providerKind as VideoProviderKind, settings)
+    };
+    const completed = await deps.repository.completeSubmission({
+      ...persistence,
+      claimToken: claim.claimToken
     });
+    if (!completed) {
+      const reconciled = await deps.repository.reconcileSubmission(persistence);
+      if (!reconciled) {
+        await deps.repository.markSubmissionAmbiguous({
+          attemptId,
+          claimToken: claim.claimToken,
+          safeErrorCode: "VIDEO_SUBMISSION_ACK_UNKNOWN",
+          observedAt
+        });
+      }
+    }
   } catch (error) {
-    await deps.repository.failClaim({
-      attemptId,
-      claimToken: claim.claimToken,
-      safeErrorCode: safeProviderError(error),
-      completedAt: observedAt
-    });
+    if (providerCallStarted) {
+      await deps.repository.markSubmissionAmbiguous({
+        attemptId,
+        claimToken: claim.claimToken,
+        safeErrorCode: "VIDEO_SUBMISSION_ACK_UNKNOWN",
+        observedAt
+      });
+    } else {
+      await deps.repository.failClaim({
+        attemptId,
+        claimToken: claim.claimToken,
+        safeErrorCode: safeProviderError(error),
+        completedAt: observedAt,
+        failureKind: "CONFIGURATION"
+      });
+    }
   }
 }
 
@@ -281,7 +284,9 @@ async function advanceQueries(
       const resolved = await deps.resolveVideoModel(attempt.modelId, attempt.providerKind as VideoProviderKind);
       if (resolved.providerId !== attempt.providerId) throw new RenderConfigurationError("VIDEO_MODEL_STALE");
       const result = await resolved.provider.query(attempt.upstreamTaskId);
-      const nextPollAt = nextPoll(context.job.createdAt, attempt.providerKind as VideoProviderKind, observedAt);
+      const nextPollAt = result.status === "RUNNING" || result.status === "PENDING"
+        ? new Date(observedAt.getTime() + 3000)
+        : null;
       await deps.repository.recordQuery({
         attemptId: attempt.id,
         claimToken: claim.claimToken,
@@ -296,12 +301,26 @@ async function advanceQueries(
           : null
       });
     } catch (error) {
-      await deps.repository.failClaim({
-        attemptId: attempt.id,
-        claimToken: claim.claimToken,
-        safeErrorCode: safeProviderError(error),
-        completedAt: observedAt
-      });
+      if (
+        (error instanceof MediaProviderError || error instanceof MediaConfigurationError) &&
+        error.retryable
+      ) {
+        await deps.repository.releaseQuery({
+          attemptId: attempt.id,
+          claimToken: claim.claimToken,
+          observedAt,
+          nextPollAt: new Date(observedAt.getTime() + 3000),
+          safeErrorCode: safeProviderError(error)
+        });
+      } else {
+        await deps.repository.failClaim({
+          attemptId: attempt.id,
+          claimToken: claim.claimToken,
+          safeErrorCode: safeProviderError(error),
+          completedAt: observedAt,
+          failureKind: "PROVIDER_EXCEPTION"
+        });
+      }
     }
   }));
 }
@@ -313,24 +332,37 @@ async function cachePending(renderJobId: string, observedAt: Date, deps: RenderO
     if (!attempt.outputUrlCiphertext || !attempt.outputUrlIv || !attempt.outputUrlTag) return;
     const claim = await deps.repository.claimCache(attempt.id, observedAt);
     if (!claim) return;
+    let cached: { assetId: string; objectKey?: string; created?: boolean } | null = null;
     try {
       const videoUrl = deps.decryptOutputUrl({
         ciphertext: attempt.outputUrlCiphertext,
         iv: attempt.outputUrlIv,
         tag: attempt.outputUrlTag
       });
-      const cached = await deps.cacheOutput({ attemptId: attempt.id, videoUrl, observedAt });
-      await deps.repository.completeCache({
+      cached = await deps.cacheOutput({ attemptId: attempt.id, videoUrl, observedAt });
+      const attached = await deps.repository.completeCache({
         attemptId: attempt.id,
         claimToken: claim.claimToken,
         outputAssetId: cached.assetId
       });
+      if (!attached) {
+        await deps.discardCachedOutput(cached);
+        await deps.repository.releaseCache({
+          attemptId: attempt.id,
+          claimToken: claim.claimToken,
+          safeErrorCode: "VIDEO_OUTPUT_ATTACH_OWNERSHIP_LOST",
+          observedAt,
+          nextPollAt: new Date(observedAt.getTime() + 3000)
+        });
+      }
     } catch {
-      await deps.repository.failClaim({
+      if (cached) await deps.discardCachedOutput(cached).catch(() => undefined);
+      await deps.repository.releaseCache({
         attemptId: attempt.id,
         claimToken: claim.claimToken,
         safeErrorCode: "VIDEO_OUTPUT_CACHE_FAILED",
-        completedAt: observedAt
+        observedAt,
+        nextPollAt: new Date(observedAt.getTime() + 3000)
       });
     }
   }));
@@ -344,7 +376,7 @@ async function ensurePresetFailureFallback(
   const context = await deps.repository.loadContext(renderJobId);
   if (!context || context.job.kind !== "PRESET" || context.job.mode !== "AUTO_RACE") return;
   const lingmou = context.attempts.find((attempt) => attempt.providerKind === "LINGMOU_BROADCAST");
-  if (!lingmou || lingmou.status !== "FAILED") return;
+  if (!lingmou || lingmou.status !== "FAILED" || lingmou.failureKind !== "UPSTREAM_TERMINAL") return;
   const emo = context.attempts.find((attempt) => attempt.providerKind === "ALIBABA_EMO");
   if (emo) {
     await submitAttempt(emo.id, observedAt, settingsFromPersisted(context), deps);
@@ -402,13 +434,6 @@ function modelIdFor(settings: DigitalHumanVideoRuntimeSettings, provider: VideoP
 function firstPollAt(createdAt: Date, provider: VideoProviderKind, settings: DigitalHumanVideoRuntimeSettings) {
   const offset = provider === "LINGMOU_BROADCAST" ? settings.lingmouPollMs[0] : settings.emoPollMs[0];
   return new Date(createdAt.getTime() + offset);
-}
-
-function nextPoll(createdAt: Date, provider: VideoProviderKind, observedAt: Date) {
-  if (provider === "ALIBABA_EMO") return null;
-  return observedAt.getTime() < createdAt.getTime() + 6000
-    ? new Date(createdAt.getTime() + 6000)
-    : null;
 }
 
 function validateRenderInput(input: EnsureRenderInput, kind: RenderJobKind) {
@@ -522,6 +547,34 @@ async function defaultCreateReadUrl(asset: InternalRenderAsset) {
   const config = await prisma.mediaStorageConfig.findUnique({ where: { id: asset.storageConfigId } });
   if (!config || !config.enabled) throw new RenderConfigurationError("VIDEO_STORAGE_NOT_CONFIGURED");
   return createOssPrivateMediaStorage(config, readAiConfigSecret()).createReadUrl(asset.objectKey, 300);
+}
+
+function renderPlanFingerprint(input: EnsureRenderInput, definitions: RenderAttemptDefinition[]) {
+  const canonical = {
+    trainingSessionId: input.trainingSessionId,
+    questionId: input.questionId,
+    questionHash: input.questionHash,
+    cacheKey: input.cacheKey,
+    kind: input.kind,
+    mode: input.runtimeSettings.mode,
+    audioAssetId: input.audioAssetId,
+    createdAt: input.createdAt.toISOString(),
+    deadlineAt: input.deadlineAt.toISOString(),
+    synchronizeProfiles: input.runtimeSettings.synchronizeProfiles,
+    primaryProfileId: input.runtimeSettings.primaryProfileId,
+    secondaryProfileId: input.runtimeSettings.secondaryProfileId,
+    attempts: [...definitions]
+      .sort((left, right) => left.providerKind.localeCompare(right.providerKind))
+      .map((attempt) => ({
+        providerKind: attempt.providerKind,
+        providerId: attempt.providerId,
+        modelId: attempt.modelId,
+        interviewerProfileId: attempt.interviewerProfileId,
+        interviewerName: attempt.interviewerName,
+        portraitAssetId: attempt.portraitAssetId
+      }))
+  };
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
 function parseProfileMapping(value: string | undefined, code: string): Record<string, unknown> {

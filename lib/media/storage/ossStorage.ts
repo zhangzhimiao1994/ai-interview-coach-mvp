@@ -88,9 +88,16 @@ export class OssPrivateMediaStorage implements PrivateMediaStorage {
     body: Buffer;
     contentType: string;
     expiresAt: Date;
+    objectKey?: string;
   }) {
     const format = privateObjectFormat(input.purpose, input.contentType);
-    const objectKey = createPrivateObjectKey(format.category, format.extension);
+    const objectKey = input.objectKey ?? createPrivateObjectKey(format.category, format.extension);
+    if (input.objectKey && (
+      input.purpose !== "VIDEO_OUTPUT" ||
+      !/^media\/video\/render\/[a-f0-9]{64}\.mp4$/.test(input.objectKey)
+    )) {
+      throw new Error("Invalid deterministic object key");
+    }
 
     await this.client.put(objectKey, input.body, {
       headers: {
