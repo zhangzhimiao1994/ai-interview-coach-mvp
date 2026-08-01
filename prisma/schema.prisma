@@ -362,6 +362,7 @@ model DigitalHumanRenderJob {
   mode                 String
   status               String                      @default("PENDING")
   interviewerProfileId String
+  audioAssetId          String?
   deadlineAt           DateTime
   winnerAttemptId      String?
   fallbackReason       String?
@@ -385,6 +386,8 @@ model DigitalHumanRenderAttempt {
   providerId           String
   modelId              String
   interviewerName      String
+  interviewerProfileId String?
+  portraitAssetId      String?
   status               String                 @default("PENDING")
   upstreamTaskId       String?
   traceId              String?
@@ -397,6 +400,10 @@ model DigitalHumanRenderAttempt {
   outputUrlIv          String?
   outputUrlTag         String?
   safeErrorCode        String?
+  successObservedAt    DateTime?
+  claimOperation       String?
+  claimToken           String?
+  claimExpiresAt       DateTime?
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
 
@@ -405,6 +412,7 @@ model DigitalHumanRenderAttempt {
 
   @@unique([renderJobId, providerKind])
   @@index([status, nextPollAt])
+  @@index([claimOperation, claimExpiresAt])
 }
 
 model DigitalHumanVideoDiagnosticAudit {
