@@ -60,6 +60,8 @@ Compose 健康检查仅访问公开 `/api/health`，这是免费的配置级应�
 
 任何 Docker 测试结束后必须彻底关闭：
 
+`docker desktop stop` is Windows Docker Desktop only and stops all local Desktop workloads; on Linux run only `docker compose down --remove-orphans` because a native Docker daemon does not support the Desktop command.
+
 ```bash
 docker compose down --remove-orphans
 docker desktop stop

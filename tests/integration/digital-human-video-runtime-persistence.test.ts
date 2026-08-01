@@ -10,15 +10,16 @@ import { createAdminSessionCookie, adminSessionCookieName } from "@/lib/security
 import { createCandidateSessionCookie, candidateSessionCookieName } from "@/lib/security/candidateSession";
 import { authorizeAdminRequest, requestHasTrustedOrigin } from "@/lib/security/adminRouteAuth";
 
-const secret = "task-nine-strong-secret-1234567890-ABCD";
+const secret = "runtime-persistence-test-secret-1234567890-ABCD";
 let directory = ""; let client: PrismaClient;
+let databaseUrl = "";
 let previousConfigSecret: string | undefined;
 
 beforeAll(async () => {
   previousConfigSecret = process.env.AI_CONFIG_SECRET;
   process.env.AI_CONFIG_SECRET = secret;
   const prismaDir = join(process.cwd(), "prisma"); directory = mkdtempSync(join(prismaDir, ".task9-runtime-"));
-  const url = `file:./${basename(directory)}/runtime.db`; const sqlFile = join(directory, "setup.sql");
+  const url = `file:./${basename(directory)}/runtime.db`; databaseUrl = url; const sqlFile = join(directory, "setup.sql");
   writeFileSync(sqlFile, readdirSync(join(prismaDir, "migrations")).filter((name) => /^\d/.test(name)).sort().map((name) => readFileSync(join(prismaDir, "migrations", name, "migration.sql"), "utf8")).join("\n"));
   execFileSync(process.execPath, [join(process.cwd(), "node_modules/prisma/build/index.js"), "db", "execute", "--file", sqlFile, "--url", url], { cwd: prismaDir, stdio: "pipe" });
   client = new PrismaClient({ datasourceUrl: url });
@@ -95,7 +96,7 @@ describe("transactional video runtime persistence", () => {
   });
 
   it("retains the exact encrypted envelope on omitted-secret updates and rolls back invalid runtime", async () => {
-    await saveDigitalHumanVideoStorage({ displayName: "Private OSS", endpoint: "oss-cn-hangzhou.aliyuncs.com", bucket: "private-bucket", region: "cn-hangzhou", enabled: true, credentials: { accessKeyId: "LTAI-real", accessKeySecret: "top-secret" } }, client, secret);
+    await saveDigitalHumanVideoStorage({ id: "seed-storage", displayName: "Private OSS", endpoint: "oss-cn-hangzhou.aliyuncs.com", bucket: "private-bucket", region: "cn-hangzhou", enabled: true, credentials: { accessKeyId: "LTAI-real", accessKeySecret: "top-secret" } }, client, secret);
     const storage = await client.mediaStorageConfig.findFirstOrThrow({ where: { displayName: "Private OSS", enabled: true } });
     const envelope = { ciphertext: storage.credentialsCiphertext, iv: storage.credentialsIv, tag: storage.credentialsTag };
     await saveDigitalHumanVideoStorage({ id: storage.id, displayName: "Renamed OSS", endpoint: storage.endpoint, bucket: storage.bucket, region: null, enabled: true }, client, secret);
@@ -127,6 +128,65 @@ describe("transactional video runtime persistence", () => {
     expect(active.bucket).toBe("new-bucket");
     expect(retained).toMatchObject({ bucket: old.bucket, endpoint: old.endpoint, region: old.region, enabled: false });
     expect((await client.digitalHumanMediaAsset.findUniqueOrThrow({ where: { id: "old-audio" } })).storageConfigId).toBe(old.id);
+  });
+
+  it("rejects both stale-client write paths without disabling or replacing the current active storage", async () => {
+    const staleClient = new PrismaClient({ datasourceUrl: databaseUrl });
+    try {
+      const old = await client.mediaStorageConfig.findUniqueOrThrow({ where: { id: "seed-storage" } });
+      await saveDigitalHumanVideoStorage({
+        id: old.id,
+        displayName: "Current OSS",
+        endpoint: old.endpoint,
+        bucket: "current-bucket",
+        region: old.region,
+        enabled: true,
+        credentials: { accessKeyId: "LTAI-current", accessKeySecret: "current-secret" }
+      }, client, secret);
+      const current = await client.mediaStorageConfig.findFirstOrThrow({ where: { providerKind: "ALI_OSS", enabled: true } });
+
+      await expect(saveDigitalHumanVideoStorage({
+        id: old.id,
+        displayName: "Stale different name",
+        endpoint: old.endpoint,
+        bucket: "stale-bucket",
+        region: old.region,
+        enabled: true,
+        credentials: { accessKeyId: "LTAI-stale", accessKeySecret: "stale-secret" }
+      }, staleClient, secret)).rejects.toThrow("STALE_STORAGE_CONFIG");
+      await expect(saveDigitalHumanVideoStorage({
+        id: old.id,
+        displayName: current.displayName,
+        endpoint: old.endpoint,
+        bucket: "stale-same-name-bucket",
+        region: old.region,
+        enabled: true,
+        credentials: { accessKeyId: "LTAI-stale", accessKeySecret: "stale-secret" }
+      }, staleClient, secret)).rejects.toThrow("STALE_STORAGE_CONFIG");
+
+      expect(await client.mediaStorageConfig.findFirstOrThrow({ where: { providerKind: "ALI_OSS", enabled: true } }))
+        .toMatchObject({ id: current.id, displayName: "Current OSS", bucket: "current-bucket" });
+      expect(await client.mediaStorageConfig.count({ where: { providerKind: "ALI_OSS", enabled: true } })).toBe(1);
+    } finally {
+      await staleClient.$disconnect();
+    }
+  });
+
+  it("enforces one enabled configuration per provider kind in SQLite", async () => {
+    const indexes = await client.$queryRawUnsafe<Array<{ name: string; sql: string }>>(
+      `SELECT name, sql FROM sqlite_master WHERE type = 'index' AND name = 'MediaStorageConfig_one_enabled_per_provider_idx'`
+    );
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0].sql).toContain("WHERE \"enabled\" = 1");
+
+    await expect(client.mediaStorageConfig.create({ data: {
+      id: "second-active",
+      displayName: "Second active",
+      providerKind: "ALI_OSS",
+      endpoint: "oss-cn-hangzhou.aliyuncs.com",
+      bucket: "second-active-bucket",
+      enabled: true
+    } })).rejects.toMatchObject({ code: "P2002" });
   });
 
   it("rejects runtime activation when no enabled ALI_OSS exists", async () => {

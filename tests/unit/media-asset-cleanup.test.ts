@@ -63,7 +63,7 @@ describe("temporary media cleanup with isolated Prisma SQLite", () => {
     expect(await assetState("wrong-provider")).toMatchObject({ cleanupStatus: "ACTIVE", cleanedAt: null });
   });
 
-  it("drains more than one hundred expired rows exactly once across concurrent workers", async () => {
+  it("drains later batches once across concurrent workers while one interspersed row fails", async () => {
     await client.digitalHumanMediaAsset.createMany({ data: Array.from({ length: 205 }, (_, index) => ({
       id: `asset-${index}`,
       storageConfigId: "storage-old",
@@ -73,14 +73,43 @@ describe("temporary media cleanup with isolated Prisma SQLite", () => {
       purpose: "TTS_AUDIO",
       expiresAt: new Date(observedAt.getTime() - 1)
     })) });
+    await createStorage("storage-wrong", "wrong-bucket", true, "S3");
+    await createAsset("asset-050-failure", "storage-wrong", "media/audio/failure.wav", new Date(observedAt.getTime() - 1));
     const removed: string[] = [];
     const deleteBoundary = (bucket: string, key: string) => { removed.push(`${bucket}:${key}`); };
 
     const results = await Promise.all([runCleanup(observedAt, deleteBoundary), runCleanup(observedAt, deleteBoundary)]);
 
     expect(results.reduce((sum, result) => sum + result.cleaned, 0)).toBe(205);
+    expect(results.reduce((sum, result) => sum + result.failed, 0)).toBeGreaterThanOrEqual(1);
     expect(new Set(removed).size).toBe(205);
-    expect(await client.digitalHumanMediaAsset.count({ where: { cleanupStatus: "ACTIVE" } })).toBe(0);
+    expect(await client.digitalHumanMediaAsset.count({ where: { cleanupStatus: "ACTIVE" } })).toBe(1);
+    expect(await assetState("asset-050-failure")).toMatchObject({
+      cleanupStatus: "ACTIVE",
+      cleanupClaimToken: null,
+      cleanupClaimedAt: null,
+      cleanupClaimExpiresAt: null
+    });
+  });
+
+  it("keeps a locally timed-out delete leased instead of making it immediately retryable", async () => {
+    await createAsset("timed-out", "storage-old", "media/video/timed-out.mp4", new Date(observedAt.getTime() - 1));
+
+    const result = await runCleanup(observedAt, () => new Promise(() => undefined), { deleteTimeoutMs: 10 });
+
+    expect(result).toEqual({ cleaned: 0, failed: 1 });
+    expect(await assetState("timed-out")).toMatchObject({
+      cleanupStatus: "CLEANING",
+      cleanedAt: null
+    });
+    expect((await assetState("timed-out")).cleanupClaimToken).toEqual(expect.any(String));
+  });
+
+  it("uses a bounded keyset cursor instead of accumulating every attempted id", () => {
+    const source = readFileSync(join(process.cwd(), "lib/media/storage/mediaCleanup.ts"), "utf8");
+
+    expect(source).not.toContain("attemptedIds");
+    expect(source).toContain("id: { gt: cursor }");
   });
 
   it("recovers a crashed stale claim and later recovers when immediate reset loses ownership", async () => {
@@ -181,11 +210,16 @@ async function assetState(id: string) {
   return client.$queryRawUnsafe<Array<Record<string, unknown>>>(`SELECT * FROM "DigitalHumanMediaAsset" WHERE "id" = ?`, id).then((rows) => rows[0]);
 }
 
-async function runCleanup(now: Date, remove: (bucket: string, key: string) => void | Promise<void>) {
+async function runCleanup(
+  now: Date,
+  remove: (bucket: string, key: string) => void | Promise<void>,
+  overrides: { deleteTimeoutMs?: number; runTimeoutMs?: number } = {}
+) {
   return cleanupExpiredDigitalHumanMediaAssets({
     now,
     client,
     readConfigSecret: () => secret,
-    createStorage: (config) => ({ removeObject: (key) => Promise.resolve(remove(config.bucket, key)) })
+    createStorage: (config) => ({ removeObject: (key) => Promise.resolve(remove(config.bucket, key)) }),
+    ...overrides
   });
 }

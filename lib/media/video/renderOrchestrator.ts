@@ -78,10 +78,11 @@ export interface RenderOrchestratorDependencies {
   resolveVideoModel(id: string, providerKind: VideoProviderKind): Promise<ResolvedVideoProvider>;
   loadAsset(id: string): Promise<InternalRenderAsset | null>;
   createReadUrl(asset: InternalRenderAsset): Promise<string>;
-  cacheOutput(input: { attemptId: string; videoUrl: string; observedAt: Date }): Promise<{
+  cacheOutput(input: { attemptId: string; claimToken: string; videoUrl: string; observedAt: Date }): Promise<{
     assetId: string;
     objectKey?: string;
     created?: boolean;
+    attached?: boolean;
   }>;
   encryptOutputUrl(url: string): OutputEnvelope;
   decryptOutputUrl(envelope: OutputEnvelope): string;
@@ -96,7 +97,7 @@ export function createRenderOrchestrator(
     resolveVideoModel: defaultResolveVideoModel,
     loadAsset: defaultLoadAsset,
     createReadUrl: defaultCreateReadUrl,
-    cacheOutput: ({ attemptId, videoUrl, observedAt }) => cacheProviderVideoOutput({ attemptId, videoUrl, observedAt }),
+    cacheOutput: ({ attemptId, claimToken, videoUrl, observedAt }) => cacheProviderVideoOutput({ attemptId, claimToken, videoUrl, observedAt }),
     encryptOutputUrl: (url) => encryptSecret(url, readAiConfigSecret()),
     decryptOutputUrl: (envelope) => decryptSecret(envelope, readAiConfigSecret()),
     ...dependencyOverrides
@@ -330,19 +331,19 @@ async function cachePending(renderJobId: string, observedAt: Date, deps: RenderO
     if (!attempt.outputUrlCiphertext || !attempt.outputUrlIv || !attempt.outputUrlTag) return;
     const claim = await deps.repository.claimCache(attempt.id, observedAt);
     if (!claim) return;
-    let cached: { assetId: string; objectKey?: string; created?: boolean } | null = null;
+    let cached: { assetId: string; objectKey?: string; created?: boolean; attached?: boolean } | null = null;
     try {
       const videoUrl = deps.decryptOutputUrl({
         ciphertext: attempt.outputUrlCiphertext,
         iv: attempt.outputUrlIv,
         tag: attempt.outputUrlTag
       });
-      cached = await deps.cacheOutput({ attemptId: attempt.id, videoUrl, observedAt });
-      const attached = await deps.repository.completeCache({
-        attemptId: attempt.id,
-        claimToken: claim.claimToken,
-        outputAssetId: cached.assetId
-      });
+      cached = await deps.cacheOutput({ attemptId: attempt.id, claimToken: claim.claimToken, videoUrl, observedAt });
+      const attached = cached.attached ?? await deps.repository.completeCache({
+          attemptId: attempt.id,
+          claimToken: claim.claimToken,
+          outputAssetId: cached.assetId
+        });
       if (!attached) {
         await deps.repository.releaseCache({
           attemptId: attempt.id,

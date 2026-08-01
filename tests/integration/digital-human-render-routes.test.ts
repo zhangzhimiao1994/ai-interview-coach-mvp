@@ -774,6 +774,10 @@ async function seedConfiguredMaterialization(client: PrismaClient, suffix: strin
     lingmouModelId: `lingmou-${suffix}`,
     emoModelId: `emo-${suffix}`
   };
+  await client.mediaStorageConfig.updateMany({
+    where: { providerKind: "ALI_OSS", enabled: true },
+    data: { enabled: false }
+  });
   await client.mediaStorageConfig.create({ data: {
     id: storageId,
     displayName: storageId,

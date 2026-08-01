@@ -54,6 +54,9 @@ export function createDigitalHumanVideoRuntimeHandler(overrides: Partial<Runtime
       const input = putSchema.parse(await request.json());
       return json("action" in input ? await deps.saveStorage(input.storage) : await deps.saveConfig(input), 200);
     } catch (error) {
+      if (error instanceof RuntimeConfigValidationError && error.message === "STALE_STORAGE_CONFIG") {
+        return json({ error: "STALE_STORAGE_CONFIG" }, 409);
+      }
       if (error instanceof z.ZodError || error instanceof RuntimeConfigValidationError) return json({ error: "Validation failed" }, 400);
       return json({ error: "Internal server error" }, 500);
     }
@@ -150,6 +153,7 @@ async function persistStorage(storage: z.infer<typeof storageSchema>, database: 
   const existing = storage.id ? await database.mediaStorageConfig.findUnique({ where: { id: storage.id } }) : null;
   if (storage.id && !existing) throw new RuntimeConfigValidationError("OSS_STORAGE_NOT_FOUND");
   if (existing && existing.providerKind !== "ALI_OSS") throw new RuntimeConfigValidationError("OSS_STORAGE_KIND_INVALID");
+  if (existing && !existing.enabled) throw staleStorageConfig();
   if (!storage.credentials && (!existing || !completeStorageEnvelope(existing))) throw new RuntimeConfigValidationError("OSS_CREDENTIALS_REQUIRED");
   const encrypted = storage.credentials ? encryptOssCredentials(storage.credentials, configSecret) : null;
   const data = { displayName: storage.displayName, providerKind: "ALI_OSS", endpoint: storage.endpoint, bucket: storage.bucket, region: storage.region, enabled: true, ...(encrypted ? { credentialsCiphertext: encrypted.ciphertext, credentialsIv: encrypted.iv, credentialsTag: encrypted.tag, credentialsPreviewJson: encrypted.previewJson } : {}) };
@@ -159,23 +163,41 @@ async function persistStorage(storage: z.infer<typeof storageSchema>, database: 
     existing.region !== storage.region ||
     storage.credentials
   ));
-  if (existing && identityChanged) {
-    await database.mediaStorageConfig.updateMany({ where: { providerKind: "ALI_OSS", enabled: true }, data: { enabled: false } });
-    const archivedName = `${existing.displayName} [archived:${existing.id}]`;
-    await database.mediaStorageConfig.update({ where: { id: existing.id }, data: { displayName: archivedName, enabled: false } });
-    await database.mediaStorageConfig.create({ data: {
-      ...data,
-      credentialsCiphertext: encrypted?.ciphertext ?? existing.credentialsCiphertext,
-      credentialsIv: encrypted?.iv ?? existing.credentialsIv,
-      credentialsTag: encrypted?.tag ?? existing.credentialsTag,
-      credentialsPreviewJson: encrypted?.previewJson ?? existing.credentialsPreviewJson
-    } });
-  } else if (existing) {
-    await database.mediaStorageConfig.update({ where: { id: existing.id }, data });
-  } else {
-    await database.mediaStorageConfig.updateMany({ where: { providerKind: "ALI_OSS", enabled: true }, data: { enabled: false } });
-    await database.mediaStorageConfig.create({ data });
+  try {
+    if (existing && identityChanged) {
+      const archivedName = `${existing.displayName} [archived:${existing.id}]`;
+      const disabled = await database.mediaStorageConfig.updateMany({
+        where: { id: existing.id, providerKind: "ALI_OSS", enabled: true },
+        data: { displayName: archivedName, enabled: false }
+      });
+      if (disabled.count !== 1) throw staleStorageConfig();
+      await database.mediaStorageConfig.create({ data: {
+        ...data,
+        credentialsCiphertext: encrypted?.ciphertext ?? existing.credentialsCiphertext,
+        credentialsIv: encrypted?.iv ?? existing.credentialsIv,
+        credentialsTag: encrypted?.tag ?? existing.credentialsTag,
+        credentialsPreviewJson: encrypted?.previewJson ?? existing.credentialsPreviewJson
+      } });
+    } else if (existing) {
+      const updated = await database.mediaStorageConfig.updateMany({
+        where: { id: existing.id, providerKind: "ALI_OSS", enabled: true },
+        data
+      });
+      if (updated.count !== 1) throw staleStorageConfig();
+    } else {
+      await database.mediaStorageConfig.create({ data });
+    }
+  } catch (error) {
+    if (error instanceof RuntimeConfigValidationError) throw error;
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw staleStorageConfig();
+    }
+    throw error;
   }
+}
+
+function staleStorageConfig() {
+  return new RuntimeConfigValidationError("STALE_STORAGE_CONFIG");
 }
 
 function completeStorageEnvelope(storage: { credentialsCiphertext: string | null; credentialsIv: string | null; credentialsTag: string | null }) {

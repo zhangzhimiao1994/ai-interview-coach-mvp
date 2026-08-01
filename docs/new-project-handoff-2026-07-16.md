@@ -37,6 +37,8 @@ Linux 使用同一 lockfile，执行 `npm ci`、`npx prisma migrate deploy`、`n
 
 若启动 Docker，测试后必须执行：
 
+`docker desktop stop` is Windows Docker Desktop only and stops all local Desktop workloads; on Linux run only `docker compose down --remove-orphans` because a native Docker daemon does not support the Desktop command.
+
 ```powershell
 docker compose down --remove-orphans
 docker desktop stop

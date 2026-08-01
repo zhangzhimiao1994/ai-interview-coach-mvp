@@ -78,14 +78,14 @@ describe("private OSS storage contract", () => {
     ]);
   });
 
-  it("accepts only an opaque deterministic render key when cache idempotency requires one", async () => {
+  it("accepts only an opaque immutable render generation key", async () => {
     const puts: string[] = [];
     const storage = new OssPrivateMediaStorage({
       put: async (key) => { puts.push(key); },
       signatureUrl: () => "opaque-read-handle",
       delete: async () => undefined
     });
-    const key = `media/video/render/${"a".repeat(64)}.mp4`;
+    const key = `media/video/render/${"a".repeat(64)}/11111111-1111-4111-8111-111111111111.mp4`;
 
     await expect(storage.putObject({
       purpose: "VIDEO_OUTPUT",
@@ -100,14 +100,21 @@ describe("private OSS storage contract", () => {
       contentType: "video/mp4",
       expiresAt: new Date("2026-08-01T00:00:00.000Z"),
       objectKey: "media/video/render/candidate-name.mp4"
-    })).rejects.toThrow("deterministic object key");
+    })).rejects.toThrow("generation object key");
+    await expect(storage.putObject({
+      purpose: "VIDEO_OUTPUT",
+      body: Buffer.from([1]),
+      contentType: "video/mp4",
+      expiresAt: new Date("2026-08-01T00:00:00.000Z"),
+      objectKey: `media/video/render/${"a".repeat(64)}.mp4`
+    })).rejects.toThrow("generation object key");
     await expect(storage.putObject({
       purpose: "VIDEO_OUTPUT",
       body: Buffer.from([1]),
       contentType: "video/webm",
       expiresAt: new Date("2026-08-01T00:00:00.000Z"),
       objectKey: key
-    })).rejects.toThrow("deterministic object key");
+    })).rejects.toThrow("generation object key");
     expect(puts).toEqual([key]);
   });
 });

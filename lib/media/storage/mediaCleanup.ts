@@ -34,9 +34,25 @@ export async function cleanupExpiredDigitalHumanMediaAssets(
   const deleteTimeoutMs = dependencyOverrides.deleteTimeoutMs ?? defaultDeleteTimeoutMs;
   const runTimeoutMs = dependencyOverrides.runTimeoutMs ?? defaultRunTimeoutMs;
   const deadline = Date.now() + runTimeoutMs;
-  const attemptedIds: string[] = [];
+  let cursor: string | undefined;
   let cleaned = 0;
   let failed = 0;
+
+  await client.digitalHumanMediaAsset.updateMany({
+    where: {
+      cleanupStatus: "ACTIVE",
+      OR: [
+        { cleanupClaimToken: { not: null } },
+        { cleanupClaimedAt: { not: null } },
+        { cleanupClaimExpiresAt: { not: null } }
+      ]
+    },
+    data: {
+      cleanupClaimToken: null,
+      cleanupClaimedAt: null,
+      cleanupClaimExpiresAt: null
+    }
+  });
 
   await client.digitalHumanMediaAsset.updateMany({
     where: {
@@ -59,17 +75,17 @@ export async function cleanupExpiredDigitalHumanMediaAssets(
       where: {
         cleanupStatus: "ACTIVE",
         expiresAt: { not: null, lte: now },
-        ...(attemptedIds.length > 0 ? { id: { notIn: attemptedIds } } : {})
+        ...(cursor ? { id: { gt: cursor } } : {})
       },
       include: { storageConfig: true },
-      orderBy: [{ expiresAt: "asc" }, { id: "asc" }],
+      orderBy: { id: "asc" },
       take: cleanupBatchSize
     });
     if (expired.length === 0) break;
+    cursor = expired[expired.length - 1].id;
 
     for (const asset of expired) {
       if (Date.now() > deadline) return { cleaned, failed };
-      attemptedIds.push(asset.id);
       const claimToken = randomUUID();
       const claim = await client.digitalHumanMediaAsset.updateMany({
         where: {
@@ -87,11 +103,19 @@ export async function cleanupExpiredDigitalHumanMediaAssets(
       });
       if (claim.count !== 1) continue;
 
+      let storage: Pick<PrivateMediaStorage, "removeObject">;
       try {
         if (asset.storageConfig.providerKind !== "ALI_OSS") {
           throw new Error("MEDIA_CLEANUP_STORAGE_KIND_INVALID");
         }
-        const storage = createStorage(asset.storageConfig, readConfigSecret());
+        storage = createStorage(asset.storageConfig, readConfigSecret());
+      } catch {
+        await resetOwnedClaim(client, asset.id, claimToken);
+        failed += 1;
+        continue;
+      }
+
+      try {
         await bounded(storage.removeObject(asset.objectKey), deleteTimeoutMs);
         const terminal = await client.digitalHumanMediaAsset.updateMany({
           where: { id: asset.id, cleanupStatus: "CLEANING", cleanupClaimToken: claimToken },
@@ -106,22 +130,27 @@ export async function cleanupExpiredDigitalHumanMediaAssets(
         if (terminal.count !== 1) throw new Error("MEDIA_CLEANUP_STATE_CONFLICT");
         cleaned += 1;
       } catch {
-        await client.digitalHumanMediaAsset.updateMany({
-          where: { id: asset.id, cleanupStatus: "CLEANING", cleanupClaimToken: claimToken },
-          data: {
-            cleanupStatus: "ACTIVE",
-            cleanupClaimToken: null,
-            cleanupClaimedAt: null,
-            cleanupClaimExpiresAt: null,
-            cleanedAt: null
-          }
-        }).catch(() => ({ count: 0 }));
+        // Once DELETE has been issued its outcome can be unknown. Keep the lease so
+        // only stale-lease recovery can retry this immutable physical generation.
         failed += 1;
       }
     }
   }
 
   return { cleaned, failed };
+}
+
+async function resetOwnedClaim(client: PrismaClient, assetId: string, claimToken: string) {
+  await client.digitalHumanMediaAsset.updateMany({
+    where: { id: assetId, cleanupStatus: "CLEANING", cleanupClaimToken: claimToken },
+    data: {
+      cleanupStatus: "ACTIVE",
+      cleanupClaimToken: null,
+      cleanupClaimedAt: null,
+      cleanupClaimExpiresAt: null,
+      cleanedAt: null
+    }
+  }).catch(() => ({ count: 0 }));
 }
 
 export function startDigitalHumanMediaCleanup(input: {

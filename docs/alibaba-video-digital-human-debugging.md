@@ -60,6 +60,8 @@ Linux 使用同一 `package-lock.json`：`npm ci`、`npx prisma migrate deploy`�
 
 Docker 健康检查只访问 `/api/health`，不得触发付费诊断。若使用 Docker，验证后彻底关闭：
 
+`docker desktop stop` is Windows Docker Desktop only and stops all local Desktop workloads; on Linux run only `docker compose down --remove-orphans` because a native Docker daemon does not support the Desktop command.
+
 ```powershell
 docker compose down --remove-orphans
 docker desktop stop

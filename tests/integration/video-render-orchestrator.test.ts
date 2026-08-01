@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createPrismaRenderRepository } from "@/lib/media/video/renderRepository";
 import { createRenderOrchestrator } from "@/lib/media/video/renderOrchestrator";
 import { cacheProviderVideoOutput, deterministicVideoObjectKey } from "@/lib/media/video/renderCache";
+import { cleanupExpiredDigitalHumanMediaAssets } from "@/lib/media/storage/mediaCleanup";
 import type { AsyncAvatarVideoProvider, DigitalHumanVideoRuntimeSettings } from "@/lib/media/video/types";
 import { MediaConfigurationError, MediaProviderError } from "@/lib/media/errors";
 
@@ -742,7 +743,88 @@ describe("persistent video render orchestration", () => {
     });
   });
 
-  it("replaces invalid deterministic cache metadata and reuses only a current valid asset", async () => {
+  it("isolates a replacement generation from a late delete of the claimed old object", async () => {
+    await withTemporaryPrisma(async (prisma) => {
+      await seedRenderParents(prisma);
+      const job = await createPrismaRenderRepository(prisma).ensureJob(renderInput());
+      const attempt = await prisma.digitalHumanRenderAttempt.findFirstOrThrow({ where: { renderJobId: job.id } });
+      await prisma.digitalHumanRenderAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          status: "CACHING",
+          claimOperation: "CACHE",
+          claimToken: "generation-owner",
+          claimExpiresAt: new Date("2026-08-01T00:01:00.000Z")
+        }
+      });
+      const observedAt = new Date("2026-08-01T00:00:03.000Z");
+      const oldObjectKey = deterministicVideoObjectKey(attempt.id, "storage-1");
+      await prisma.digitalHumanMediaAsset.create({ data: {
+        id: "asset-old-generation",
+        storageConfigId: "storage-1",
+        objectKey: oldObjectKey,
+        mimeType: "video/mp4",
+        byteLength: 3,
+        purpose: "VIDEO_OUTPUT",
+        expiresAt: new Date(observedAt.getTime() - 1)
+      } });
+      const objects = new Map([[oldObjectKey, "old-generation"]]);
+      let releaseDelete!: () => void;
+      let reportDeleteStarted!: () => void;
+      const deleteStarted = new Promise<void>((resolve) => { reportDeleteStarted = resolve; });
+      const deletePending = new Promise<void>((resolve) => { releaseDelete = resolve; });
+      const cleanup = cleanupExpiredDigitalHumanMediaAssets({
+        now: observedAt,
+        client: prisma,
+        deleteTimeoutMs: 5_000,
+        readConfigSecret: () => "controlled-boundary",
+        createStorage: () => ({
+          removeObject: async (objectKey) => {
+            reportDeleteStarted();
+            await deletePending;
+            objects.delete(objectKey);
+          }
+        })
+      });
+      await deleteStarted;
+
+      const replacement = await cacheProviderVideoOutput({
+        attemptId: attempt.id,
+        claimToken: "generation-owner",
+        videoUrl: "https://provider.example.invalid/generation.mp4",
+        observedAt,
+        fetcher: async () => new Response(Buffer.from([4, 5, 6]), {
+          status: 200,
+          headers: { "content-type": "video/mp4", "content-length": "3" }
+        })
+      }, {
+        client: prisma,
+        readConfigSecret: () => "controlled-boundary",
+        createStorage: () => ({
+          putObject: async (input) => {
+            objects.set(input.objectKey!, "new-generation");
+            return { objectKey: input.objectKey!, byteLength: input.body.byteLength };
+          }
+        })
+      });
+
+      releaseDelete();
+      await cleanup;
+
+      expect(replacement.assetId).not.toBe("asset-old-generation");
+      expect(replacement.objectKey).not.toBe(oldObjectKey);
+      expect(replacement.attached).toBe(true);
+      expect(objects.get(replacement.objectKey)).toBe("new-generation");
+      expect(await prisma.digitalHumanMediaAsset.findUniqueOrThrow({ where: { id: replacement.assetId } }))
+        .toMatchObject({ objectKey: replacement.objectKey, cleanupStatus: "ACTIVE" });
+      expect(await prisma.digitalHumanMediaAsset.findUniqueOrThrow({ where: { id: "asset-old-generation" } }))
+        .toMatchObject({ objectKey: oldObjectKey, cleanupStatus: "CLEANED" });
+      expect(await prisma.digitalHumanRenderAttempt.findUniqueOrThrow({ where: { id: attempt.id } }))
+        .toMatchObject({ status: "SUCCEEDED", outputAssetId: replacement.assetId, claimToken: null });
+    });
+  });
+
+  it("never overwrites prior cache rows and gives every physical upload a fresh generation", async () => {
     await withTemporaryPrisma(async (prisma) => {
       await seedRenderParents(prisma);
       await prisma.mediaStorageConfig.create({ data: {
@@ -751,6 +833,7 @@ describe("persistent video render orchestration", () => {
         providerKind: "ALI_OSS",
         endpoint: "other-oss.example.invalid",
         bucket: "other-private-bucket",
+        enabled: false,
         updatedAt: new Date()
       } });
       const observedAt = new Date("2026-08-01T00:00:03.000Z");
@@ -790,7 +873,7 @@ describe("persistent video render orchestration", () => {
           updatedAt: new Date(),
           ...invalid.changes
         } });
-        const cached = await cacheProviderVideoOutput({
+        const first = await cacheProviderVideoOutput({
           attemptId,
           videoUrl: `https://provider.example.invalid/${invalid.name}.mp4`,
           observedAt,
@@ -802,30 +885,39 @@ describe("persistent video render orchestration", () => {
             });
           }
         }, dependencies);
-        expect(cached.assetId).toBe(`asset-${invalid.name}`);
-        expect(await prisma.digitalHumanMediaAsset.findUnique({ where: { id: cached.assetId } }))
+        expect(first.assetId).not.toBe(`asset-${invalid.name}`);
+        expect(first.objectKey).toMatch(new RegExp(`^${objectKey.slice(0, -4)}/[0-9a-f-]{36}\\.mp4$`));
+        expect(await prisma.digitalHumanMediaAsset.findUnique({ where: { id: first.assetId } }))
           .toMatchObject({
             storageConfigId: "storage-1",
-            objectKey,
+            objectKey: first.objectKey,
             mimeType: "video/mp4",
             byteLength: 3,
             purpose: "VIDEO_OUTPUT",
             cleanupStatus: "ACTIVE",
             expiresAt: new Date("2026-08-01T23:00:03.000Z")
           });
+        expect(await prisma.digitalHumanMediaAsset.findUniqueOrThrow({ where: { id: `asset-${invalid.name}` } }))
+          .toMatchObject({ objectKey });
 
-        await cacheProviderVideoOutput({
+        const second = await cacheProviderVideoOutput({
           attemptId,
           videoUrl: `https://provider.example.invalid/${invalid.name}.mp4`,
           observedAt,
           fetcher: async () => {
-            throw new Error("a valid cache row must not be downloaded again");
+            fetchCalls += 1;
+            return new Response(Buffer.from([1, 2, 3]), {
+              status: 200,
+              headers: { "content-type": "video/mp4", "content-length": "3" }
+            });
           }
         }, dependencies);
+        expect(second.assetId).not.toBe(first.assetId);
+        expect(second.objectKey).not.toBe(first.objectKey);
       }
 
-      expect(fetchCalls).toBe(invalidCases.length);
-      expect(uploads).toHaveLength(invalidCases.length);
+      expect(fetchCalls).toBe(invalidCases.length * 2);
+      expect(new Set(uploads).size).toBe(invalidCases.length * 2);
     });
   });
 

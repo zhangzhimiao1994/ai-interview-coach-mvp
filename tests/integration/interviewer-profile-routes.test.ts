@@ -55,6 +55,33 @@ describe("digital-human administrator routes", () => {
     expect(text).not.toMatch(/ciphertext|credentialsIv|credentialsTag|objectKey|signedUrl/i);
   });
 
+  it("returns a safe 409 when an administrator submits a stale storage version", async () => {
+    const handler = createDigitalHumanVideoRuntimeHandler({
+      authorizeAdmin: async () => admin,
+      loadConfig: async () => ({ runtime: null, storage: null, profiles: [], models: [] }),
+      saveStorage: async () => { throw new RuntimeConfigValidationError("STALE_STORAGE_CONFIG"); }
+    });
+
+    const response = await handler(new Request("http://localhost/api/ai-services/digital-human-video-runtime", {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({
+        action: "SAVE_STORAGE",
+        storage: {
+          id: "stale-storage",
+          displayName: "Private OSS",
+          endpoint: "oss-cn-hangzhou.aliyuncs.com",
+          bucket: "private-bucket",
+          region: "cn-hangzhou",
+          enabled: true
+        }
+      })
+    }));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "STALE_STORAGE_CONFIG" });
+  });
+
   it("requires paid confirmation before delegating diagnostics", async () => {
     let calls = 0;
     const handler = createInterviewerProfileHandler({

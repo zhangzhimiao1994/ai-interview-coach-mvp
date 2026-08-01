@@ -83,4 +83,18 @@ describe("Alibaba dual video persistence schema", () => {
     }
     expect(migration).toContain("DigitalHumanMediaAsset_cleanupStatus_cleanupClaimExpiresAt_idx");
   });
+
+  it("normalizes legacy active storage rows before enforcing one active version per provider", () => {
+    const migrationPath = join(
+      root,
+      "prisma/migrations/20260801220000_isolate_cleanup_generations/migration.sql"
+    );
+    const migration = existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+
+    expect(migration).toContain('UPDATE "MediaStorageConfig"');
+    expect(migration).toContain('CREATE UNIQUE INDEX "MediaStorageConfig_one_enabled_per_provider_idx"');
+    expect(migration).toContain('WHERE "enabled" = 1');
+    expect(migration.indexOf('UPDATE "MediaStorageConfig"'))
+      .toBeLessThan(migration.indexOf('CREATE UNIQUE INDEX "MediaStorageConfig_one_enabled_per_provider_idx"'));
+  });
 });

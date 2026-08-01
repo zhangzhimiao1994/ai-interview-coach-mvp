@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { prisma as defaultPrisma } from "@/lib/db/prisma";
 import { readAiConfigSecret } from "@/lib/domain/aiServices";
@@ -10,6 +10,7 @@ const outputLifetimeMs = 23 * 60 * 60 * 1000;
 
 export async function cacheProviderVideoOutput(input: {
   attemptId: string;
+  claimToken?: string;
   videoUrl: string;
   observedAt: Date;
   fetcher?: typeof fetch;
@@ -24,11 +25,7 @@ export async function cacheProviderVideoOutput(input: {
     orderBy: { createdAt: "asc" }
   });
   if (!config) throw new Error("VIDEO_OUTPUT_STORAGE_NOT_CONFIGURED");
-  const objectKey = deterministicVideoObjectKey(input.attemptId, config.id);
-  const existing = await client.digitalHumanMediaAsset.findUnique({ where: { objectKey } });
-  if (isReusableVideoAsset(existing, config.id, input.observedAt)) {
-    return { assetId: existing.id, objectKey, created: false };
-  }
+  const objectKey = videoGenerationObjectKey(input.attemptId, config.id, randomUUID());
   const response = await (input.fetcher ?? fetch)(url, { redirect: "error" });
   if (!response.ok) throw new Error("VIDEO_OUTPUT_DOWNLOAD_FAILED");
   const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
@@ -46,36 +43,59 @@ export async function cacheProviderVideoOutput(input: {
     expiresAt,
     objectKey
   });
-  const asset = await client.$transaction((tx) => tx.digitalHumanMediaAsset.upsert({
-    where: { objectKey },
-    create: {
-      storageConfigId: config.id,
-      objectKey: uploaded.objectKey,
-      mimeType: "video/mp4",
-      byteLength: uploaded.byteLength,
-      purpose: "VIDEO_OUTPUT",
-      expiresAt
-    },
-    update: {
-      storageConfigId: config.id,
-      mimeType: "video/mp4",
-      byteLength: uploaded.byteLength,
-      purpose: "VIDEO_OUTPUT",
-      expiresAt,
-      cleanupStatus: "ACTIVE",
-      cleanedAt: null
-    }
-  }));
-  return { assetId: asset.id, objectKey, created: existing === null };
+  const persisted = await client.$transaction(async (tx) => {
+    const asset = await tx.digitalHumanMediaAsset.create({
+      data: {
+        id: randomUUID(),
+        storageConfigId: config.id,
+        objectKey: uploaded.objectKey,
+        mimeType: "video/mp4",
+        byteLength: uploaded.byteLength,
+        purpose: "VIDEO_OUTPUT",
+        expiresAt
+      }
+    });
+    if (!input.claimToken) return { asset, attached: undefined };
+    const attached = await tx.digitalHumanRenderAttempt.updateMany({
+      where: {
+        id: input.attemptId,
+        status: "CACHING",
+        claimOperation: "CACHE",
+        claimToken: input.claimToken
+      },
+      data: {
+        status: "SUCCEEDED",
+        outputAssetId: asset.id,
+        outputUrlCiphertext: null,
+        outputUrlIv: null,
+        outputUrlTag: null,
+        claimOperation: null,
+        claimToken: null,
+        claimExpiresAt: null
+      }
+    });
+    return { asset, attached: attached.count === 1 };
+  });
+  return { assetId: persisted.asset.id, objectKey, created: true, attached: persisted.attached };
 }
 
 export function deterministicVideoObjectKey(attemptId: string, storageConfigId: string) {
-  const digest = createHash("sha256")
+  return `media/video/render/${deterministicVideoCacheIdentity(attemptId, storageConfigId)}.mp4`;
+}
+
+export function videoGenerationObjectKey(attemptId: string, storageConfigId: string, generationId: string) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generationId)) {
+    throw new Error("VIDEO_OUTPUT_GENERATION_ID_INVALID");
+  }
+  return `media/video/render/${deterministicVideoCacheIdentity(attemptId, storageConfigId)}/${generationId.toLowerCase()}.mp4`;
+}
+
+function deterministicVideoCacheIdentity(attemptId: string, storageConfigId: string) {
+  return createHash("sha256")
     .update(storageConfigId)
     .update("\0")
     .update(attemptId)
     .digest("hex");
-  return `media/video/render/${digest}.mp4`;
 }
 
 type RenderCacheDependencies = {
@@ -86,27 +106,3 @@ type RenderCacheDependencies = {
     configSecret: string
   ) => Pick<PrivateMediaStorage, "putObject">;
 };
-
-type ReusableVideoAsset = {
-  id: string;
-  storageConfigId: string;
-  mimeType: string;
-  byteLength: number;
-  purpose: string;
-  expiresAt: Date | null;
-  cleanupStatus: string;
-};
-
-function isReusableVideoAsset(
-  asset: ReusableVideoAsset | null,
-  storageConfigId: string,
-  observedAt: Date
-): asset is ReusableVideoAsset {
-  return asset?.storageConfigId === storageConfigId &&
-    asset.purpose === "VIDEO_OUTPUT" &&
-    asset.mimeType === "video/mp4" &&
-    asset.byteLength > 0 &&
-    asset.cleanupStatus === "ACTIVE" &&
-    asset.expiresAt !== null &&
-    asset.expiresAt > observedAt;
-}

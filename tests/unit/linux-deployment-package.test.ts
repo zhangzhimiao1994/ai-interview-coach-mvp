@@ -189,6 +189,9 @@ describe("linux deployment package", () => {
     expect(docs).toContain("npm run db:migrate:deploy");
     expect(docs).toContain("docker compose down --remove-orphans");
     expect(docs).toContain("docker desktop stop");
+    expect(docs).toContain("Windows Docker Desktop only");
+    expect(docs).toContain("stops all local Desktop workloads");
+    expect(docs).toContain("on Linux run only `docker compose down --remove-orphans`");
     expect(docs).toContain("RECRUITMENT_SESSION_SECRET");
     expect(docs).toContain("recruitment API credentials and browser session state");
     expect(docs).toContain("招聘来源");

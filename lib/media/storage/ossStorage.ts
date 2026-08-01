@@ -95,9 +95,9 @@ export class OssPrivateMediaStorage implements PrivateMediaStorage {
     if (input.objectKey && (
       input.purpose !== "VIDEO_OUTPUT" ||
       input.contentType !== "video/mp4" ||
-      !/^media\/video\/render\/[a-f0-9]{64}\.mp4$/.test(input.objectKey)
+      !/^media\/video\/render\/[a-f0-9]{64}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.mp4$/.test(input.objectKey)
     )) {
-      throw new Error("Invalid deterministic object key");
+      throw new Error("Invalid render generation object key");
     }
 
     await this.client.put(objectKey, input.body, {
