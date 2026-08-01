@@ -13,6 +13,16 @@ import { parseBoundedRange } from "./renderApi";
 
 type RouteContext = { params: Promise<{ renderId: string }> };
 const maximumRangeBytes = 8 * 1024 * 1024;
+const defaultPlaybackTimeoutMs = 15_000;
+
+type RenderGetDependencies = {
+  authenticate: typeof authenticateRenderActor;
+  getRender: typeof getRenderForActor;
+  loadPlayback: typeof loadPlaybackAsset;
+  fetchUpstream: (url: string, init: RequestInit) => Promise<Response>;
+  fetchTimeoutMs: number;
+  streamTimeoutMs: number;
+};
 
 export function createRenderPostHandler(dependencies = {
   authenticate: authenticateRenderActor,
@@ -46,11 +56,13 @@ export function createPrewarmPostHandler(dependencies = {
   };
 }
 
-export function createRenderGetHandler(dependencies = {
+export function createRenderGetHandler(dependencies: RenderGetDependencies = {
   authenticate: authenticateRenderActor,
   getRender: getRenderForActor,
   loadPlayback: loadPlaybackAsset,
-  fetchUpstream: (url: string, init: RequestInit) => fetch(url, init)
+  fetchUpstream: (url: string, init: RequestInit) => fetch(url, init),
+  fetchTimeoutMs: defaultPlaybackTimeoutMs,
+  streamTimeoutMs: defaultPlaybackTimeoutMs
 }) {
   return async function GET(request: Request, context: RouteContext) {
     try {
@@ -70,7 +82,7 @@ export function createRenderGetHandler(dependencies = {
         }
         const upstreamUrl = await asset.createUpstreamUrl();
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5_000);
+        const timeout = setTimeout(() => controller.abort(), dependencies.fetchTimeoutMs);
         let upstream: Response;
         try {
           upstream = await dependencies.fetchUpstream(upstreamUrl, {
@@ -78,29 +90,39 @@ export function createRenderGetHandler(dependencies = {
             redirect: "error",
             signal: controller.signal
           });
+          clearTimeout(timeout);
         } catch (error) {
           clearTimeout(timeout);
           throw error;
         }
+        const expectedLength = range ? range.end - range.start + 1 : asset.byteLength;
+        const contentLength = parseCanonicalLength(upstream.headers.get("content-length"));
+        const rangeMatches = range
+          ? matchesExactContentRange(upstream.headers.get("content-range"), range.start, range.end, asset.byteLength)
+          : upstream.headers.get("content-range") === null;
         if (
           !upstream.ok || (range ? upstream.status !== 206 : upstream.status !== 200) ||
           upstream.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "video/mp4" ||
-          !upstream.body
+          !upstream.body || !rangeMatches || contentLength !== expectedLength
         ) {
-          clearTimeout(timeout);
-          controller.abort();
+          await terminateUpstream(upstream.body, controller, "invalid playback response");
           throw new RenderRequestError("PLAYBACK_UPSTREAM_UNAVAILABLE", 502);
         }
-        const body = timeoutBoundBody(upstream.body, controller, timeout);
+        const body = exactLengthBody(
+          upstream.body,
+          expectedLength,
+          controller,
+          dependencies.streamTimeoutMs
+        );
         const headers: Record<string, string> = {
           "Content-Type": "video/mp4",
+          "Content-Length": String(expectedLength),
           "Cache-Control": "private, no-store",
           "Accept-Ranges": "bytes",
           "X-Content-Type-Options": "nosniff"
         };
         if (range) {
           headers["Content-Range"] = `bytes ${range.start}-${range.end}/${asset.byteLength}`;
-          headers["Content-Length"] = String(range.end - range.start + 1);
         }
         return new NextResponse(body, { status: range ? 206 : 200, headers });
       }
@@ -115,27 +137,105 @@ export function createRenderGetHandler(dependencies = {
   };
 }
 
-function timeoutBoundBody(body: ReadableStream<Uint8Array>, controller: AbortController, timeout: ReturnType<typeof setTimeout>) {
+function parseCanonicalLength(value: string | null) {
+  if (!value || !/^(0|[1-9]\d*)$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function matchesExactContentRange(value: string | null, start: number, end: number, total: number) {
+  const match = /^bytes (0|[1-9]\d*)-(0|[1-9]\d*)\/(0|[1-9]\d*)$/.exec(value ?? "");
+  if (!match) return false;
+  return Number(match[1]) === start && Number(match[2]) === end && Number(match[3]) === total;
+}
+
+async function terminateUpstream(
+  body: ReadableStream<Uint8Array> | null,
+  controller: AbortController,
+  reason: unknown
+) {
+  controller.abort();
+  await body?.cancel(reason).catch(() => undefined);
+}
+
+function exactLengthBody(
+  body: ReadableStream<Uint8Array>,
+  expectedLength: number,
+  controller: AbortController,
+  timeoutMs: number
+) {
   const reader = body.getReader();
+  let streamedBytes = 0;
+  let finished = false;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+
+  function clearStreamTimeout() {
+    if (timeout) clearTimeout(timeout);
+    timeout = null;
+  }
+
+  function releaseReader() {
+    try {
+      reader.releaseLock();
+    } catch {
+      // A concurrent read may still be settling after cancellation.
+    }
+  }
+
+  function fail(error: Error) {
+    if (finished) return;
+    finished = true;
+    clearStreamTimeout();
+    controller.abort();
+    const cancellation = reader.cancel(error).catch(() => undefined);
+    streamController?.error(error);
+    void cancellation.finally(releaseReader);
+  }
+
   return new ReadableStream<Uint8Array>({
+    start(value) {
+      streamController = value;
+    },
     async pull(streamController) {
+      if (finished) return;
       try {
+        clearStreamTimeout();
+        timeout = setTimeout(
+          () => fail(new Error("Playback stream timeout")),
+          timeoutMs
+        );
         const result = await reader.read();
+        clearStreamTimeout();
+        if (finished) return;
         if (result.done) {
-          clearTimeout(timeout);
+          if (streamedBytes !== expectedLength) {
+            fail(new Error("Playback stream truncated"));
+            return;
+          }
+          finished = true;
+          clearStreamTimeout();
+          releaseReader();
           streamController.close();
         } else {
+          streamedBytes += result.value.byteLength;
+          if (streamedBytes > expectedLength) {
+            fail(new Error("Playback stream exceeded declared length"));
+            return;
+          }
           streamController.enqueue(result.value);
         }
       } catch (error) {
-        clearTimeout(timeout);
-        streamController.error(error);
+        fail(error instanceof Error ? error : new Error("Playback stream failed"));
       }
     },
     async cancel(reason) {
-      clearTimeout(timeout);
+      if (finished) return;
+      finished = true;
+      clearStreamTimeout();
       controller.abort();
       await reader.cancel(reason).catch(() => undefined);
+      releaseReader();
     }
   });
 }

@@ -1,4 +1,4 @@
-import { readAiConfigSecret } from "@/lib/domain/aiServices";
+import { readCandidateSessionSecret } from "./candidateSecret";
 import { adminSessionCookieName, verifyAdminSessionCookie } from "./adminSession";
 import {
   candidateSessionCookieName,
@@ -10,7 +10,7 @@ import type { RenderActor } from "@/lib/media/video/renderService";
 export async function authenticateRenderActor(request: Request): Promise<RenderActor | null> {
   let secret: string;
   try {
-    secret = readAiConfigSecret();
+    secret = readCandidateSessionSecret();
   } catch {
     return null;
   }

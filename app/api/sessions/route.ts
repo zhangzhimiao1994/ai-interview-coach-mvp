@@ -6,12 +6,13 @@ import { postErrorResponse } from "@/lib/api/errors";
 import { prisma } from "@/lib/db/prisma";
 import { buildStagePlan, parseStageConfigInput } from "@/lib/domain/stages";
 import { persistSessionWithRenderPlaceholders } from "@/lib/media/video/sessionPlaceholders";
-import { readAiConfigSecret } from "@/lib/domain/aiServices";
+import { resolveSessionVideoAvailability } from "@/lib/media/video/renderService";
 import {
   candidateSessionCookieName,
   candidateSessionCookieOptions,
   createCandidateSessionCookie
 } from "@/lib/security/candidateSession";
+import { readCandidateSessionSecret } from "@/lib/security/candidateSecret";
 
 const createSessionSchema = z
   .object({
@@ -26,9 +27,18 @@ function preferredLanguageFromTemplate(languageMode?: string | null) {
 export async function POST(request: Request) {
   let taskId: string | undefined;
   const startedAt = Date.now();
+  let cookieSecret: string;
 
   try {
-    const cookieSecret = readAiConfigSecret();
+    cookieSecret = readCandidateSessionSecret();
+  } catch {
+    return NextResponse.json({
+      error: "Server configuration error",
+      message: "Candidate session signing is unavailable."
+    }, { status: 503 });
+  }
+
+  try {
     const input = createSessionSchema.parse(await request.json());
     taskId = input.taskId;
 
@@ -83,7 +93,7 @@ export async function POST(request: Request) {
     const response = NextResponse.json({
       session,
       outline,
-      digitalHumanVideo: { status: "PENDING", fallbackAvailable: true }
+      digitalHumanVideo: await resolveSessionVideoAvailability(prisma)
     }, { status: 201 });
     response.cookies.set(
       candidateSessionCookieName,

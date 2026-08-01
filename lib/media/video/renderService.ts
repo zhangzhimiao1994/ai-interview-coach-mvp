@@ -97,6 +97,11 @@ export async function getRenderForActor(input: {
   if (placeholder.renderJobId) {
     await createRenderOrchestrator().advance(placeholder.renderJobId, observedAt);
     placeholder = await loadPlaceholder(input.renderId);
+  } else if (
+    placeholder.status === "MATERIALIZING" &&
+    (!placeholder.claimExpiresAt || placeholder.claimExpiresAt <= observedAt)
+  ) {
+    placeholder = await recoverExpiredMaterialization(placeholder.id, observedAt);
   } else if (placeholder.status === "SYNTHESIZING" && placeholder.claimExpiresAt && placeholder.claimExpiresAt <= observedAt) {
     await markExpiredSynthesisAmbiguous(placeholder.id, observedAt);
     placeholder = await loadPlaceholder(input.renderId);
@@ -183,7 +188,19 @@ export async function materializeRenderPlaceholder(
       ? parseDigitalHumanVideoRuntimeSettings(placeholder.runtimeSettingsJson)
       : await deps.loadRuntimeSettings();
   } catch {
-    await fallbackPlaceholder(id, "VIDEO_RUNTIME_NOT_CONFIGURED", undefined, database);
+    await database.digitalHumanRenderPlaceholder.updateMany({
+      where: {
+        id,
+        status: "PENDING",
+        claimToken: null,
+        updatedAt: placeholder.updatedAt
+      },
+      data: {
+        status: "FALLBACK",
+        fallbackReason: "VIDEO_RUNTIME_NOT_CONFIGURED",
+        claimExpiresAt: null
+      }
+    });
     return (await loadPlaceholder(id, database))!;
   }
 
@@ -269,6 +286,47 @@ export async function materializeRenderPlaceholder(
     await fallbackPlaceholder(id, "VIDEO_RENDER_UNAVAILABLE", claimToken, database);
   }
   return (await loadPlaceholder(id, database))!;
+}
+
+export async function recoverExpiredMaterialization(
+  id: string,
+  observedAt: Date,
+  overrides: Partial<RenderMaterializationDependencies> = {}
+) {
+  const database = overrides.database ?? prisma;
+  const placeholder = await loadPlaceholder(id, database);
+  if (!placeholder) throw new RenderRequestError("RENDER_NOT_FOUND", 404);
+  if (
+    placeholder.status !== "MATERIALIZING" ||
+    placeholder.renderJobId ||
+    (placeholder.claimExpiresAt && placeholder.claimExpiresAt > observedAt)
+  ) {
+    return placeholder;
+  }
+  return materializeRenderPlaceholder(id, observedAt, overrides);
+}
+
+export async function resolveSessionVideoAvailability(database: PrismaClient = prisma) {
+  try {
+    const settings = await loadRuntimeSettings(database);
+    const requiredProfileIds = settings.synchronizeProfiles
+      ? [settings.primaryProfileId]
+      : [settings.primaryProfileId, settings.secondaryProfileId!];
+    const profiles = await database.interviewerAvatarProfile.findMany({
+      where: { id: { in: requiredProfileIds }, enabled: true },
+      select: { id: true }
+    });
+    if (new Set(profiles.map(({ id }) => id)).size !== new Set(requiredProfileIds).size) {
+      throw new Error("profile unavailable");
+    }
+    return { status: "PENDING" as const, fallbackAvailable: true };
+  } catch {
+    return {
+      status: "FALLBACK" as const,
+      fallbackAvailable: true,
+      reason: "VIDEO_RUNTIME_NOT_CONFIGURED"
+    };
+  }
 }
 
 const materializePlaceholder = materializeRenderPlaceholder;

@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { createAdminSessionCookie } from "@/lib/security/adminSession";
+import { authenticateRenderActor } from "@/lib/security/renderRouteAuth";
 import { persistAnswerWithDynamicPlaceholder, persistSessionWithRenderPlaceholders } from "@/lib/media/video/sessionPlaceholders";
 import { buildDynamicRenderPlaceholder } from "@/lib/media/video/renderRequests";
 import type { TrainingOutline } from "@/lib/ai";
@@ -11,6 +12,7 @@ import {
   createCandidateSessionCookie,
   verifyCandidateSessionCookie
 } from "@/lib/security/candidateSession";
+import { readCandidateSessionSecret } from "@/lib/security/candidateSecret";
 import {
   createSafeRenderResponse,
   parseBoundedRange,
@@ -38,6 +40,33 @@ describe("secure digital-human render route contracts", () => {
     await expect(verifyCandidateSessionCookie(`${cookie}x`, secret, 1_099)).resolves.toEqual({ ok: false });
     await expect(verifyCandidateSessionCookie(`${cookie}.ignored`, secret, 1_099)).resolves.toEqual({ ok: false });
     await expect(verifyCandidateSessionCookie(cookie, secret, 1_100)).resolves.toEqual({ ok: false });
+  });
+
+  it("fails candidate capability signing closed for missing, placeholder, or weak secrets", async () => {
+    expect(() => readCandidateSessionSecret({})).toThrow(/CANDIDATE_SESSION_SECRET_INVALID/);
+    expect(() => readCandidateSessionSecret({ AI_CONFIG_SECRET: "change-this-before-production" })).toThrow(/CANDIDATE_SESSION_SECRET_INVALID/);
+    expect(() => readCandidateSessionSecret({ AI_CONFIG_SECRET: "short-secret" })).toThrow(/CANDIDATE_SESSION_SECRET_INVALID/);
+    await expect(createCandidateSessionCookie({ trainingSessionId: "session-a", candidateId: "candidate-a" }, "short-secret"))
+      .rejects.toThrow(/CANDIDATE_SESSION_SECRET_INVALID/);
+    await expect(verifyCandidateSessionCookie("body.signature", "short-secret")).resolves.toEqual({ ok: false });
+  });
+
+  it("rejects a forged render-admin cookie signed with the development fallback", async () => {
+    const previous = process.env.AI_CONFIG_SECRET;
+    delete process.env.AI_CONFIG_SECRET;
+    try {
+      const forged = await createAdminSessionCookie({
+        subject: "attacker",
+        username: "attacker",
+        source: "database"
+      }, "development-ai-config-secret-change-me");
+      await expect(authenticateRenderActor(new Request("http://localhost/api/digital-human/renders/render-a", {
+        headers: { cookie: `aic_admin_session=${forged}` }
+      }))).resolves.toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.AI_CONFIG_SECRET;
+      else process.env.AI_CONFIG_SECRET = previous;
+    }
   });
 
   it("accepts only server-authoritative request identifiers", () => {
@@ -102,6 +131,8 @@ describe("secure digital-human render route contracts", () => {
 
 describe("actual render HTTP handlers with migrated SQLite", () => {
   let directory = "";
+  let databasePath = "";
+  let resolvedDatabasePath = "";
   let client: PrismaClient;
   let routes: {
     item: typeof import("@/app/api/digital-human/renders/[renderId]/route");
@@ -114,29 +145,39 @@ describe("actual render HTTP handlers with migrated SQLite", () => {
   beforeAll(async () => {
     const prismaDirectory = join(process.cwd(), "prisma");
     directory = mkdtempSync(join(prismaDirectory, ".render-routes-"));
+    databasePath = join(directory, "routes.db");
     const databaseUrl = `file:./${basename(directory)}/routes.db`;
-    process.env.DATABASE_URL = databaseUrl;
-    process.env.AI_CONFIG_SECRET = secret;
-    const setupPath = join(directory, "setup.sql");
-    const sql = readdirSync(join(prismaDirectory, "migrations"))
-      .filter((name) => /^\d/.test(name))
-      .sort()
-      .map((name) => readFileSync(join(prismaDirectory, "migrations", name, "migration.sql"), "utf8"))
-      .join("\n");
-    writeFileSync(setupPath, sql, "utf8");
-    execFileSync(process.execPath, [join(process.cwd(), "node_modules/prisma/build/index.js"), "db", "execute", "--file", setupPath, "--url", databaseUrl], {
-      cwd: prismaDirectory,
-      stdio: "pipe"
-    });
-    client = new PrismaClient({ datasourceUrl: databaseUrl });
-    await seedSessions(client);
-    routes = {
-      item: await import("@/app/api/digital-human/renders/[renderId]/route"),
-      prewarm: await import("@/app/api/digital-human/renders/prewarm/route"),
-      root: await import("@/app/api/digital-human/renders/route"),
-      handlers: await import("@/lib/media/video/renderRouteHandlers"),
-      service: await import("@/lib/media/video/renderService")
-    };
+    try {
+      process.env.DATABASE_URL = databaseUrl;
+      process.env.AI_CONFIG_SECRET = secret;
+      const setupPath = join(directory, "setup.sql");
+      const sql = readdirSync(join(prismaDirectory, "migrations"))
+        .filter((name) => /^\d/.test(name))
+        .sort()
+        .map((name) => readFileSync(join(prismaDirectory, "migrations", name, "migration.sql"), "utf8"))
+        .join("\n");
+      writeFileSync(setupPath, sql, "utf8");
+      execFileSync(process.execPath, [join(process.cwd(), "node_modules/prisma/build/index.js"), "db", "execute", "--file", setupPath, "--url", databaseUrl], {
+        cwd: prismaDirectory,
+        stdio: "pipe"
+      });
+      client = new PrismaClient({ datasourceUrl: databaseUrl });
+      const databaseList = await client.$queryRawUnsafe<Array<{ name: string; file: string }>>("PRAGMA database_list");
+      resolvedDatabasePath = databaseList.find(({ name }) => name === "main")?.file ?? "";
+      expect(resolve(resolvedDatabasePath)).toBe(resolve(databasePath));
+      await seedSessions(client);
+      routes = {
+        item: await import("@/app/api/digital-human/renders/[renderId]/route"),
+        prewarm: await import("@/app/api/digital-human/renders/prewarm/route"),
+        root: await import("@/app/api/digital-human/renders/route"),
+        handlers: await import("@/lib/media/video/renderRouteHandlers"),
+        service: await import("@/lib/media/video/renderService")
+      };
+    } catch (error) {
+      await client?.$disconnect().catch(() => undefined);
+      rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      throw error;
+    }
   }, 30_000);
 
   afterAll(async () => {
@@ -144,6 +185,11 @@ describe("actual render HTTP handlers with migrated SQLite", () => {
     const { prisma } = await import("@/lib/db/prisma");
     await prisma.$disconnect();
     rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    expect(existsSync(directory)).toBe(false);
+  });
+
+  it("resolves and cleans the intended migrated SQLite test database", () => {
+    expect(resolve(resolvedDatabasePath)).toBe(resolve(databasePath));
   });
 
   it("denies candidate A access to candidate B query and prewarm", async () => {
@@ -265,20 +311,149 @@ describe("actual render HTTP handlers with migrated SQLite", () => {
         observedRange = new Headers(init.headers).get("range") ?? "";
         return new Response(new Uint8Array([1, 2, 3]), {
           status: 206,
-          headers: { "content-type": "video/mp4" }
+          headers: {
+            "content-type": "video/mp4",
+            "content-range": "bytes 0-2/100000000",
+            "content-length": "3"
+          }
         });
-      }
+      },
+      streamTimeoutMs: 100,
+      fetchTimeoutMs: 100
     });
     const response = await handler(new Request(
       "http://localhost/api/digital-human/renders/render-a?playback=1",
-      { headers: { range: "bytes=0-99999999" } }
+      { headers: { range: "bytes=0-2" } }
     ), { params: Promise.resolve({ renderId: "render-a" }) });
     expect(response.status).toBe(206);
     expect(observedUrl).toBe("https://signed.example/private-secret");
-    expect(observedRange).toBe(`bytes=0-${8 * 1024 * 1024 - 1}`);
+    expect(observedRange).toBe("bytes=0-2");
     expect(response.headers.get("location")).toBeNull();
-    expect(response.headers.get("content-range")).toBe(`bytes 0-${8 * 1024 * 1024 - 1}/100000000`);
+    expect(response.headers.get("content-range")).toBe("bytes 0-2/100000000");
     expect(JSON.stringify(Object.fromEntries(response.headers))).not.toContain("signed.example");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it("rejects wrong upstream range, length, MIME, and status before proxying", async () => {
+    const cases = [
+      { status: 206, headers: { "content-type": "video/mp4", "content-range": "bytes 1-3/10", "content-length": "3" } },
+      { status: 206, headers: { "content-type": "video/mp4", "content-range": "bytes 0-2/10", "content-length": "2" } },
+      { status: 206, headers: { "content-type": "text/html", "content-range": "bytes 0-2/10", "content-length": "3" } },
+      { status: 200, headers: { "content-type": "video/mp4", "content-range": "bytes 0-2/10", "content-length": "3" } }
+    ];
+    for (const upstream of cases) {
+      const handler = routes.handlers.createRenderGetHandler(playbackDependencies({
+        byteLength: 10,
+        upstream: new Response(new Uint8Array([1, 2, 3]), upstream)
+      }));
+      const response = await handler(new Request("http://localhost/api/digital-human/renders/render-a?playback=1", {
+        headers: { range: "bytes=0-2" }
+      }), { params: Promise.resolve({ renderId: "render-a" }) });
+      expect(response.status).toBe(502);
+    }
+  });
+
+  it("errors and aborts on truncated, overflowing, failed, or timed-out playback streams", async () => {
+    for (const body of [new Uint8Array([1, 2]), new Uint8Array([1, 2, 3, 4])]) {
+      let signal: AbortSignal | undefined;
+      const handler = routes.handlers.createRenderGetHandler(playbackDependencies({
+        byteLength: 10,
+        upstream: new Response(body, {
+          status: 206,
+          headers: { "content-type": "video/mp4", "content-range": "bytes 0-2/10", "content-length": "3" }
+        }),
+        observeSignal: (value) => { signal = value; }
+      }));
+      const response = await handler(new Request("http://localhost/api/digital-human/renders/render-a?playback=1", {
+        headers: { range: "bytes=0-2" }
+      }), { params: Promise.resolve({ renderId: "render-a" }) });
+      await expect(response.arrayBuffer()).rejects.toThrow();
+      expect(signal?.aborted).toBe(true);
+    }
+
+    let failedSignal: AbortSignal | undefined;
+    const failedStream = new ReadableStream<Uint8Array>({ pull() { throw new Error("stream failed"); } });
+    const failedHandler = routes.handlers.createRenderGetHandler(playbackDependencies({
+      byteLength: 10,
+      upstream: new Response(failedStream, {
+        status: 206,
+        headers: { "content-type": "video/mp4", "content-range": "bytes 0-2/10", "content-length": "3" }
+      }),
+      observeSignal: (value) => { failedSignal = value; }
+    }));
+    const failedResponse = await failedHandler(new Request("http://localhost/api/digital-human/renders/render-a?playback=1", {
+      headers: { range: "bytes=0-2" }
+    }), { params: Promise.resolve({ renderId: "render-a" }) });
+    await expect(failedResponse.arrayBuffer()).rejects.toThrow(/stream failed/);
+    expect(failedSignal?.aborted).toBe(true);
+
+    let cancelled = false;
+    let timeoutSignal: AbortSignal | undefined;
+    const hangingStream = new ReadableStream<Uint8Array>({
+      pull() { return new Promise(() => undefined); },
+      cancel() { cancelled = true; }
+    });
+    const timeoutHandler = routes.handlers.createRenderGetHandler(playbackDependencies({
+      byteLength: 10,
+      upstream: new Response(hangingStream, {
+        status: 206,
+        headers: { "content-type": "video/mp4", "content-range": "bytes 0-2/10", "content-length": "3" }
+      }),
+      observeSignal: (value) => { timeoutSignal = value; },
+      streamTimeoutMs: 10
+    }));
+    const timeoutResponse = await timeoutHandler(new Request("http://localhost/api/digital-human/renders/render-a?playback=1", {
+      headers: { range: "bytes=0-2" }
+    }), { params: Promise.resolve({ renderId: "render-a" }) });
+    await expect(timeoutResponse.arrayBuffer()).rejects.toThrow(/timeout/i);
+    expect(timeoutSignal?.aborted).toBe(true);
+    expect(cancelled).toBe(true);
+  });
+
+  it("requires trustworthy full-response length and counts the un-ranged stream", async () => {
+    const missingLength = routes.handlers.createRenderGetHandler(playbackDependencies({
+      byteLength: 3,
+      upstream: new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "video/mp4" } })
+    }));
+    expect((await missingLength(new Request("http://localhost/api/digital-human/renders/render-a?playback=1"), {
+      params: Promise.resolve({ renderId: "render-a" })
+    })).status).toBe(502);
+
+    const valid = routes.handlers.createRenderGetHandler(playbackDependencies({
+      byteLength: 3,
+      upstream: new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "video/mp4", "content-length": "3" }
+      })
+    }));
+    const response = await valid(new Request("http://localhost/api/digital-human/renders/render-a?playback=1"), {
+      params: Promise.resolve({ renderId: "render-a" })
+    });
+    expect(response.status).toBe(200);
+    expect((await response.arrayBuffer()).byteLength).toBe(3);
+  });
+
+  it("uses an idle read timeout so a steady multi-chunk stream may exceed one timeout window", async () => {
+    let next = 1;
+    const steadyStream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await new Promise((resolve) => setTimeout(resolve, 8));
+        controller.enqueue(new Uint8Array([next++]));
+        if (next === 4) controller.close();
+      }
+    });
+    const handler = routes.handlers.createRenderGetHandler(playbackDependencies({
+      byteLength: 3,
+      upstream: new Response(steadyStream, {
+        status: 200,
+        headers: { "content-type": "video/mp4", "content-length": "3" }
+      }),
+      streamTimeoutMs: 15
+    }));
+    const response = await handler(new Request("http://localhost/api/digital-human/renders/render-a?playback=1"), {
+      params: Promise.resolve({ renderId: "render-a" })
+    });
+    expect((await response.arrayBuffer()).byteLength).toBe(3);
   });
 
   it("persists every outline placeholder atomically without touching any media/provider table", async () => {
@@ -475,7 +650,99 @@ describe("actual render HTTP handlers with migrated SQLite", () => {
     expect(await client.digitalHumanRenderPlaceholder.findUnique({ where: { id: "configured-placeholder-cas" } }))
       .toMatchObject({ status: "MATERIALIZED", renderJobId: "configured-job-cas", fallbackReason: null });
   });
+
+  it("recovers an expired MATERIALIZING placeholder with no render link", async () => {
+    const settings = await seedConfiguredMaterialization(client, "recover", true);
+    const recovered = await routes.service.recoverExpiredMaterialization(
+      "configured-placeholder-recover",
+      new Date(31_000),
+      {
+        database: client,
+        loadRuntimeSettings: async () => settings,
+        createSpeechAsset: async () => { throw new Error("attached audio must be reused"); },
+        createOrchestrator: () => ({
+          ensurePresetJob: async () => renderSnapshot("configured-job-recover"),
+          startDynamicRace: async () => renderSnapshot("configured-job-recover"),
+          advance: async () => renderSnapshot("configured-job-recover"),
+          collectLateResults: async () => undefined
+        }),
+        makeClaimToken: () => "recovery-claim",
+        now: () => new Date(31_000)
+      }
+    );
+    expect(recovered).toMatchObject({ status: "MATERIALIZED", renderJobId: "configured-job-recover" });
+  });
+
+  it("does not let a delayed invalid-config result overwrite a materialized successor", async () => {
+    const settings = await seedConfiguredMaterialization(client, "config-race");
+    let rejectSlow!: (error: Error) => void;
+    let startedSlow!: () => void;
+    const slowStarted = new Promise<void>((resolve) => { startedSlow = resolve; });
+    const slowSettings = new Promise<never>((_resolve, reject) => { rejectSlow = reject; });
+    const slow = routes.service.materializeRenderPlaceholder("configured-placeholder-config-race", new Date(0), {
+      database: client,
+      loadRuntimeSettings: async () => { startedSlow(); return slowSettings; }
+    });
+    await slowStarted;
+    await routes.service.materializeRenderPlaceholder("configured-placeholder-config-race", new Date(1), {
+      database: client,
+      loadRuntimeSettings: async () => settings,
+      createSpeechAsset: async () => ({ assetId: "configured-audio-config-race", mimeType: "audio/wav" as const, byteLength: 100, sampleRate: 48_000, channels: 1 as const }),
+      createOrchestrator: () => ({
+        ensurePresetJob: async () => renderSnapshot("configured-job-config-race"),
+        startDynamicRace: async () => renderSnapshot("configured-job-config-race"),
+        advance: async () => renderSnapshot("configured-job-config-race"),
+        collectLateResults: async () => undefined
+      }),
+      makeClaimToken: () => "successor-claim",
+      now: () => new Date(1)
+    });
+    rejectSlow(new Error("delayed invalid config"));
+    await slow;
+    expect(await client.digitalHumanRenderPlaceholder.findUnique({ where: { id: "configured-placeholder-config-race" } }))
+      .toMatchObject({ status: "MATERIALIZED", renderJobId: "configured-job-config-race", fallbackReason: null });
+  });
+
+  it("reports local FALLBACK for unavailable video runtime without media/provider calls", async () => {
+    await expect(routes.service.resolveSessionVideoAvailability(client)).resolves.toMatchObject({ status: "FALLBACK" });
+    await client.aiRuntimeSetting.create({ data: { key: "digital-human-video-runtime", valueJson: "not-json" } });
+    await expect(routes.service.resolveSessionVideoAvailability(client)).resolves.toMatchObject({ status: "FALLBACK" });
+    await client.aiRuntimeSetting.update({
+      where: { key: "digital-human-video-runtime" },
+      data: { valueJson: JSON.stringify({
+        mode: "LINGMOU_ONLY", maxWaitMs: 8000, lingmouPollMs: [3000, 6000], emoPollMs: [8000],
+        synchronizeProfiles: true, primaryProfileId: "missing-profile", secondaryProfileId: null,
+        lingmouModelId: "model-lingmou", emoModelId: "model-emo"
+      }) }
+    });
+    await expect(routes.service.resolveSessionVideoAvailability(client)).resolves.toMatchObject({ status: "FALLBACK" });
+    expect(await client.digitalHumanMediaAsset.count({ where: { purpose: "VIDEO_OUTPUT" } })).toBe(0);
+    expect(await client.digitalHumanRenderAttempt.count()).toBe(0);
+  });
 });
+
+function playbackDependencies(input: {
+  byteLength: number;
+  upstream: Response;
+  observeSignal?: (signal: AbortSignal) => void;
+  streamTimeoutMs?: number;
+}) {
+  return {
+    authenticate: async () => ({ type: "candidate" as const, trainingSessionId: "session-a", candidateId: "candidate-a" }),
+    getRender: async () => ({}),
+    loadPlayback: async () => ({
+      byteLength: input.byteLength,
+      mimeType: "video/mp4" as const,
+      createUpstreamUrl: async () => "https://signed.example/private"
+    }),
+    fetchUpstream: async (_url: string, init: RequestInit) => {
+      if (init.signal) input.observeSignal?.(init.signal);
+      return input.upstream;
+    },
+    streamTimeoutMs: input.streamTimeoutMs ?? 100,
+    fetchTimeoutMs: 100
+  };
+}
 
 function renderSnapshot(id: string) {
   return {

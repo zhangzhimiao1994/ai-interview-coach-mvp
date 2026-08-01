@@ -73,6 +73,7 @@ function jsonRequest(body: unknown) {
 
 async function loadRoutes() {
   vi.resetModules();
+  vi.stubEnv("AI_CONFIG_SECRET", "session-api-test-secret-with-enough-entropy-123");
 
   const prisma = {
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
@@ -212,7 +213,11 @@ describe("session API routes", () => {
         currentStage: "WARM_UP"
       },
       outline,
-      digitalHumanVideo: { status: "PENDING", fallbackAvailable: true }
+      digitalHumanVideo: {
+        status: "FALLBACK",
+        fallbackAvailable: true,
+        reason: "VIDEO_RUNTIME_NOT_CONFIGURED"
+      }
     });
   }, 15_000);
 

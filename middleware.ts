@@ -15,6 +15,7 @@ import {
   candidateSessionCookieName,
   verifyCandidateSessionCookie
 } from "@/lib/security/candidateSession";
+import { readCandidateSessionSecret } from "@/lib/security/candidateSecret";
 
 function unauthorized() {
   return new NextResponse("Authentication required", {
@@ -76,12 +77,16 @@ export async function middleware(request: NextRequest) {
       return NextResponse.next();
     }
 
-    const candidate = await verifyCandidateSessionCookie(
-      request.cookies.get(candidateSessionCookieName)?.value,
-      sessionSecret
-    );
-    if (candidate.ok && isCandidateApiPath(pathname, candidate.session.trainingSessionId)) {
-      return NextResponse.next();
+    try {
+      const candidate = await verifyCandidateSessionCookie(
+        request.cookies.get(candidateSessionCookieName)?.value,
+        readCandidateSessionSecret()
+      );
+      if (candidate.ok && isCandidateApiPath(pathname, candidate.session.trainingSessionId)) {
+        return NextResponse.next();
+      }
+    } catch {
+      // Candidate capabilities fail closed when no explicit strong secret is configured.
     }
   }
 

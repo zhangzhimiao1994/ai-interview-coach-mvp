@@ -1,3 +1,5 @@
+import { assertCandidateSessionSecret } from "./candidateSecret";
+
 export const candidateSessionCookieName = "aic_candidate_session";
 
 export type CandidateSessionPayload = {
@@ -56,6 +58,7 @@ export async function createCandidateSessionCookie(
   ttlMs = 12 * 60 * 60 * 1000,
   now = Date.now()
 ) {
+  assertCandidateSessionSecret(secret);
   if (!payload.trainingSessionId.trim() || !payload.candidateId.trim()) {
     throw new Error("Candidate session payload is invalid");
   }
@@ -68,6 +71,11 @@ export async function verifyCandidateSessionCookie(
   secret: string,
   now = Date.now()
 ) {
+  try {
+    assertCandidateSessionSecret(secret);
+  } catch {
+    return { ok: false as const };
+  }
   if (!value) return { ok: false as const };
   const parts = value.split(".");
   if (parts.length !== 2) return { ok: false as const };

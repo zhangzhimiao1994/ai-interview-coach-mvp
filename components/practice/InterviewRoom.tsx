@@ -10,6 +10,10 @@ import type { TrainingOutline, TrainingQuestion } from "@/lib/ai";
 import type { BehaviorSignals } from "@/lib/domain/behaviorSignals";
 import type { StagePlanItem } from "@/lib/domain/stages";
 import {
+  prewarmRenderQuestionsWithRetry,
+  requestDynamicRender
+} from "@/lib/client/digitalHumanRenderRequests";
+import {
   CandidateMediaPanel,
   type CandidateSpeechActivity
 } from "./CandidateMediaPanel";
@@ -168,18 +172,19 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
 
   useEffect(() => {
     if (!storedSession || !currentQuestion || prewarmedQuestionId.current === currentQuestion.id) return;
-    prewarmedQuestionId.current = currentQuestion.id;
     const controller = new AbortController();
-    void fetch("/api/digital-human/renders/prewarm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: storedSession.sessionId,
-        currentQuestionId: currentQuestion.id
-      }),
+    let active = true;
+    void prewarmRenderQuestionsWithRetry({
+      sessionId: storedSession.sessionId,
+      currentQuestionId: currentQuestion.id,
       signal: controller.signal
-    }).catch(() => undefined);
-    return () => controller.abort();
+    }).then((accepted) => {
+      if (active && accepted) prewarmedQuestionId.current = currentQuestion.id;
+    });
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [currentQuestion, storedSession]);
 
   useEffect(() => {
@@ -237,20 +242,15 @@ export function InterviewRoom({ taskId, taskTitle, stages }: InterviewRoomProps)
       const nextCoaching = payload?.coaching ?? null;
 
       if (!activeFollowUp && nextCoaching?.followUpQuestion) {
-        if (payload?.followUp?.text === nextCoaching.followUpQuestion) {
-          await fetch("/api/digital-human/renders", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              sessionId: storedSession.sessionId,
-              questionId: payload.followUp.id,
-              kind: "DYNAMIC"
-            })
-          }).catch(() => undefined);
-        }
         setCoaching(nextCoaching);
         setActiveFollowUp(nextCoaching.followUpQuestion);
         setAnswer("");
+        if (payload?.followUp?.text === nextCoaching.followUpQuestion) {
+          void requestDynamicRender({
+            sessionId: storedSession.sessionId,
+            questionId: payload.followUp.id
+          });
+        }
         setMessage("AI 已生成追问，请继续回答这一问。");
         return;
       }
