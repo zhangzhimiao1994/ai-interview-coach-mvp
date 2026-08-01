@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db/prisma";
 import { runDigitalHumanVideoDiagnostic, sanitizeDigitalHumanVideoDiagnosticResult } from "@/lib/media/video/diagnostics";
 import { parseVideoSpeechProfileStyle } from "@/lib/media/video/speechAsset";
 import { authorizeAdminRequest, requestHasTrustedOrigin, type AuthorizedAdmin } from "@/lib/security/adminRouteAuth";
-import type { InterviewerAvatarProfile } from "@prisma/client";
+import type { InterviewerAvatarProfile, PrismaClient } from "@prisma/client";
 
 const profileSchema = z.object({
   action: z.literal("SAVE_PROFILE"),
@@ -32,7 +32,7 @@ export function createInterviewerProfileHandler(overrides: Partial<ProfileRouteD
   const deps: ProfileRouteDependencies = {
     authorizeAdmin: authorizeAdminRequest,
     listProfiles: listDefaultProfiles,
-    saveProfile: saveDefaultProfile,
+    saveProfile: (input) => saveInterviewerProfile(input),
     runPaidDiagnostic: async (providerKind, actorId) => sanitizeDigitalHumanVideoDiagnosticResult(await runDigitalHumanVideoDiagnostic({ mode: "PAID", providerKind, confirmPaidRequest: true }, actorId)),
     ...overrides
   };
@@ -62,16 +62,19 @@ async function listDefaultProfiles() {
   const rows = await prisma.interviewerAvatarProfile.findMany({ orderBy: { createdAt: "asc" } });
   return rows.map(serializeProfile);
 }
-async function saveDefaultProfile(input: z.infer<typeof profileSchema>) {
+export async function saveInterviewerProfile(input: z.infer<typeof profileSchema>, database: PrismaClient = prisma) {
   let style;
   try { style = parseVideoSpeechProfileStyle(JSON.stringify(input.style)); }
   catch { throw new ProfileValidationError("PROFILE_STYLE_INVALID"); }
-  const asset = await prisma.digitalHumanMediaAsset.findUnique({ where: { id: input.portraitAssetId } });
-  if (!asset || asset.purpose !== "PORTRAIT" || asset.cleanupStatus !== "ACTIVE") throw new ProfileValidationError("PORTRAIT_INVALID");
   const data = { displayName: input.displayName, voice: input.voice, styleJson: JSON.stringify(style), portraitAssetId: input.portraitAssetId, lingmouMappingJson: JSON.stringify(input.lingmouMapping), emoMappingJson: JSON.stringify(input.emoMapping), providerRole: input.providerRole, enabled: input.enabled };
-  const row = input.id
-    ? await prisma.interviewerAvatarProfile.update({ where: { id: input.id }, data })
-    : await prisma.interviewerAvatarProfile.create({ data });
+  const row = await database.$transaction(async (tx) => {
+    const asset = await tx.digitalHumanMediaAsset.findUnique({ where: { id: input.portraitAssetId } });
+    if (!asset || asset.purpose !== "PORTRAIT" || asset.cleanupStatus !== "ACTIVE" || !asset.portraitWidth || !asset.portraitHeight) throw new ProfileValidationError("PORTRAIT_INVALID");
+    if (input.emoMapping.portraitWidth !== asset.portraitWidth || input.emoMapping.portraitHeight !== asset.portraitHeight) throw new ProfileValidationError("PORTRAIT_DIMENSIONS_MISMATCH");
+    return input.id
+      ? tx.interviewerAvatarProfile.update({ where: { id: input.id }, data })
+      : tx.interviewerAvatarProfile.create({ data });
+  });
   return serializeProfile(row);
 }
 function serializeProfile(row: InterviewerAvatarProfile) { return { id: row.id, displayName: row.displayName, voice: row.voice, style: parseObject(row.styleJson), portraitAssetId: row.portraitAssetId, lingmouMapping: parseObject(row.lingmouMappingJson), emoMapping: parseObject(row.emoMappingJson), providerRole: row.providerRole, enabled: row.enabled }; }

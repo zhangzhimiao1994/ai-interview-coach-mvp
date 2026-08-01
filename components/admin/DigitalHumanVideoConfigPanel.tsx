@@ -2,14 +2,14 @@
 
 import React, { useMemo, useState, type FormEvent } from "react";
 
-type ModelOption = { id: string; displayName: string; modelName: string; providerType: string };
+type ModelOption = { id: string; displayName: string; modelName: string; providerType: string; slot?: "LINGMOU_BROADCAST" | "ALIBABA_EMO" };
 type ProfileOption = { id: string; displayName: string; complete: boolean; enabled: boolean; voice?: string; portraitAssetId?: string | null; style?: Record<string, unknown>; lingmouMapping?: Record<string, unknown>; emoMapping?: Record<string, unknown>; providerRole?: string };
 type StorageView = { id: string; displayName: string; endpoint: string; bucket: string; region: string | null; credentialsPreview: Record<string, string>; enabled: boolean };
 type RuntimeView = { mode: "AUTO_RACE" | "LINGMOU_ONLY" | "EMO_ONLY"; synchronizeProfiles: boolean; primaryProfileId: string; secondaryProfileId: string | null; lingmouModelId: string; emoModelId: string };
 
 export function DigitalHumanVideoConfigPanel({ initialConfig, models, profiles, storage }: { initialConfig: RuntimeView | null; models: ModelOption[]; profiles: ProfileOption[]; storage: StorageView | null }) {
-  const lingModels = models.filter((model) => model.providerType === "LINGMOU");
-  const emoModels = models.filter((model) => model.providerType === "TONGYI");
+  const lingModels = models.filter((model) => model.slot === "LINGMOU_BROADCAST");
+  const emoModels = models.filter((model) => model.slot === "ALIBABA_EMO");
   const [mode, setMode] = useState(initialConfig?.mode ?? "AUTO_RACE");
   const [synchronize, setSynchronize] = useState(initialConfig?.synchronizeProfiles ?? true);
   const [primary, setPrimary] = useState(initialConfig?.primaryProfileId ?? profiles.find((profile) => profile.complete && profile.enabled)?.id ?? "");

@@ -64,7 +64,7 @@ describe("AI services admin page diagnostics", () => {
 
     expect(getAllAiDiagnostics).toHaveBeenCalledTimes(1);
     expect(providerFindMany).toHaveBeenCalledTimes(1);
-    expect(modelFindMany).toHaveBeenCalledTimes(1);
+    expect(modelFindMany).toHaveBeenCalledTimes(2);
     expect(runtimeSettingFindUnique).toHaveBeenCalledWith({
       where: { key: "ai.multimodalTakeover" }
     });

@@ -353,6 +353,8 @@ model DigitalHumanMediaAsset {
   mimeType          String
   byteLength        Int
   purpose           String
+  portraitWidth     Int?
+  portraitHeight    Int?
   expiresAt         DateTime?
   cleanupStatus     String                       @default("ACTIVE")
   cleanedAt         DateTime?

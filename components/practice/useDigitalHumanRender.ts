@@ -51,42 +51,50 @@ export function useDigitalHumanRender(input: RenderHookInput): HookState {
     }
     entry.subscribers += 1;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    let latestSnapshot: DigitalHumanRenderSnapshot | null = null;
     const startedAt = Date.now();
     setState({ phase: "STARTING", snapshot: null, key });
-    const deadlineTimer = setTimeout(() => {
-      if (generation.current !== current) return;
-      generation.current += 1;
-      controller.abort();
-      entry!.controller.abort();
-      setState({ phase: "FALLBACK", snapshot: fallbackSnapshot(startedAt), key });
-    }, 8_000);
+    const armDeadline = (deadline: number) => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      deadlineTimer = setTimeout(() => {
+        if (generation.current !== current) return;
+        generation.current += 1;
+        controller.abort();
+        if (!latestSnapshot && entry!.subscribers <= 1) entry!.controller.abort();
+        setState({ phase: "FALLBACK", snapshot: latestSnapshot ? { ...latestSnapshot, status: "FALLBACK", fallback: { active: true, reason: "CLIENT_RENDER_DEADLINE" } } : fallbackSnapshot(startedAt), key });
+      }, Math.max(0, deadline - Date.now()));
+    };
+    armDeadline(startedAt + 8_000);
     void entry.promise.then(async (initial) => {
       if (generation.current !== current || controller.signal.aborted) return;
       let snapshot = initial;
+      latestSnapshot = snapshot;
       const serverDeadline = Date.parse(snapshot.deadlineAt);
       const deadline = Math.min(startedAt + 8_000, Number.isFinite(serverDeadline) ? serverDeadline : startedAt + 8_000);
+      armDeadline(deadline);
       while (generation.current === current && !controller.signal.aborted) {
-        if (terminal.has(snapshot.status)) { clearTimeout(deadlineTimer); setState({ phase: snapshot.status === "READY" ? "ACTIVE" : "FALLBACK", snapshot, key }); return; }
         if (Date.now() >= deadline) {
-          clearTimeout(deadlineTimer); setState({ phase: "FALLBACK", snapshot: { ...snapshot, status: "FALLBACK", fallback: { active: true, reason: "CLIENT_RENDER_DEADLINE" } }, key }); return;
+          if (deadlineTimer) clearTimeout(deadlineTimer); controller.abort(); setState({ phase: "FALLBACK", snapshot: { ...snapshot, status: "FALLBACK", fallback: { active: true, reason: "CLIENT_RENDER_DEADLINE" } }, key }); return;
         }
+        if (terminal.has(snapshot.status)) { if (deadlineTimer) clearTimeout(deadlineTimer); setState({ phase: snapshot.status === "READY" ? "ACTIVE" : "FALLBACK", snapshot, key }); return; }
         setState({ phase: "ACTIVE", snapshot, key });
         await new Promise<void>((resolve) => { timer = setTimeout(resolve, Math.min(1_200, Math.max(200, deadline - Date.now()))); });
         if (controller.signal.aborted || generation.current !== current) return;
         if (Date.now() >= deadline) {
-          clearTimeout(deadlineTimer); setState({ phase: "FALLBACK", snapshot: { ...snapshot, status: "FALLBACK", fallback: { active: true, reason: "CLIENT_RENDER_DEADLINE" } }, key }); return;
+          if (deadlineTimer) clearTimeout(deadlineTimer); controller.abort(); setState({ phase: "FALLBACK", snapshot: { ...snapshot, status: "FALLBACK", fallback: { active: true, reason: "CLIENT_RENDER_DEADLINE" } }, key }); return;
         }
         try {
-          snapshot = await readSnapshot(await fetcher(`/api/digital-human/renders/${encodeURIComponent(snapshot.renderId)}`, { signal: controller.signal }));
+          snapshot = await readSnapshot(await fetcher(`/api/digital-human/renders/${encodeURIComponent(snapshot.renderId)}`, { signal: controller.signal })); latestSnapshot = snapshot;
         } catch {
           if (controller.signal.aborted) return;
-          clearTimeout(deadlineTimer); setState({ phase: "FALLBACK", snapshot: { ...snapshot, status: "FALLBACK", fallback: { active: true, reason: "CLIENT_POLL_FAILED" } }, key }); return;
+          if (deadlineTimer) clearTimeout(deadlineTimer); setState({ phase: "FALLBACK", snapshot: { ...snapshot, status: "FALLBACK", fallback: { active: true, reason: "CLIENT_POLL_FAILED" } }, key }); return;
         }
       }
     }).catch(() => {
-      if (generation.current === current && !controller.signal.aborted) { clearTimeout(deadlineTimer); setState({ phase: "FALLBACK", snapshot: fallbackSnapshot(startedAt), key }); }
+      if (generation.current === current && !controller.signal.aborted) { if (deadlineTimer) clearTimeout(deadlineTimer); setState({ phase: "FALLBACK", snapshot: fallbackSnapshot(startedAt), key }); }
     });
-    return () => { generation.current += 1; controller.abort(); clearTimeout(deadlineTimer); if (timer) clearTimeout(timer); entry!.subscribers -= 1; queueMicrotask(() => { if (entry!.subscribers === 0 && starts.get(key) === entry) { entry!.controller.abort(); starts.delete(key); } }); };
+    return () => { generation.current += 1; controller.abort(); if (deadlineTimer) clearTimeout(deadlineTimer); if (timer) clearTimeout(timer); entry!.subscribers -= 1; queueMicrotask(() => { if (entry!.subscribers === 0 && starts.get(key) === entry) { entry!.controller.abort(); starts.delete(key); } }); };
   }, [input.enabled, input.fetcher, input.kind, input.questionId, input.sessionId]);
   return state.key === requestedKey ? state : { phase: requestedKey ? "STARTING" : "IDLE", snapshot: null };
 }

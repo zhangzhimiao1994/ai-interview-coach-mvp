@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import { BoundedTtlMap } from "@/lib/client/boundedTtlMap";
 import { LocalQwenInterviewer } from "./DigitalInterviewerVideo";
 import { useDigitalHumanRender, type DigitalHumanRenderSnapshot } from "./useDigitalHumanRender";
 
-const fallbackNodes = new WeakMap<() => React.ReactNode, Map<string, React.ReactNode>>();
+const fallbackNodes = new WeakMap<() => React.ReactNode, BoundedTtlMap<string, React.ReactNode>>();
 
 type Props = {
   question: string;
@@ -25,6 +26,7 @@ export function DigitalHumanVideoPlayback({ question, stage = "Interview", sessi
   const latched = latchedState.key === identity ? latchedState.snapshot : incoming ?? null;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playedKey = useRef<string | null>(null);
+  const activeVideoMedia = useRef<{ key: string; video: HTMLVideoElement } | null>(null);
   const [manualPlay, setManualPlay] = useState(false);
 
   useEffect(() => {
@@ -46,12 +48,23 @@ export function DigitalHumanVideoPlayback({ question, stage = "Interview", sessi
 
   useEffect(() => {
     const video = videoRef.current;
-    if (status !== "READY" || !video || !latched?.playbackUrl || playedKey.current === identity) return;
-    playedKey.current = identity;
-    void video.play().catch((error) => {
-      if (error instanceof DOMException && error.name === "NotAllowedError") setManualPlay(true);
-    });
-    return () => { video.pause(); video.removeAttribute("src"); video.currentTime = 0; video.load(); };
+    const mediaKey = status === "READY" && video && latched?.playbackUrl ? `${identity}:${latched.playbackUrl}` : null;
+    const previous = activeVideoMedia.current;
+    if (previous && previous.key !== mediaKey) {
+      previous.video.pause(); previous.video.currentTime = 0;
+      if (!video || previous.video !== video) previous.video.removeAttribute("src");
+      previous.video.load();
+    }
+    if (!mediaKey || !video) { activeVideoMedia.current = null; return; }
+    const owner = { key: mediaKey, video };
+    activeVideoMedia.current = owner;
+    if (playedKey.current !== identity) {
+      playedKey.current = identity;
+      void video.play().catch((error) => {
+        if (error instanceof DOMException && error.name === "NotAllowedError") setManualPlay(true);
+      });
+    }
+    return () => { queueMicrotask(() => { if (activeVideoMedia.current !== owner) return; activeVideoMedia.current = null; video.pause(); video.removeAttribute("src"); video.currentTime = 0; video.load(); }); };
   }, [identity, latched?.playbackUrl, status]);
 
   return <section className="grid gap-3 rounded-lg border border-line bg-panel p-4" aria-label="Digital interviewer video">
@@ -66,7 +79,7 @@ export function DigitalHumanVideoPlayback({ question, stage = "Interview", sessi
 
 function cachedFallback(factory: () => React.ReactNode, identity: string) {
   let values = fallbackNodes.get(factory);
-  if (!values) { values = new Map(); fallbackNodes.set(factory, values); }
-  if (!values.has(identity)) values.set(identity, factory());
+  if (!values) { values = new BoundedTtlMap(128, 30 * 60_000); fallbackNodes.set(factory, values); }
+  if (values.get(identity) === undefined) values.set(identity, factory());
   return values.get(identity) ?? null;
 }

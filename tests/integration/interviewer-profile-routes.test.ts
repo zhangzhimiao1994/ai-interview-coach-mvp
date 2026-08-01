@@ -3,7 +3,7 @@ import { deflateSync } from "node:zlib";
 import { createDigitalHumanVideoRuntimeHandler, RuntimeConfigValidationError } from "@/app/api/ai-services/digital-human-video-runtime/handler";
 import { createInterviewerProfileHandler } from "@/app/api/admin/interviewer-profiles/handler";
 import { createInterviewerProfileDeleteHandler } from "@/app/api/admin/interviewer-profiles/[profileId]/handler";
-import { createPortraitUploadHandler, inspectImage } from "@/app/api/admin/interviewer-profiles/portrait/handler";
+import { createPortraitUploadHandler, inspectImage, withinPortraitDecodedBudget } from "@/app/api/admin/interviewer-profiles/portrait/handler";
 
 const admin = { id: "admin-1", role: "SUPER_ADMIN" };
 
@@ -148,18 +148,34 @@ describe("private portrait upload", () => {
   });
 
   it("keeps concurrent upload storage contexts isolated and persists portraits without expiry", async () => {
-    const persisted: Array<{ key: string; storage?: string; expiresAt: null }> = [];
+    const persisted: Array<{ key: string; storage?: string; expiresAt: null; width: number; height: number }> = [];
     let sequence = 0;
-    const handler = createPortraitUploadHandler({ authorizeAdmin: async () => admin, uploadPrivate: async (input) => ({ objectKey: `portrait-${++sequence}`, byteLength: input.body.length, storageConfigId: `storage-${sequence}` }), persistAsset: async (input) => { persisted.push({ key: input.objectKey, storage: input.storageConfigId, expiresAt: input.expiresAt }); return { id: `asset-${persisted.length}` }; }, removePrivate: async () => undefined });
+    const handler = createPortraitUploadHandler({ authorizeAdmin: async () => admin, uploadPrivate: async (input) => ({ objectKey: `portrait-${++sequence}`, byteLength: input.body.length, storageConfigId: `storage-${sequence}` }), persistAsset: async (input) => { persisted.push({ key: input.objectKey, storage: input.storageConfigId, expiresAt: input.expiresAt, width: input.width, height: input.height }); return { id: `asset-${persisted.length}` }; }, removePrivate: async () => undefined });
     const make = () => { const form = new FormData(); form.set("portrait", new File([png(400, 500)], "portrait.png", { type: "image/png" })); return handler(new Request("http://localhost/api/admin/interviewer-profiles/portrait", { method: "POST", headers: { origin: "http://localhost" }, body: form })); };
     const responses = await Promise.all([make(), make()]);
     expect(responses.map(({ status }) => status)).toEqual([201, 201]);
-    expect(persisted).toEqual(expect.arrayContaining([{ key: "portrait-1", storage: "storage-1", expiresAt: null }, { key: "portrait-2", storage: "storage-2", expiresAt: null }]));
+    expect(persisted).toEqual(expect.arrayContaining([{ key: "portrait-1", storage: "storage-1", expiresAt: null, width: 400, height: 500 }, { key: "portrait-2", storage: "storage-2", expiresAt: null, width: 400, height: 500 }]));
   });
 
-  it("accepts a structurally complete JPEG and rejects one without a scan", () => {
+  it("rejects PNG CRC, empty data, invalid filters, and decoded-length forgeries", () => {
+    const corruptCrc = Buffer.from(png(400, 500)); corruptCrc[corruptCrc.length - 1] ^= 1;
+    const emptyData = pngWithRaw(400, 500, Buffer.alloc(0), true);
+    const invalidLength = pngWithRaw(400, 500, Buffer.alloc(20));
+    const invalidFilterRaw = Buffer.alloc(500 * (1 + 400 * 4)); invalidFilterRaw[0] = 5;
+    expect(inspectImage(corruptCrc)).toBeNull();
+    expect(inspectImage(emptyData)).toBeNull();
+    expect(inspectImage(invalidLength)).toBeNull();
+    expect(inspectImage(pngWithRaw(400, 500, invalidFilterRaw))).toBeNull();
+  });
+
+  it("rejects decoded portrait payloads above the bounded memory budget before inflation", () => {
+    expect(withinPortraitDecodedBudget(4096, 4096, 4, 8)).toBe(false);
+    expect(withinPortraitDecodedBudget(3000, 3000, 4, 8)).toBe(true);
+  });
+
+  it("accepts a marker-complete JPEG and rejects an empty scan shell", () => {
     expect(inspectImage(jpeg(400, 500))).toMatchObject({ contentType: "image/jpeg", width: 400, height: 500 });
-    expect(inspectImage(jpeg(400, 500).subarray(0, 17))).toBeNull();
+    expect(inspectImage(jpegShell(400, 500))).toBeNull();
   });
 });
 
@@ -171,11 +187,17 @@ function validRuntimeBody(): any {
 }
 
 function png(width: number, height: number) {
-  const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header.set([8, 6, 0, 0, 0], 8);
   const scanlines = Buffer.alloc(height * (1 + width * 4));
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", deflateSync(scanlines)), chunk("IEND", Buffer.alloc(0))]);
+  return pngWithRaw(width, height, scanlines);
+}
+
+function pngWithRaw(width: number, height: number, scanlines: Buffer, emptyIdat = false) {
+  const header = Buffer.alloc(13); header.writeUInt32BE(width, 0); header.writeUInt32BE(height, 4); header.set([8, 6, 0, 0, 0], 8);
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", header), chunk("IDAT", emptyIdat ? Buffer.alloc(0) : deflateSync(scanlines)), chunk("IEND", Buffer.alloc(0))]);
 }
 
 function chunk(type: string, payload: Buffer) { const name = Buffer.from(type); const result = Buffer.alloc(12 + payload.length); result.writeUInt32BE(payload.length, 0); name.copy(result, 4); payload.copy(result, 8); result.writeUInt32BE(crc32(Buffer.concat([name, payload])), 8 + payload.length); return result; }
 function crc32(value: Buffer) { let crc = 0xffffffff; for (const byte of value) { crc ^= byte; for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1)); } return (crc ^ 0xffffffff) >>> 0; }
-function jpeg(width: number, height: number) { const sof = Buffer.from([0xff, 0xc0, 0x00, 0x0b, 0x08, height >> 8, height & 255, width >> 8, width & 255, 0x01, 0x01, 0x11, 0x00]); const sos = Buffer.from([0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00]); return Buffer.concat([Buffer.from([0xff, 0xd8]), sof, sos, Buffer.from([0x00, 0xff, 0xd9])]); }
+function jpeg(width: number, height: number) { const sof = Buffer.from([0xff, 0xc0, 0x00, 0x0b, 0x08, height >> 8, height & 255, width >> 8, width & 255, 0x01, 0x01, 0x11, 0x00]); const sos = Buffer.from([0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00]); const dqt = jpegSegment(0xdb, Buffer.concat([Buffer.from([0]), Buffer.alloc(64, 1)])); const counts = Buffer.alloc(16); counts[0] = 1; const dht = jpegSegment(0xc4, Buffer.concat([Buffer.from([0]), counts, Buffer.from([0])])); return Buffer.concat([Buffer.from([0xff, 0xd8]), dqt, dht, sof, sos, Buffer.from([0x11, 0x22, 0xff, 0x00, 0x33, 0xff, 0xd9])]); }
+function jpegShell(width: number, height: number) { const sof = Buffer.from([0xff, 0xc0, 0x00, 0x0b, 0x08, height >> 8, height & 255, width >> 8, width & 255, 0x01, 0x01, 0x11, 0x00]); const sos = Buffer.from([0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00]); return Buffer.concat([Buffer.from([0xff, 0xd8]), sof, sos, Buffer.from([0x00, 0xff, 0xd9])]); }
+function jpegSegment(marker: number, payload: Buffer) { const segment = Buffer.alloc(4 + payload.length); segment[0] = 0xff; segment[1] = marker; segment.writeUInt16BE(payload.length + 2, 2); payload.copy(segment, 4); return segment; }

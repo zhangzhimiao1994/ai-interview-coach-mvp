@@ -12,9 +12,11 @@ export async function persistDigitalHumanMediaAsset(
     objectKey: string;
     mimeType: string;
     byteLength: number;
-    purpose: PrivateMediaPurpose;
     expiresAt: Date | null;
-  },
+  } & (
+    | { purpose: "PORTRAIT"; portraitWidth: number; portraitHeight: number }
+    | { purpose: Exclude<PrivateMediaPurpose, "PORTRAIT">; portraitWidth?: never; portraitHeight?: never }
+  ),
   assets: DigitalHumanMediaAssetWriter = prisma.digitalHumanMediaAsset
 ) {
   return assets.create({
@@ -24,6 +26,10 @@ export async function persistDigitalHumanMediaAsset(
       mimeType: input.mimeType,
       byteLength: input.byteLength,
       purpose: input.purpose,
+      ...(input.purpose === "PORTRAIT" ? {
+        portraitWidth: input.portraitWidth,
+        portraitHeight: input.portraitHeight
+      } : {}),
       expiresAt: input.expiresAt
     }
   });

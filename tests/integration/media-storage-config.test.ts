@@ -87,6 +87,28 @@ describe("media storage configuration", () => {
     expect(JSON.stringify(writes)).not.toContain("https://");
   });
 
+  it("persists immutable dimensions only for portrait assets", async () => {
+    const writes: unknown[] = [];
+    const assets = { create: async (input: unknown) => { writes.push(input); return input; } };
+
+    await persistDigitalHumanMediaAsset({
+      storageConfigId: "storage-1",
+      objectKey: "media/portrait/11111111-1111-4111-8111-111111111111.png",
+      mimeType: "image/png",
+      byteLength: 32_000,
+      purpose: "PORTRAIT",
+      portraitWidth: 800,
+      portraitHeight: 1000,
+      expiresAt: null
+    }, assets);
+
+    expect(writes).toEqual([{ data: expect.objectContaining({
+      purpose: "PORTRAIT",
+      portraitWidth: 800,
+      portraitHeight: 1000
+    }) }]);
+  });
+
   it("drops raw and unknown persisted credential previews", () => {
     const response = serializeMediaStorageConfig({
       id: "storage-1",

@@ -110,34 +110,7 @@ export async function createVideoSpeechAsset(
     throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_NOT_CONFIGURED");
   }
 
-  const profileStyle = parseVideoSpeechProfileStyle(profile.styleJson);
-  const normalizedStage = input.stage.toUpperCase();
-  const stageVoices = {
-    [normalizedStage]: profile.voice.trim(),
-    ...profileStyle.stageVoices
-  };
-  const intent = classifyQuestionIntent(input.question);
-  const behavior = classifyBehaviorStyle(input.behaviorSignals);
-  const contextualInstruction = [
-    profileStyle.defaultInstruction ?? modelInstruction(model),
-    behavior?.instruction
-  ].filter(Boolean).join("\n");
-  const style = buildInterviewTtsStyle({
-    stage: input.stage,
-    text: input.question,
-    defaultInstruction: contextualInstruction,
-    stageVoices
-  });
-  const contextualVoice = behavior
-    ? profileStyle.signalVoices?.[behavior.kind]
-    : undefined;
-  const intentVoice = profileStyle.intentVoices?.[intent];
-  const speechInput: SpeechSynthesisInput = {
-    text: input.question,
-    instructions: style.instructions,
-    voice: contextualVoice ?? intentVoice ?? style.voice ?? profile.voice.trim(),
-    ...(profileStyle.speed === undefined ? {} : { speed: profileStyle.speed })
-  };
+  const speechInput = resolveVideoSpeechSynthesisInput({ question: input.question, stage: input.stage, behaviorSignals: input.behaviorSignals, profile, model });
   const stream = await deps.streamPcm(model, speechInput);
   const pcm = await collectPcm(stream);
   const wav = pcm16MonoToWav(pcm, stream.sampleRate);
@@ -170,6 +143,31 @@ export async function createVideoSpeechAsset(
     await deps.storage.removeObject(uploaded.objectKey).catch(() => undefined);
     throw error;
   }
+}
+
+export function resolveVideoSpeechSynthesisInput(input: {
+  question: string;
+  stage: string;
+  behaviorSignals: Record<string, unknown> | null;
+  profile: VideoSpeechProfile;
+  model: ResolvedMediaModel;
+}): SpeechSynthesisInput {
+  if (!input.profile.enabled || !text(input.profile.voice)) throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_NOT_CONFIGURED");
+  const profileStyle = parseVideoSpeechProfileStyle(input.profile.styleJson);
+  const normalizedStage = input.stage.toUpperCase();
+  const stageVoices = { [normalizedStage]: input.profile.voice.trim(), ...profileStyle.stageVoices };
+  const intent = classifyQuestionIntent(input.question);
+  const behavior = classifyBehaviorStyle(input.behaviorSignals);
+  const contextualInstruction = [profileStyle.defaultInstruction ?? modelInstruction(input.model), behavior?.instruction].filter(Boolean).join("\n");
+  const style = buildInterviewTtsStyle({ stage: input.stage, text: input.question, defaultInstruction: contextualInstruction, stageVoices });
+  const contextualVoice = behavior ? profileStyle.signalVoices?.[behavior.kind] : undefined;
+  const intentVoice = profileStyle.intentVoices?.[intent];
+  return {
+    text: input.question,
+    instructions: style.instructions,
+    voice: contextualVoice ?? intentVoice ?? style.voice ?? input.profile.voice.trim(),
+    ...(profileStyle.speed === undefined ? {} : { speed: profileStyle.speed })
+  };
 }
 
 function validateRequest(request: VideoSpeechAssetRequest): VideoSpeechAssetRequest {

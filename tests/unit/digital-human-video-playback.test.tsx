@@ -115,6 +115,29 @@ describe("useDigitalHumanRender", () => {
     expect(JSON.stringify(renderer!.toJSON())).toContain("FALLBACK");
   });
 
+  it("aborts a hung poll at the earlier server deadline and ignores a late terminal response", async () => {
+    vi.useFakeTimers();
+    let pollAborted = false;
+    let releasePoll: ((response: Response) => void) | null = null;
+    const fetcher: typeof fetch = async (_input, init) => {
+      if (init?.method === "POST") return Response.json(snapshot("PENDING", { deadlineAt: new Date(Date.now() + 2_000).toISOString() }), { status: 202 });
+      return new Promise<Response>((resolve) => {
+        releasePoll = resolve;
+        init?.signal?.addEventListener("abort", () => { pollAborted = true; }, { once: true });
+      });
+    };
+    function Harness() {
+      const state = useDigitalHumanRender({ sessionId: "session-server-deadline", questionId: "question-server-deadline", fetcher });
+      return <span>{state.snapshot?.status ?? state.phase}</span>;
+    }
+    await act(async () => { renderer = TestRenderer.create(<Harness />); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_050); });
+    expect(pollAborted).toBe(true);
+    expect(JSON.stringify(renderer!.toJSON())).toContain("FALLBACK");
+    await act(async () => { releasePoll?.(Response.json(snapshot("READY", { playbackUrl: "/api/digital-human/renders/render-1?playback=1" }))); await Promise.resolve(); });
+    expect(JSON.stringify(renderer!.toJSON())).toContain("FALLBACK");
+  });
+
   it.each([
     snapshot("UNRECOGNIZED"),
     snapshot("READY")
@@ -163,11 +186,15 @@ describe("DigitalHumanVideoPlayback", () => {
       await Promise.resolve();
     });
     expect(video.play).toHaveBeenCalledTimes(1);
+    expect(video.removeAttribute).not.toHaveBeenCalled();
     const text = JSON.stringify(renderer!.toJSON());
     expect(text).toContain("Lingmou Broadcast");
     expect(text).toContain("Lin");
     expect(renderer!.root.findByProps({ "aria-label": "Play interviewer video" })).toBeTruthy();
     expect(text).not.toMatch(/oss-|aliyuncs|signed/i);
+    await act(async () => { renderer!.unmount(); await Promise.resolve(); });
+    renderer = null;
+    expect(video.removeAttribute).toHaveBeenCalledTimes(1);
   });
 
   it("uses one local Qwen fallback and never replaces it with a late READY result", async () => {
@@ -178,6 +205,16 @@ describe("DigitalHumanVideoPlayback", () => {
     await act(async () => { renderer!.update(<StrictMode><DigitalHumanVideoPlayback question="Q1" snapshot={snapshot("READY", { playbackUrl: "/api/digital-human/renders/render-1?playback=1" })} renderFallback={fallback} /></StrictMode>); });
     expect(renderer!.root.findByProps({ "data-testid": "local-qwen-avatar" })).toBeTruthy();
     expect(renderer!.root.findAllByType("video")).toHaveLength(0);
+  });
+
+  it("stops prior READY media on identity change without removing the next source", async () => {
+    const video = { play: vi.fn(async () => undefined), pause: vi.fn(), currentTime: 0, removeAttribute: vi.fn(), load: vi.fn() };
+    await act(async () => { renderer = TestRenderer.create(<DigitalHumanVideoPlayback question="Q1" sessionId="s-video" questionId="q1" snapshot={snapshot("READY", { playbackUrl: "/api/digital-human/renders/render-1?playback=1" })} />, { createNodeMock: (node) => node.type === "video" ? video : null }); await Promise.resolve(); });
+    await act(async () => { renderer!.update(<DigitalHumanVideoPlayback question="Q2" sessionId="s-video" questionId="q2" snapshot={{ ...snapshot("READY", { playbackUrl: "/api/digital-human/renders/render-2?playback=1" }), renderId: "render-2" }} />); await Promise.resolve(); });
+    expect(video.pause).toHaveBeenCalledTimes(1);
+    expect(video.removeAttribute).not.toHaveBeenCalled();
+    expect(video.load).toHaveBeenCalledTimes(1);
+    expect(video.play).toHaveBeenCalledTimes(2);
   });
 
   it("uses the project Qwen fallback once without creating a legacy realtime session", async () => {
@@ -195,6 +232,33 @@ describe("DigitalHumanVideoPlayback", () => {
     });
     expect(requests).toEqual(["/api/digital-human/fallback-speech"]);
     expect(requests.some((url) => url.includes("/api/digital-human/sessions"))).toBe(false);
+    expect(audio.play).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares a StrictMode Qwen request but aborts it after the last subscriber switches question", async () => {
+    const requests: string[] = [];
+    let oldAborted = false;
+    let resolveNew: ((response: Response) => void) | null = null;
+    const fetcher: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { questionId: string };
+      requests.push(body.questionId);
+      return new Promise<Response>((resolve, reject) => {
+        if (body.questionId === "q-new") resolveNew = resolve;
+        init?.signal?.addEventListener("abort", () => {
+          if (body.questionId === "q-old") oldAborted = true;
+          reject(new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      });
+    };
+    const audio = { play: vi.fn(async () => undefined), pause: vi.fn(), removeAttribute: vi.fn(), load: vi.fn(), currentTime: 0, src: "", currentSrc: "" };
+    vi.stubGlobal("fetch", fetcher);
+    vi.stubGlobal("URL", { createObjectURL: () => "blob:qwen-switch", revokeObjectURL: () => undefined });
+    await act(async () => { renderer = TestRenderer.create(<StrictMode><DigitalHumanVideoPlayback question="Old" sessionId="session-switch" questionId="q-old" snapshot={snapshot("FALLBACK")} /></StrictMode>, { createNodeMock: (node) => node.type === "audio" ? audio : null }); await Promise.resolve(); });
+    expect(requests).toEqual(["q-old"]);
+    await act(async () => { renderer!.update(<StrictMode><DigitalHumanVideoPlayback question="New" sessionId="session-switch" questionId="q-new" snapshot={{ ...snapshot("FALLBACK"), renderId: "render-new" }} /></StrictMode>); await Promise.resolve(); await Promise.resolve(); });
+    expect(oldAborted).toBe(true);
+    expect(requests).toEqual(["q-old", "q-new"]);
+    await act(async () => { resolveNew?.(new Response(Uint8Array.from([1, 0]), { status: 200, headers: { "content-type": "audio/pcm" } })); await Promise.resolve(); await Promise.resolve(); });
     expect(audio.play).toHaveBeenCalledTimes(1);
   });
 });

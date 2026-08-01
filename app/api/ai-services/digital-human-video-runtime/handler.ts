@@ -2,12 +2,14 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { readAiConfigSecret } from "@/lib/domain/aiServices";
+import { resolveMediaModelById } from "@/lib/media/config";
 import { encryptOssCredentials, serializeMediaStorageConfig } from "@/lib/media/storage/ossCredentials";
 import { digitalHumanVideoRuntimeSettingKey } from "@/lib/media/video/diagnostics";
+import { assertCompatibleVideoModel, type CompatibleVideoModel, type VideoModelSlot } from "@/lib/media/video/modelCompatibility";
 import { parseDigitalHumanVideoRuntimeSettings } from "@/lib/media/video/settings";
 import { digitalHumanVideoRuntimeSettingsSchema } from "@/lib/validators/digitalHumanVideo";
 import { authorizeAdminRequest, requestHasTrustedOrigin, type AuthorizedAdmin } from "@/lib/security/adminRouteAuth";
-import type { AiModelConfig, AiServiceProvider, InterviewerAvatarProfile, PrismaClient } from "@prisma/client";
+import { Prisma, type DigitalHumanMediaAsset, type InterviewerAvatarProfile, type PrismaClient } from "@prisma/client";
 
 const storageSchema = z.object({
   id: z.string().trim().min(1).optional(),
@@ -24,7 +26,8 @@ const storagePutSchema = z.object({ action: z.literal("SAVE_STORAGE"), storage: 
 const putSchema = z.union([runtimePutSchema, storagePutSchema]);
 export type RuntimeConfigInput = z.infer<typeof putSchema>;
 export class RuntimeConfigValidationError extends Error {}
-type SafeRuntimeConfig = { runtime: unknown; storage: unknown; profiles: unknown[]; models: unknown[] };
+type SafeVideoModel = { id: string; displayName: string; modelName: string; providerType: string; slot: VideoModelSlot };
+export type SafeRuntimeConfig = { runtime: ReturnType<typeof safeRuntime>; storage: ReturnType<typeof serializeMediaStorageConfig> | null; profiles: Array<ReturnType<typeof safeProfile>>; models: SafeVideoModel[] };
 
 export type RuntimeRouteDependencies = {
   authorizeAdmin: (request: Request) => Promise<AuthorizedAdmin | null>;
@@ -60,46 +63,42 @@ export function createDigitalHumanVideoRuntimeHandler(overrides: Partial<Runtime
 export async function loadDigitalHumanVideoConfig(database: PrismaClient = prisma): Promise<SafeRuntimeConfig> {
   const [runtimeRow, storage, profiles, models] = await Promise.all([
     database.aiRuntimeSetting.findUnique({ where: { key: digitalHumanVideoRuntimeSettingKey } }),
-    database.mediaStorageConfig.findFirst({ where: { providerKind: "ALI_OSS" }, orderBy: { updatedAt: "desc" } }),
-    database.interviewerAvatarProfile.findMany({ orderBy: { createdAt: "asc" }, select: { id: true, displayName: true, voice: true, styleJson: true, portraitAssetId: true, lingmouMappingJson: true, emoMappingJson: true, providerRole: true, enabled: true } }),
-    database.aiModelConfig.findMany({ where: { capability: "DIGITAL_HUMAN_VIDEO" }, orderBy: { createdAt: "asc" }, select: { id: true, displayName: true, modelName: true, enabled: true, provider: { select: { providerType: true, enabled: true } } } })
+    database.mediaStorageConfig.findFirst({ where: { providerKind: "ALI_OSS", enabled: true }, orderBy: { updatedAt: "desc" } }),
+    database.interviewerAvatarProfile.findMany({ orderBy: { createdAt: "asc" }, select: { id: true, displayName: true, voice: true, styleJson: true, portraitAssetId: true, portraitAsset: { select: { purpose: true, cleanupStatus: true, portraitWidth: true, portraitHeight: true } }, lingmouMappingJson: true, emoMappingJson: true, providerRole: true, enabled: true } }),
+    database.aiModelConfig.findMany({ where: { capability: "DIGITAL_HUMAN_VIDEO" }, orderBy: { createdAt: "asc" }, include: { provider: true } })
   ]);
+  const compatibleModels = (await Promise.all(models.map(async (model): Promise<SafeVideoModel | null> => {
+    const slot = model.provider.providerType === "LINGMOU" ? "LINGMOU_BROADCAST" : model.provider.providerType === "TONGYI" ? "ALIBABA_EMO" : null;
+    if (!slot) return null;
+    try {
+      const resolved = await resolveMediaModelById(model.id, "DIGITAL_HUMAN_VIDEO", async () => model);
+      assertCompatibleVideoModel(resolved, slot, readAiConfigSecret);
+      return { id: model.id, displayName: model.displayName, modelName: model.modelName, providerType: model.provider.providerType, slot };
+    } catch { return null; }
+  }))).filter((model): model is SafeVideoModel => model !== null);
   return {
     runtime: safeRuntime(runtimeRow?.valueJson),
     storage: storage ? serializeMediaStorageConfig(storage) : null,
     profiles: profiles.map(safeProfile),
-    models: models.filter((model) => model.enabled && model.provider.enabled).map((model) => ({ id: model.id, displayName: model.displayName, modelName: model.modelName, providerType: model.provider.providerType }))
+    models: compatibleModels
   };
 }
 
 export async function saveDigitalHumanVideoRuntime(input: z.infer<typeof runtimePutSchema>, database: PrismaClient = prisma) {
   await database.$transaction(async (tx) => {
-    const [models, profiles] = await Promise.all([
-      tx.aiModelConfig.findMany({ where: { id: { in: [input.runtime.lingmouModelId, input.runtime.emoModelId] } }, include: { provider: true } }),
-      tx.interviewerAvatarProfile.findMany({ where: { id: { in: [input.runtime.primaryProfileId, ...(input.runtime.secondaryProfileId ? [input.runtime.secondaryProfileId] : [])] } } })
+    const [lingmou, emo, profiles] = await Promise.all([
+      resolveCompatibleModel(input.runtime.lingmouModelId, "LINGMOU_BROADCAST", tx),
+      resolveCompatibleModel(input.runtime.emoModelId, "ALIBABA_EMO", tx),
+      tx.interviewerAvatarProfile.findMany({ where: { id: { in: [input.runtime.primaryProfileId, ...(input.runtime.secondaryProfileId ? [input.runtime.secondaryProfileId] : [])] } }, include: { portraitAsset: true } })
     ]);
-    const lingmou = models.find((model) => model.id === input.runtime.lingmouModelId);
-    const emo = models.find((model) => model.id === input.runtime.emoModelId);
-    if (!validModel(lingmou, "LINGMOU", "LINGMOU_BROADCAST") || !validModel(emo, "TONGYI", "ALIBABA_EMO")) throw new RuntimeConfigValidationError("MODEL_PROVIDER_MISMATCH");
     const requiredIds = input.runtime.synchronizeProfiles ? [input.runtime.primaryProfileId] : [input.runtime.primaryProfileId, input.runtime.secondaryProfileId!];
-    if (new Set(requiredIds).size !== requiredIds.length || profiles.length !== requiredIds.length || profiles.some((profile) => !profileComplete(profile))) throw new RuntimeConfigValidationError("PROFILE_INCOMPLETE");
+    if (new Set(requiredIds).size !== requiredIds.length || profiles.length !== requiredIds.length || profiles.some((profile) => !profileCompatible(profile, lingmou, emo))) throw new RuntimeConfigValidationError("PROFILE_INCOMPLETE");
 
     if (input.storage) {
-      if (!input.storage.enabled) throw new RuntimeConfigValidationError("OSS_STORAGE_DISABLED");
-      const existing = input.storage.id ? await tx.mediaStorageConfig.findUnique({ where: { id: input.storage.id } }) : null;
-      if (existing && existing.providerKind !== "ALI_OSS") throw new RuntimeConfigValidationError("OSS_STORAGE_KIND_INVALID");
-      if (!existing && !input.storage.credentials) throw new RuntimeConfigValidationError("OSS_CREDENTIALS_REQUIRED");
-      const encrypted = input.storage.credentials ? encryptOssCredentials(input.storage.credentials, readAiConfigSecret()) : null;
-      const data = {
-        displayName: input.storage.displayName, providerKind: "ALI_OSS", endpoint: input.storage.endpoint, bucket: input.storage.bucket,
-        region: input.storage.region, enabled: input.storage.enabled,
-        ...(encrypted ? { credentialsCiphertext: encrypted.ciphertext, credentialsIv: encrypted.iv, credentialsTag: encrypted.tag, credentialsPreviewJson: encrypted.previewJson } : {})
-      };
-      if (existing) await tx.mediaStorageConfig.update({ where: { id: existing.id }, data });
-      else await tx.mediaStorageConfig.create({ data });
+      await persistStorage(input.storage, tx, readAiConfigSecret());
     } else {
       const existingStorage = await tx.mediaStorageConfig.findFirst({ where: { providerKind: "ALI_OSS", enabled: true } });
-      if (!existingStorage) throw new RuntimeConfigValidationError("OSS_STORAGE_REQUIRED");
+      if (!existingStorage || !completeStorageEnvelope(existingStorage)) throw new RuntimeConfigValidationError("OSS_STORAGE_REQUIRED");
     }
     await tx.aiRuntimeSetting.upsert({
       where: { key: digitalHumanVideoRuntimeSettingKey },
@@ -112,36 +111,57 @@ export async function saveDigitalHumanVideoRuntime(input: z.infer<typeof runtime
 
 export async function saveDigitalHumanVideoStorage(storage: z.infer<typeof storageSchema>, database: PrismaClient = prisma, configSecret: string = readAiConfigSecret()) {
   await database.$transaction(async (tx) => {
-    if (!storage.enabled) throw new RuntimeConfigValidationError("OSS_STORAGE_DISABLED");
-    const existing = storage.id ? await tx.mediaStorageConfig.findUnique({ where: { id: storage.id } }) : null;
-    if (storage.id && !existing) throw new RuntimeConfigValidationError("OSS_STORAGE_NOT_FOUND");
-    if (existing && existing.providerKind !== "ALI_OSS") throw new RuntimeConfigValidationError("OSS_STORAGE_KIND_INVALID");
-    if ((!existing || !existing.credentialsCiphertext || !existing.credentialsIv || !existing.credentialsTag) && !storage.credentials) throw new RuntimeConfigValidationError("OSS_CREDENTIALS_REQUIRED");
-    const encrypted = storage.credentials ? encryptOssCredentials(storage.credentials, configSecret) : null;
-    const data = { displayName: storage.displayName, providerKind: "ALI_OSS", endpoint: storage.endpoint, bucket: storage.bucket, region: storage.region, enabled: true, ...(encrypted ? { credentialsCiphertext: encrypted.ciphertext, credentialsIv: encrypted.iv, credentialsTag: encrypted.tag, credentialsPreviewJson: encrypted.previewJson } : {}) };
-    if (existing) await tx.mediaStorageConfig.update({ where: { id: existing.id }, data }); else await tx.mediaStorageConfig.create({ data });
+    await persistStorage(storage, tx, configSecret);
   });
   return loadDigitalHumanVideoConfig(database);
 }
 
-type VideoModel = AiModelConfig & { provider: AiServiceProvider };
-type ProfileFields = Pick<InterviewerAvatarProfile, "id" | "displayName" | "voice" | "styleJson" | "portraitAssetId" | "lingmouMappingJson" | "emoMappingJson" | "providerRole" | "enabled">;
-function validModel(model: VideoModel | undefined, providerType: string, slot: "LINGMOU_BROADCAST" | "ALIBABA_EMO") {
-  if (!model?.enabled || !model.provider?.enabled || model.capability !== "DIGITAL_HUMAN_VIDEO" || model.provider.providerType !== providerType || model.provider.providerType === "DUIX") return false;
+type PortraitAssetFields = Pick<DigitalHumanMediaAsset, "purpose" | "cleanupStatus" | "portraitWidth" | "portraitHeight">;
+type ProfileFields = Pick<InterviewerAvatarProfile, "id" | "displayName" | "voice" | "styleJson" | "portraitAssetId" | "lingmouMappingJson" | "emoMappingJson" | "providerRole" | "enabled"> & { portraitAsset: PortraitAssetFields | null };
+function profileCompatible(profile: ProfileFields | undefined, lingmou: CompatibleVideoModel, emoModel: CompatibleVideoModel) {
+  if (!profile?.enabled || !validPortraitAsset(profile.portraitAsset) || !profile.displayName?.trim() || !/^[A-Za-z0-9_.-]{1,100}$/.test(profile.voice?.trim())) return false;
   try {
-    const settings = JSON.parse(model.settingsJson);
-    return slot === "LINGMOU_BROADCAST"
-      ? Boolean(settings?.templateId && settings?.audioVariableName && typeof settings?.watermark === "boolean" && Number.isInteger(settings?.fps))
-      : settings?.model === "emo-v1" && ["1:1", "3:4"].includes(settings?.ratio);
+    const ling = JSON.parse(profile.lingmouMappingJson); const emoMapping = JSON.parse(profile.emoMappingJson); const style = JSON.parse(profile.styleJson);
+    const lingConfig = lingmou.slot === "LINGMOU_BROADCAST" ? lingmou.configuration : null;
+    const emoConfig = emoModel.slot === "ALIBABA_EMO" ? emoModel.configuration : null;
+    return Boolean(style && lingConfig && emoConfig &&
+      ling?.templateId === lingConfig.templateId && ling?.audioVariableName === lingConfig.audioVariableName && (ling?.portraitVariableName ?? null) === lingConfig.portraitVariableName &&
+      emoMapping?.portraitWidth === profile.portraitAsset.portraitWidth && emoMapping?.portraitHeight === profile.portraitAsset.portraitHeight);
   } catch { return false; }
 }
 
 function profileComplete(profile: ProfileFields | undefined) {
-  if (!profile?.enabled || !profile.portraitAssetId || !profile.displayName?.trim() || !/^[A-Za-z0-9_.-]{1,100}$/.test(profile.voice?.trim())) return false;
+  if (!profile?.enabled || !validPortraitAsset(profile.portraitAsset) || !profile.displayName?.trim() || !/^[A-Za-z0-9_.-]{1,100}$/.test(profile.voice?.trim())) return false;
   try {
     const ling = JSON.parse(profile.lingmouMappingJson); const emo = JSON.parse(profile.emoMappingJson); const style = JSON.parse(profile.styleJson);
-    return Boolean(style && ling?.templateId && ling?.audioVariableName && Number.isInteger(emo?.portraitWidth) && Number.isInteger(emo?.portraitHeight));
+    return Boolean(style && ling?.templateId && ling?.audioVariableName && emo?.portraitWidth === profile.portraitAsset.portraitWidth && emo?.portraitHeight === profile.portraitAsset.portraitHeight);
   } catch { return false; }
+}
+
+async function resolveCompatibleModel(modelId: string, slot: VideoModelSlot, database: Prisma.TransactionClient) {
+  try {
+    const model = await resolveMediaModelById(modelId, "DIGITAL_HUMAN_VIDEO", (id) => database.aiModelConfig.findUnique({ where: { id }, include: { provider: true } }));
+    return assertCompatibleVideoModel(model, slot, readAiConfigSecret);
+  } catch { throw new RuntimeConfigValidationError("MODEL_PROVIDER_MISMATCH"); }
+}
+
+async function persistStorage(storage: z.infer<typeof storageSchema>, database: Prisma.TransactionClient, configSecret: string) {
+  if (!storage.enabled) throw new RuntimeConfigValidationError("OSS_STORAGE_DISABLED");
+  const existing = storage.id ? await database.mediaStorageConfig.findUnique({ where: { id: storage.id } }) : null;
+  if (storage.id && !existing) throw new RuntimeConfigValidationError("OSS_STORAGE_NOT_FOUND");
+  if (existing && existing.providerKind !== "ALI_OSS") throw new RuntimeConfigValidationError("OSS_STORAGE_KIND_INVALID");
+  if (!storage.credentials && (!existing || !completeStorageEnvelope(existing))) throw new RuntimeConfigValidationError("OSS_CREDENTIALS_REQUIRED");
+  const encrypted = storage.credentials ? encryptOssCredentials(storage.credentials, configSecret) : null;
+  const data = { displayName: storage.displayName, providerKind: "ALI_OSS", endpoint: storage.endpoint, bucket: storage.bucket, region: storage.region, enabled: true, ...(encrypted ? { credentialsCiphertext: encrypted.ciphertext, credentialsIv: encrypted.iv, credentialsTag: encrypted.tag, credentialsPreviewJson: encrypted.previewJson } : {}) };
+  if (existing) await database.mediaStorageConfig.update({ where: { id: existing.id }, data }); else await database.mediaStorageConfig.create({ data });
+}
+
+function completeStorageEnvelope(storage: { credentialsCiphertext: string | null; credentialsIv: string | null; credentialsTag: string | null }) {
+  return Boolean(storage.credentialsCiphertext && storage.credentialsIv && storage.credentialsTag);
+}
+
+function validPortraitAsset(asset: PortraitAssetFields | null | undefined): asset is PortraitAssetFields & { portraitWidth: number; portraitHeight: number } {
+  return Boolean(asset && asset.purpose === "PORTRAIT" && asset.cleanupStatus === "ACTIVE" && Number.isInteger(asset.portraitWidth) && Number(asset.portraitWidth) >= 400 && Number(asset.portraitWidth) <= 7000 && Number.isInteger(asset.portraitHeight) && Number(asset.portraitHeight) >= 400 && Number(asset.portraitHeight) <= 7000);
 }
 
 function safeRuntime(value?: string) { try { return value ? parseDigitalHumanVideoRuntimeSettings(value) : null; } catch { return null; } }

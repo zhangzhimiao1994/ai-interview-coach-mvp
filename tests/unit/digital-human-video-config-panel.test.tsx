@@ -15,13 +15,13 @@ afterEach(() => {
 });
 
 const modelOptions = [
-  { id: "ling", displayName: "Lingmou preset", modelName: "lingmou-broadcast-video", providerType: "LINGMOU" },
-  { id: "emo", displayName: "EMO preset", modelName: "emo-v1", providerType: "TONGYI" },
+  { id: "ling", displayName: "Lingmou preset", modelName: "lingmou-broadcast-video", providerType: "LINGMOU", slot: "LINGMOU_BROADCAST" },
+  { id: "emo", displayName: "EMO preset", modelName: "emo-v1", providerType: "TONGYI", slot: "ALIBABA_EMO" },
   { id: "custom", displayName: "Custom avatar", modelName: "avatar-v2", providerType: "LINGMOU" }
 ] as const;
 
 describe("DigitalHumanVideoConfigPanel", () => {
-  it("defaults to automatic race, synchronized profiles, and exposes provider/custom model options", () => {
+  it("defaults to automatic race and exposes only server-validated adapter options", () => {
     act(() => {
       renderer = TestRenderer.create(<DigitalHumanVideoConfigPanel initialConfig={null} models={[...modelOptions]} profiles={[]} storage={null} />);
     });
@@ -33,7 +33,8 @@ describe("DigitalHumanVideoConfigPanel", () => {
     const modelText = JSON.stringify(renderer!.toJSON());
     expect(modelText).toContain("Lingmou preset");
     expect(modelText).toContain("EMO preset");
-    expect(modelText).toContain("Custom avatar");
+    expect(modelText).not.toContain("Custom avatar");
+    expect(modelText).toContain("CUSTOM");
   });
 
   it("requires two different complete profiles when synchronization is disabled", async () => {

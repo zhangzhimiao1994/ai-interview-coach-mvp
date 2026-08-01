@@ -71,7 +71,8 @@ const statusText = {
   listening: "等待回答"
 };
 
-const localQwenRequests = new BoundedTtlMap<string, Promise<Uint8Array>>(128, 30_000);
+type LocalQwenRequestEntry = { promise: Promise<Uint8Array>; controller: AbortController; subscribers: number; settled: boolean };
+const localQwenRequests = new BoundedTtlMap<string, LocalQwenRequestEntry>(128, 30_000);
 const localQwenPlayed = new BoundedTtlMap<string, true>(128, 30 * 60_000);
 
 export function LocalQwenInterviewer({ interviewerName, stage, prompt, sessionId, questionId }: { interviewerName: string; stage: string; prompt: string; sessionId: string; questionId: string }) {
@@ -82,22 +83,37 @@ export function LocalQwenInterviewer({ interviewerName, stage, prompt, sessionId
   useEffect(() => {
     let active = true; let objectUrl: string | null = null;
     const ownedAudio = audioRef.current;
-    let request = localQwenRequests.get(key);
-    if (!request) {
-      request = fetch("/api/digital-human/fallback-speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, questionId, text: prompt }) }).then(async (response) => {
+    let entry = localQwenRequests.get(key);
+    if (!entry) {
+      const controller = new AbortController();
+      const request = fetch("/api/digital-human/fallback-speech", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, questionId, text: prompt }), signal: controller.signal }).then(async (response) => {
         if (!response.ok || response.headers.get("content-type")?.split(";", 1)[0] !== "audio/pcm") throw new Error("QWEN_SPEECH_UNAVAILABLE");
         const bytes = new Uint8Array(await response.arrayBuffer()); if (bytes.byteLength === 0) throw new Error("QWEN_SPEECH_EMPTY"); return bytes;
       });
-      localQwenRequests.set(key, request);
+      entry = { promise: request, controller, subscribers: 0, settled: false };
+      const ownedEntry = entry;
+      void request.finally(() => { ownedEntry.settled = true; }).catch(() => { if (localQwenRequests.get(key) === ownedEntry) localQwenRequests.delete(key); });
+      localQwenRequests.set(key, entry);
     }
-    void request.then(async (pcm) => {
+    entry.subscribers += 1;
+    const subscribedEntry = entry;
+    void entry.promise.then(async (pcm) => {
       if (!active || localQwenPlayed.get(key)) return;
       const audio = audioRef.current; if (!audio || typeof URL.createObjectURL !== "function") throw new Error("LOCAL_AUDIO_UNAVAILABLE");
       objectUrl = URL.createObjectURL(pcm16LeToWavBlob(pcm)); audio.src = objectUrl; audio.currentTime = 0; audio.load(); localQwenPlayed.set(key, true);
       try { await audio.play(); if (active) setMessage("Qwen 情绪语音播放中"); }
       catch { if (active) { setManualPlay(true); setMessage("自动播放被拦截，请点击播放问题。"); } }
     }).catch(() => { if (active) setMessage("Qwen 语音暂不可用，请直接阅读题目。"); });
-    return () => { active = false; ownedAudio?.pause(); ownedAudio?.removeAttribute("src"); if (ownedAudio) { ownedAudio.currentTime = 0; ownedAudio.load(); } if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    return () => {
+      active = false;
+      ownedAudio?.pause(); ownedAudio?.removeAttribute("src"); if (ownedAudio) { ownedAudio.currentTime = 0; ownedAudio.load(); } if (objectUrl) URL.revokeObjectURL(objectUrl);
+      subscribedEntry.subscribers -= 1;
+      queueMicrotask(() => {
+        if (subscribedEntry.subscribers !== 0) return;
+        if (!subscribedEntry.settled) subscribedEntry.controller.abort();
+        if (localQwenRequests.get(key) === subscribedEntry && !subscribedEntry.settled) localQwenRequests.delete(key);
+      });
+    };
   }, [key, prompt, questionId, sessionId]);
   return <section className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-950 p-5 text-white" data-testid="local-qwen-interviewer">
     <div className="flex min-h-64 flex-col items-center justify-center"><div className="h-24 w-24 rounded-full bg-gradient-to-b from-amber-100 to-amber-600" /><div className="mt-3 h-28 w-36 rounded-t-[3rem] bg-slate-700" /><h2 className="mt-4 font-semibold">{interviewerName}</h2><p className="text-xs text-blue-100">{stage} · 本地数字人 / Qwen 情绪语音</p></div>
