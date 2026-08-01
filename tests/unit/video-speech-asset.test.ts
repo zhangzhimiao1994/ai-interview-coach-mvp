@@ -38,6 +38,87 @@ describe("video speech asset creation", () => {
     expect(inputs[0].instructions).not.toBe(inputs[1].instructions);
   });
 
+  it("uses only bounded behavior rules and changes emotion for the same question", async () => {
+    const inputs: Array<{ instructions?: string; voice?: string }> = [];
+    const deps = dependencies({
+      findProfile: async () => ({
+        ...profile(),
+        styleJson: JSON.stringify({
+          signalVoices: { HESITATION: "patient_voice" }
+        })
+      }),
+      streamPcm: async (_model, input) => {
+        inputs.push(input);
+        return pcmResult();
+      }
+    });
+
+    await createVideoSpeechAsset(baseRequest, deps);
+    await createVideoSpeechAsset({
+      ...baseRequest,
+      questionId: "question-2",
+      behaviorSignals: {
+        hesitation: 0.95,
+        privateTranscript: "sk-do-not-speak-this"
+      }
+    }, deps);
+
+    expect(inputs[0].instructions).not.toBe(inputs[1].instructions);
+    expect(inputs[1]).toMatchObject({ voice: "patient_voice" });
+    expect(inputs[1].instructions).not.toContain("privateTranscript");
+    expect(inputs[1].instructions).not.toContain("sk-do-not-speak-this");
+  });
+
+  it("switches voice by bounded question intent within the same stage", async () => {
+    const inputs: Array<{ voice?: string }> = [];
+    const deps = dependencies({
+      findProfile: async () => ({
+        ...profile(),
+        styleJson: JSON.stringify({
+          intentVoices: {
+            WARM_UP: "friendly_voice",
+            PRESSURE: "serious_voice"
+          }
+        })
+      }),
+      streamPcm: async (_model, input) => {
+        inputs.push(input);
+        return pcmResult();
+      }
+    });
+
+    await createVideoSpeechAsset(baseRequest, deps);
+    await createVideoSpeechAsset({
+      ...baseRequest,
+      questionId: "question-2",
+      question: "为什么这个项目最终失败了？"
+    }, deps);
+
+    expect(inputs.map((input) => input.voice)).toEqual([
+      "friendly_voice",
+      "serious_voice"
+    ]);
+  });
+
+  it("rejects unknown or invalid profile style fields before TTS", async () => {
+    let ttsCalls = 0;
+    const deps = dependencies({
+      findProfile: async () => ({
+        ...profile(),
+        styleJson: JSON.stringify({ rawPrompt: "read arbitrary JSON" })
+      }),
+      streamPcm: async () => {
+        ttsCalls += 1;
+        return pcmResult();
+      }
+    });
+
+    await expect(createVideoSpeechAsset(baseRequest, deps)).rejects.toMatchObject({
+      code: "VIDEO_SPEECH_PROFILE_STYLE_INVALID"
+    });
+    expect(ttsCalls).toBe(0);
+  });
+
   it("passes interviewer voice and style settings into styled TTS", async () => {
     const inputs: Array<{ instructions?: string; voice?: string; speed?: number }> = [];
     const deps = dependencies({

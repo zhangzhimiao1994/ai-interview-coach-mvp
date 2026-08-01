@@ -5,6 +5,7 @@ import { readAiConfigSecret } from "@/lib/domain/aiServices";
 import {
   DigitalHumanVideoDiagnosticInputError,
   runDigitalHumanVideoDiagnostic,
+  sanitizeDigitalHumanVideoDiagnosticResult,
   type DigitalHumanVideoDiagnosticRequest,
   type DigitalHumanVideoDiagnosticResult
 } from "@/lib/media/video/diagnostics";
@@ -82,13 +83,7 @@ export function createDigitalHumanVideoDiagnosticsHandler(
 function whitelistDiagnostic(
   diagnostic: DigitalHumanVideoDiagnosticResult
 ): DigitalHumanVideoDiagnosticResult {
-  return {
-    status: diagnostic.status,
-    code: diagnostic.code,
-    providerKind: diagnostic.providerKind,
-    traceId: diagnostic.traceId,
-    checkedAt: diagnostic.checkedAt
-  };
+  return sanitizeDigitalHumanVideoDiagnosticResult(diagnostic);
 }
 
 function noStoreJson(body: unknown, status: number) {
@@ -107,13 +102,7 @@ function isSameOrigin(request: Request) {
 }
 
 function effectiveOrigin(request: Request) {
-  const requestUrl = new URL(request.url);
-  const host = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
-    request.headers.get("host") ||
-    requestUrl.host;
-  const protocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
-    requestUrl.protocol.replace(":", "");
-  return normalizedOrigin(`${protocol}://${host}`);
+  return new URL(request.url).origin;
 }
 
 function normalizedOrigin(value: string) {

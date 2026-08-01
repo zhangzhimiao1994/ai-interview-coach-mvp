@@ -38,6 +38,33 @@ describe("digital human video diagnostics route", () => {
     expect(serviceCalls).toBe(0);
   });
 
+  it("does not trust forwarded host or protocol for CSRF origin", async () => {
+    let serviceCalls = 0;
+    const handler = createDigitalHumanVideoDiagnosticsHandler({
+      authorizeAdmin: async () => ({ id: "admin-1", role: "ADMIN" }),
+      runDiagnostic: async () => {
+        serviceCalls += 1;
+        return diagnostic();
+      }
+    });
+    const response = await handler(new Request(
+      "https://app.example/api/ai-services/digital-human-video-diagnostics",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://evil.example",
+          "x-forwarded-host": "evil.example",
+          "x-forwarded-proto": "https"
+        },
+        body: validBody()
+      }
+    ));
+
+    expect(response.status).toBe(403);
+    expect(serviceCalls).toBe(0);
+  });
+
   it.each([
     ["malformed JSON", "{"],
     ["unsupported provider", JSON.stringify({ mode: "PAID", providerKind: "UNKNOWN", confirmPaidRequest: true })],
@@ -98,10 +125,34 @@ describe("digital human video diagnostics route", () => {
     expect(response.status).toBe(200);
     expect(payload).toEqual({ diagnostic: diagnostic({
       status: "PROVIDER_ERROR",
-      code: "ALIBABA_EMO_UPSTREAM_FAILED"
+      code: "LINGMOU_BROADCAST_DIAGNOSTIC_FAILED"
     }) });
     expect(JSON.stringify(payload)).not.toContain(secret);
     expect(JSON.stringify(payload)).not.toContain(signedUrl);
+  });
+
+  it("revalidates untrusted code and trace values at the route boundary", async () => {
+    const handler = createDigitalHumanVideoDiagnosticsHandler({
+      authorizeAdmin: async () => ({ id: "admin-1", role: "ADMIN" }),
+      runDiagnostic: async () => diagnostic({
+        status: "PROVIDER_ERROR",
+        code: "SK_SECRET_IN_CODE",
+        traceId: "sk-secret-in-trace",
+        billingOperations: ["LINGMOU_BROADCAST_SUBMISSION"]
+      }) as never
+    });
+
+    const response = await handler(request(validBody()));
+    const payload = await response.json();
+
+    expect(payload.diagnostic).toMatchObject({
+      code: "LINGMOU_BROADCAST_DIAGNOSTIC_FAILED",
+      traceId: null,
+      billingOperations: ["LINGMOU_BROADCAST_SUBMISSION"],
+      costSemantics: "POTENTIALLY_BILLABLE_OPERATIONS_COST_NOT_ESTIMATED"
+    });
+    expect(JSON.stringify(payload)).not.toContain("SECRET");
+    expect(JSON.stringify(payload)).not.toContain("sk-secret");
   });
 });
 
@@ -112,6 +163,8 @@ function diagnostic(overrides: Record<string, unknown> = {}) {
     providerKind: "LINGMOU_BROADCAST",
     traceId: null,
     checkedAt: "2026-08-01T00:00:00.000Z",
+    billingOperations: [],
+    costSemantics: "NO_PAID_OPERATION",
     ...overrides
   };
 }

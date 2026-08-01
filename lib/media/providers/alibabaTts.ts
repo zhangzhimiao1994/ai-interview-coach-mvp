@@ -157,6 +157,17 @@ export function validateAlibabaHttpTtsModelName(modelName: string): string {
   return normalized;
 }
 
+/** Validates the selected TTS adapter and encrypted credentials without I/O. */
+export function validateAlibabaTtsConfiguration(
+  model: ResolvedMediaModel,
+  readConfigSecret: () => string = readAiConfigSecret
+): void {
+  validateAlibabaHttpTtsModelName(model.modelName);
+  const credentials = resolveAlibabaTtsCredentials(model, readConfigSecret);
+  buildAlibabaTtsUrl(credentials);
+  buildAlibabaTtsRequestBody(model, { text: "configuration-check" });
+}
+
 export function buildAlibabaTtsUrl({
   workspaceId,
   region
@@ -415,8 +426,8 @@ export function createAlibabaTtsProvider(
       };
     },
     async checkConnection() {
+      validateAlibabaTtsConfiguration(model, deps.readConfigSecret);
       const modelName = validateAlibabaHttpTtsModelName(model.modelName);
-      resolveAlibabaTtsCredentials(model, deps.readConfigSecret);
       return {
         provider: model.providerName,
         model: modelName,

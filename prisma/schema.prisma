@@ -407,6 +407,23 @@ model DigitalHumanRenderAttempt {
   @@index([status, nextPollAt])
 }
 
+model DigitalHumanVideoDiagnosticAudit {
+  id                    String   @id @default(cuid())
+  actorId               String
+  providerKind          String
+  status                String
+  safeCode              String
+  traceId               String?
+  checkedAt             DateTime
+  billingOperationsJson String
+  costSemantics         String
+  createdAt             DateTime @default(now())
+
+  @@index([actorId, checkedAt])
+  @@index([providerKind, checkedAt])
+  @@index([status, checkedAt])
+}
+
 model SessionTurn {
   id        String          @id @default(cuid())
   sessionId String

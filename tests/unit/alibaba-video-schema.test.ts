@@ -38,4 +38,32 @@ describe("Alibaba dual video persistence schema", () => {
       `UPDATE "AiModelConfig" SET "enabled" = 0, "isDefault" = 0, "isSelected" = 0`
     );
   });
+
+  it("stores an unambiguous paid diagnostic audit contract", () => {
+    const schema = readFileSync(schemaPath, "utf8");
+    const auditMigrationPath = join(
+      root,
+      "prisma/migrations/20260801130000_add_video_diagnostic_audit/migration.sql"
+    );
+    const migration = existsSync(auditMigrationPath)
+      ? readFileSync(auditMigrationPath, "utf8")
+      : "";
+
+    expect(schema).toContain("model DigitalHumanVideoDiagnosticAudit");
+    expect(migration).toContain('CREATE TABLE "DigitalHumanVideoDiagnosticAudit"');
+
+    for (const field of [
+      "actorId",
+      "providerKind",
+      "status",
+      "safeCode",
+      "traceId",
+      "checkedAt",
+      "billingOperationsJson",
+      "costSemantics"
+    ]) {
+      expect(schema).toContain(`${field}`);
+      expect(migration).toContain(`\"${field}\"`);
+    }
+  });
 });

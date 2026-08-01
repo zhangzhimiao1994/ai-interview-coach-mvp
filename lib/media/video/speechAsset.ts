@@ -60,9 +60,23 @@ export class VideoSpeechAssetError extends Error {
   }
 }
 
-type ProfileStyle = {
+export type VideoSpeechQuestionIntent =
+  | "GENERAL"
+  | "WARM_UP"
+  | "PRESSURE"
+  | "DETAIL"
+  | "REVIEW";
+
+export type VideoSpeechBehaviorStyle =
+  | "HESITATION"
+  | "LOW_CONFIDENCE"
+  | "STRESS";
+
+export type VideoSpeechProfileStyle = {
   defaultInstruction?: string;
   stageVoices?: Record<string, string>;
+  intentVoices?: Partial<Record<VideoSpeechQuestionIntent, string>>;
+  signalVoices?: Partial<Record<VideoSpeechBehaviorStyle, string>>;
   speed?: number;
 };
 
@@ -96,25 +110,32 @@ export async function createVideoSpeechAsset(
     throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_NOT_CONFIGURED");
   }
 
-  const profileStyle = parseProfileStyle(profile.styleJson);
+  const profileStyle = parseVideoSpeechProfileStyle(profile.styleJson);
   const normalizedStage = input.stage.toUpperCase();
   const stageVoices = {
     [normalizedStage]: profile.voice.trim(),
     ...profileStyle.stageVoices
   };
-  const styleContext = input.behaviorSignals
-    ? `${input.question}\nBehavior signals: ${stableJson(input.behaviorSignals)}`
-    : input.question;
+  const intent = classifyQuestionIntent(input.question);
+  const behavior = classifyBehaviorStyle(input.behaviorSignals);
+  const contextualInstruction = [
+    profileStyle.defaultInstruction ?? modelInstruction(model),
+    behavior?.instruction
+  ].filter(Boolean).join("\n");
   const style = buildInterviewTtsStyle({
     stage: input.stage,
-    text: styleContext,
-    defaultInstruction: profileStyle.defaultInstruction ?? modelInstruction(model),
+    text: input.question,
+    defaultInstruction: contextualInstruction,
     stageVoices
   });
+  const contextualVoice = behavior
+    ? profileStyle.signalVoices?.[behavior.kind]
+    : undefined;
+  const intentVoice = profileStyle.intentVoices?.[intent];
   const speechInput: SpeechSynthesisInput = {
     text: input.question,
     instructions: style.instructions,
-    voice: style.voice ?? profile.voice.trim(),
+    voice: contextualVoice ?? intentVoice ?? style.voice ?? profile.voice.trim(),
     ...(profileStyle.speed === undefined ? {} : { speed: profileStyle.speed })
   };
   const stream = await deps.streamPcm(model, speechInput);
@@ -205,7 +226,7 @@ async function collectPcm(stream: SpeechPcmStreamResult): Promise<Buffer> {
   return Buffer.concat(chunks, byteLength);
 }
 
-function parseProfileStyle(value: string): ProfileStyle {
+export function parseVideoSpeechProfileStyle(value: string): VideoSpeechProfileStyle {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -216,27 +237,116 @@ function parseProfileStyle(value: string): ProfileStyle {
     throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_STYLE_INVALID");
   }
   const record = parsed as Record<string, unknown>;
-  const defaultInstruction = optionalText(record.defaultInstruction);
+  const allowedKeys = new Set([
+    "defaultInstruction",
+    "stageVoices",
+    "intentVoices",
+    "signalVoices",
+    "speed"
+  ]);
+  if (Object.keys(record).some((key) => !allowedKeys.has(key))) {
+    throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_STYLE_INVALID");
+  }
+  const defaultInstruction = optionalBoundedInstruction(record.defaultInstruction);
+  if (record.defaultInstruction !== undefined && !defaultInstruction) {
+    throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_STYLE_INVALID");
+  }
   const speed = record.speed;
   if (speed !== undefined && (
     typeof speed !== "number" || !Number.isFinite(speed) || speed < 0.5 || speed > 2
   )) {
     throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_STYLE_INVALID");
   }
-  let stageVoices: Record<string, string> | undefined;
-  if (record.stageVoices !== undefined) {
-    if (!record.stageVoices || typeof record.stageVoices !== "object" || Array.isArray(record.stageVoices)) {
+  const stageVoices = parseVoiceMap(record.stageVoices, (key) =>
+    /^[A-Z0-9_]{1,64}$/.test(key)
+  );
+  const intentVoices = parseVoiceMap(record.intentVoices, (key) =>
+    (["GENERAL", "WARM_UP", "PRESSURE", "DETAIL", "REVIEW"] as string[]).includes(key)
+  ) as VideoSpeechProfileStyle["intentVoices"];
+  const signalVoices = parseVoiceMap(record.signalVoices, (key) =>
+    (["HESITATION", "LOW_CONFIDENCE", "STRESS"] as string[]).includes(key)
+  ) as VideoSpeechProfileStyle["signalVoices"];
+  return {
+    defaultInstruction,
+    stageVoices,
+    intentVoices,
+    signalVoices,
+    speed: speed as number | undefined
+  };
+}
+
+function parseVoiceMap(
+  value: unknown,
+  validKey: (key: string) => boolean
+): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_STYLE_INVALID");
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const normalized: Record<string, string> = {};
+  for (const [rawKey, rawVoice] of entries) {
+    const key = rawKey.trim().toUpperCase();
+    if (
+      !validKey(key) ||
+      typeof rawVoice !== "string" ||
+      !/^[A-Za-z0-9_.-]{1,100}$/.test(rawVoice.trim())
+    ) {
       throw new VideoSpeechAssetError("VIDEO_SPEECH_PROFILE_STYLE_INVALID");
     }
-    stageVoices = Object.fromEntries(
-      Object.entries(record.stageVoices as Record<string, unknown>)
-        .filter((entry): entry is [string, string] =>
-          typeof entry[1] === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(entry[1].trim())
-        )
-        .map(([stage, voice]) => [stage.trim().toUpperCase(), voice.trim()])
-    );
+    normalized[key] = rawVoice.trim();
   }
-  return { defaultInstruction, stageVoices, speed: speed as number | undefined };
+  return normalized;
+}
+
+function classifyQuestionIntent(question: string): VideoSpeechQuestionIntent {
+  if (/为什么|为何|失败|没有达成|质疑|证明|风险|压力|why|fail/i.test(question)) {
+    return "PRESSURE";
+  }
+  if (/复盘|总结|回顾|建议|改进|下一步|review|improve/i.test(question)) {
+    return "REVIEW";
+  }
+  if (/介绍|背景|开始|暖场|简单聊|introduce|background/i.test(question)) {
+    return "WARM_UP";
+  }
+  if (/细节|具体|量化|指标|数据|结果|过程|怎么做|detail|metric|how/i.test(question)) {
+    return "DETAIL";
+  }
+  return "GENERAL";
+}
+
+function classifyBehaviorStyle(signals: Record<string, unknown> | null): {
+  kind: VideoSpeechBehaviorStyle;
+  instruction: string;
+} | null {
+  if (!signals) return null;
+  if (signals.needsEncouragement === true || thresholdAtLeast(signals.hesitation, 0.7)) {
+    return {
+      kind: "HESITATION",
+      instruction: "The candidate appears hesitant; respond patiently, warmly, and with slightly slower pacing."
+    };
+  }
+  if (thresholdAtLeast(signals.stress, 0.7) || thresholdAtLeast(signals.frustration, 0.7)) {
+    return {
+      kind: "STRESS",
+      instruction: "The candidate appears stressed; keep a calm, steady, non-confrontational tone."
+    };
+  }
+  if (thresholdAtMost(signals.confidence, 0.3)) {
+    return {
+      kind: "LOW_CONFIDENCE",
+      instruction: "The candidate appears uncertain; use an encouraging but professional tone."
+    };
+  }
+  return null;
+}
+
+function thresholdAtLeast(value: unknown, minimum: number) {
+  return typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= 1;
+}
+
+function thresholdAtMost(value: unknown, maximum: number) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= maximum;
 }
 
 function modelInstruction(model: ResolvedMediaModel) {
@@ -248,12 +358,13 @@ function optionalText(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function text(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+function optionalBoundedInstruction(value: unknown) {
+  const normalized = optionalText(value);
+  return normalized && normalized.length <= 1000 ? normalized : undefined;
 }
 
-function stableJson(value: Record<string, unknown>) {
-  return JSON.stringify(value, Object.keys(value).sort());
+function text(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 async function findDefaultProfile(id: string): Promise<VideoSpeechProfile | null> {
