@@ -42,6 +42,7 @@ export type AlibabaEmoConfiguration = {
   model: "emo-v1";
   ratio: EmoRatio;
   styleLevel: EmoStyleLevel;
+  timeoutMs: number;
 };
 
 export type AlibabaEmoDependencies = {
@@ -50,6 +51,8 @@ export type AlibabaEmoDependencies = {
     init?: RequestInit
   ) => Promise<Response>;
   readConfigSecret: () => string;
+  scheduleTimeout: (callback: () => void, delayMs: number) => unknown;
+  cancelTimeout: (handle: unknown) => void;
 };
 
 export function resolveAlibabaEmoConfiguration(
@@ -90,12 +93,25 @@ export function resolveAlibabaEmoConfiguration(
       "Alibaba EMO style level is invalid"
     );
   }
+  if (
+    !Number.isFinite(model.timeoutMs) ||
+    !Number.isInteger(model.timeoutMs) ||
+    model.timeoutMs < 1_000 ||
+    model.timeoutMs > 300_000
+  ) {
+    throw configurationError(
+      model,
+      "ALIBABA_EMO_TIMEOUT_INVALID",
+      "Alibaba EMO timeout is invalid"
+    );
+  }
 
   return {
     apiKey,
     model: "emo-v1",
     ratio,
-    styleLevel: styleLevel as EmoStyleLevel
+    styleLevel: styleLevel as EmoStyleLevel,
+    timeoutMs: model.timeoutMs
   };
 }
 
@@ -108,6 +124,8 @@ export function createAlibabaEmoProvider(
     dependencyOverrides.readConfigSecret ?? readAiConfigSecret
   );
   const fetcher = dependencyOverrides.fetcher ?? fetch;
+  const scheduleTimeout = dependencyOverrides.scheduleTimeout ?? defaultScheduleTimeout;
+  const cancelTimeout = dependencyOverrides.cancelTimeout ?? defaultCancelTimeout;
 
   return {
     async submit(input) {
@@ -116,11 +134,29 @@ export function createAlibabaEmoProvider(
         portraitUrl: validated.portraitUrl,
         ratio: config.ratio
       });
-      const detectionResponse = await safeFetch(fetcher, detectionRequest, config.apiKey);
-      const detection = await parseEmoDetectionResponse(detectionResponse);
+      const detection = await requestWithTimeout(
+        fetcher,
+        detectionRequest,
+        config,
+        scheduleTimeout,
+        cancelTimeout,
+        parseEmoDetectionResponse
+      );
       if (detection.safeErrorCode || !detection.faceBbox || !detection.extBbox) {
         throw providerError(
           detection.safeErrorCode ?? "ALIBABA_EMO_DETECTION_INVALID_RESPONSE",
+          detection.traceId
+        );
+      }
+      if (!validDetectionGeometry(
+        detection.faceBbox,
+        detection.extBbox,
+        validated.portraitWidth,
+        validated.portraitHeight,
+        config.ratio
+      )) {
+        throw providerError(
+          "ALIBABA_EMO_DETECTION_GEOMETRY_INVALID",
           detection.traceId
         );
       }
@@ -133,8 +169,14 @@ export function createAlibabaEmoProvider(
         extBbox: detection.extBbox,
         styleLevel: config.styleLevel
       });
-      const submitResponse = await safeFetch(fetcher, submitRequest, config.apiKey);
-      const submission = await parseEmoSubmitResponse(submitResponse);
+      const submission = await requestWithTimeout(
+        fetcher,
+        submitRequest,
+        config,
+        scheduleTimeout,
+        cancelTimeout,
+        parseEmoSubmitResponse
+      );
       if (submission.safeErrorCode || !submission.upstreamTaskId) {
         throw providerError(
           submission.safeErrorCode ?? "ALIBABA_EMO_SUBMIT_INVALID_RESPONSE",
@@ -157,16 +199,22 @@ export function createAlibabaEmoProvider(
       }
       const request = buildEmoQueryRequest(taskId);
       try {
-        const response = await fetcher(request.url, {
-          method: request.method,
-          headers: { ...request.headers, Authorization: `Bearer ${config.apiKey}` }
-        });
-        return parseEmoQueryResponse(response);
-      } catch {
+        return await requestWithTimeout(
+          fetcher,
+          request,
+          config,
+          scheduleTimeout,
+          cancelTimeout,
+          parseEmoQueryResponse
+        );
+      } catch (error) {
         return {
           status: "FAILED",
           videoUrl: null,
-          safeErrorCode: "ALIBABA_EMO_UPSTREAM_FAILED",
+          safeErrorCode: error instanceof MediaProviderError &&
+            error.code === "ALIBABA_EMO_TIMEOUT"
+            ? "ALIBABA_EMO_TIMEOUT"
+            : "ALIBABA_EMO_UPSTREAM_FAILED",
           traceId: null,
           completedAt: null
         };
@@ -175,25 +223,52 @@ export function createAlibabaEmoProvider(
   };
 }
 
-async function safeFetch(
+type EmoHttpRequest =
+  | ReturnType<typeof buildEmoDetectionRequest>
+  | ReturnType<typeof buildEmoSubmitRequest>
+  | ReturnType<typeof buildEmoQueryRequest>;
+
+async function requestWithTimeout<T>(
   fetcher: AlibabaEmoDependencies["fetcher"],
-  request: ReturnType<typeof buildEmoDetectionRequest> | ReturnType<typeof buildEmoSubmitRequest>,
-  apiKey: string
-): Promise<Response> {
+  request: EmoHttpRequest,
+  config: AlibabaEmoConfiguration,
+  scheduleTimeout: AlibabaEmoDependencies["scheduleTimeout"],
+  cancelTimeout: AlibabaEmoDependencies["cancelTimeout"],
+  parse: (response: Response) => Promise<T>
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: unknown;
+  let timerCreated = false;
   try {
-    return await fetcher(request.url, {
+    timer = scheduleTimeout(() => controller.abort(), config.timeoutMs);
+    timerCreated = true;
+    const response = await fetcher(request.url, {
       method: request.method,
-      headers: { ...request.headers, Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(request.body)
+      headers: {
+        ...request.headers,
+        Authorization: `Bearer ${config.apiKey}`
+      },
+      ...(request.body === undefined
+        ? {}
+        : { body: JSON.stringify(request.body) }),
+      signal: controller.signal
     });
-  } catch {
+    return await parse(response);
+  } catch (error) {
+    if (controller.signal.aborted || isAbortError(error)) {
+      throw providerError("ALIBABA_EMO_TIMEOUT", null);
+    }
     throw providerError("ALIBABA_EMO_UPSTREAM_FAILED", null);
+  } finally {
+    if (timerCreated) cancelTimeout(timer);
   }
 }
 
 function validateSubmitInput(input: VideoSubmitInput): {
   audioUrl: string;
   portraitUrl: string;
+  portraitWidth: number;
+  portraitHeight: number;
 } {
   if (!text(input.requestName)) {
     throw inputError("ALIBABA_EMO_REQUEST_NAME_REQUIRED", "Alibaba EMO request name is required");
@@ -211,15 +286,24 @@ function validateSubmitInput(input: VideoSubmitInput): {
   }
 
   validateAudioMetadata(input.audioMetadata);
-  validatePortraitMetadata(input.portraitMetadata);
-  return { audioUrl, portraitUrl };
+  const portraitDimensions = validatePortraitMetadata(input.portraitMetadata);
+  return {
+    audioUrl,
+    portraitUrl,
+    portraitWidth: portraitDimensions.width,
+    portraitHeight: portraitDimensions.height
+  };
 }
 
 function validateAudioMetadata(metadata: VideoAssetMetadata | undefined): void {
   if (!metadata) {
     throw inputError("ALIBABA_EMO_AUDIO_METADATA_REQUIRED", "Alibaba EMO audio metadata is required");
   }
-  if (!AUDIO_CONTENT_TYPES.has(contentType(metadata.contentType))) {
+  const mediaType = contentType(metadata.contentType);
+  if (!mediaType) {
+    throw inputError("ALIBABA_EMO_AUDIO_METADATA_INVALID", "Alibaba EMO audio metadata is invalid");
+  }
+  if (!AUDIO_CONTENT_TYPES.has(mediaType)) {
     throw inputError("ALIBABA_EMO_AUDIO_FORMAT_UNSUPPORTED", "Alibaba EMO audio format is unsupported");
   }
   if (!validByteLength(metadata.byteLength)) {
@@ -240,11 +324,15 @@ function validateAudioMetadata(metadata: VideoAssetMetadata | undefined): void {
 
 function validatePortraitMetadata(
   metadata: VideoAssetMetadata | null | undefined
-): void {
+): { width: number; height: number } {
   if (!metadata) {
     throw inputError("ALIBABA_EMO_PORTRAIT_METADATA_REQUIRED", "Alibaba EMO portrait metadata is required");
   }
-  if (!PORTRAIT_CONTENT_TYPES.has(contentType(metadata.contentType))) {
+  const mediaType = contentType(metadata.contentType);
+  if (!mediaType) {
+    throw inputError("ALIBABA_EMO_PORTRAIT_METADATA_INVALID", "Alibaba EMO portrait metadata is invalid");
+  }
+  if (!PORTRAIT_CONTENT_TYPES.has(mediaType)) {
     throw inputError("ALIBABA_EMO_PORTRAIT_FORMAT_UNSUPPORTED", "Alibaba EMO portrait format is unsupported");
   }
   if (!validByteLength(metadata.byteLength)) {
@@ -261,10 +349,76 @@ function validatePortraitMetadata(
   if (longestSide > MAX_PORTRAIT_SIDE) {
     throw inputError("ALIBABA_EMO_PORTRAIT_TOO_LARGE", "Alibaba EMO portrait is too large");
   }
+  return { width: metadata.width, height: metadata.height };
 }
 
-function contentType(value: string): string {
-  return value.split(";", 1)[0].trim().toLowerCase();
+function contentType(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.split(";", 1)[0].trim().toLowerCase();
+  return normalized || null;
+}
+
+function validDetectionGeometry(
+  faceBbox: readonly [number, number, number, number],
+  extBbox: readonly [number, number, number, number],
+  portraitWidth: number,
+  portraitHeight: number,
+  ratio: EmoRatio
+): boolean {
+  if (
+    !bboxWithinImage(faceBbox, portraitWidth, portraitHeight) ||
+    !bboxWithinImage(extBbox, portraitWidth, portraitHeight) ||
+    faceBbox[0] < extBbox[0] ||
+    faceBbox[1] < extBbox[1] ||
+    faceBbox[2] > extBbox[2] ||
+    faceBbox[3] > extBbox[3]
+  ) {
+    return false;
+  }
+
+  const extWidth = extBbox[2] - extBbox[0];
+  const extHeight = extBbox[3] - extBbox[1];
+  const [targetWidth, targetHeight] = ratio === "1:1" ? [1, 1] : [3, 4];
+  const crossProductDelta = Math.abs(
+    extWidth * targetHeight - extHeight * targetWidth
+  );
+
+  // Detection coordinates are integer pixels. Permit at most one pixel of
+  // rounding on either dimension while rejecting a materially wrong ratio.
+  return crossProductDelta <= Math.max(targetWidth, targetHeight);
+}
+
+function bboxWithinImage(
+  bbox: readonly [number, number, number, number],
+  width: number,
+  height: number
+): boolean {
+  return bbox.every(Number.isSafeInteger) &&
+    bbox[0] >= 0 &&
+    bbox[1] >= 0 &&
+    bbox[2] > bbox[0] &&
+    bbox[3] > bbox[1] &&
+    bbox[2] <= width &&
+    bbox[3] <= height;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException
+    ? error.name === "AbortError"
+    : Boolean(
+      error &&
+      typeof error === "object" &&
+      "name" in error &&
+      (error as { name?: unknown }).name === "AbortError"
+    );
+}
+
+function defaultScheduleTimeout(callback: () => void, delayMs: number): unknown {
+  return setTimeout(callback, delayMs);
+}
+
+function defaultCancelTimeout(handle: unknown): void {
+  clearTimeout(handle as ReturnType<typeof setTimeout>);
 }
 
 function validByteLength(value: number): boolean {
@@ -304,7 +458,9 @@ function providerError(code: string, traceId: string | null): MediaProviderError
     "Alibaba EMO request failed",
     "TONGYI",
     code,
-    code === "ALIBABA_EMO_UPSTREAM_FAILED" || code === "ALIBABA_EMO_RATE_LIMITED",
+    code === "ALIBABA_EMO_UPSTREAM_FAILED" ||
+      code === "ALIBABA_EMO_RATE_LIMITED" ||
+      code === "ALIBABA_EMO_TIMEOUT",
     traceId
   );
 }

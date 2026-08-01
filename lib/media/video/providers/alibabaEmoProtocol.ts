@@ -82,14 +82,14 @@ export async function parseEmoDetectionResponse(
   response: Response
 ): Promise<EmoDetectionResult> {
   const parsed = await parseResponse(response);
-  if (parsed.invalid) {
-    return detectionFailure(parsed.traceId, "ALIBABA_EMO_RESPONSE_INVALID");
-  }
   if (!response.ok) {
     return detectionFailure(
       parsed.traceId,
       safeHttpErrorCode(response.status, parsed.body)
     );
+  }
+  if (parsed.invalid) {
+    return detectionFailure(parsed.traceId, "ALIBABA_EMO_RESPONSE_INVALID");
   }
 
   const output = record(parsed.body?.output);
@@ -112,14 +112,14 @@ export async function parseEmoSubmitResponse(
   response: Response
 ): Promise<EmoSubmitResult> {
   const parsed = await parseResponse(response);
-  if (parsed.invalid) {
-    return submitFailure(parsed.traceId, "ALIBABA_EMO_RESPONSE_INVALID");
-  }
   if (!response.ok) {
     return submitFailure(
       parsed.traceId,
       safeHttpErrorCode(response.status, parsed.body)
     );
+  }
+  if (parsed.invalid) {
+    return submitFailure(parsed.traceId, "ALIBABA_EMO_RESPONSE_INVALID");
   }
 
   const upstreamTaskId = text(record(parsed.body?.output)?.task_id);
@@ -132,15 +132,15 @@ export async function parseEmoQueryResponse(
   response: Response
 ): Promise<VideoQueryResult> {
   const parsed = await parseResponse(response);
-  if (parsed.invalid) {
-    return queryFailure(parsed.traceId, "ALIBABA_EMO_RESPONSE_INVALID", null);
-  }
   if (!response.ok) {
     return queryFailure(
       parsed.traceId,
       safeHttpErrorCode(response.status, parsed.body),
       null
     );
+  }
+  if (parsed.invalid) {
+    return queryFailure(parsed.traceId, "ALIBABA_EMO_RESPONSE_INVALID", null);
   }
 
   const output = record(parsed.body?.output);
@@ -232,7 +232,7 @@ function boundingBox(value: unknown): EmoBoundingBox | null {
     value.length !== 4 ||
     !value.every((coordinate) =>
       typeof coordinate === "number" &&
-      Number.isInteger(coordinate) &&
+      Number.isSafeInteger(coordinate) &&
       coordinate >= 0
     ) ||
     value[2] <= value[0] ||

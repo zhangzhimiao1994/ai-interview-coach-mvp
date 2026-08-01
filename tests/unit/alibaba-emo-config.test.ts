@@ -21,7 +21,8 @@ describe("Alibaba EMO configuration", () => {
       apiKey,
       model: "emo-v1",
       ratio: "1:1",
-      styleLevel: "normal"
+      styleLevel: "normal",
+      timeoutMs: 120000
     });
   });
 
@@ -33,7 +34,8 @@ describe("Alibaba EMO configuration", () => {
       apiKey: "legacy-tts-key",
       model: "emo-v1",
       ratio: "1:1",
-      styleLevel: "normal"
+      styleLevel: "normal",
+      timeoutMs: 120000
     });
   });
 
@@ -60,6 +62,19 @@ describe("Alibaba EMO configuration", () => {
     })).toThrowError(expect.objectContaining({ code }));
     expect(fetchCalls).toBe(0);
   });
+
+  it.each([999, 300001, 1.5, Number.NaN])(
+    "rejects non-normalized timeout %s before constructing a provider",
+    (timeoutMs) => {
+      expect(() => createAlibabaEmoProvider(model({ timeoutMs }), {
+        fetcher: async () => response({}),
+        readConfigSecret: () => configSecret
+      })).toThrowError(expect.objectContaining({
+        name: "MediaConfigurationError",
+        code: "ALIBABA_EMO_TIMEOUT_INVALID"
+      }));
+    }
+  );
 
   it("detects the portrait then submits with server-side Bearer authentication", async () => {
     const calls: Array<{ input: string; init?: RequestInit }> = [];
@@ -152,6 +167,93 @@ describe("Alibaba EMO configuration", () => {
     ]);
   });
 
+  it("accepts the official bbox example within known portrait dimensions", async () => {
+    let fetchCalls = 0;
+    const provider = createAlibabaEmoProvider(model(), {
+      fetcher: async () => {
+        fetchCalls += 1;
+        return fetchCalls === 1
+          ? detectionPassedResponse()
+          : response({
+            output: { task_id: "task-01", task_status: "PENDING" },
+            request_id: "trace-submit"
+          });
+      },
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.submit(validSubmitInput())).resolves.toMatchObject({
+      upstreamTaskId: "task-01"
+    });
+    expect(fetchCalls).toBe(2);
+  });
+
+  it("accepts a 3:4 ext bbox with one-pixel integer rounding tolerance", async () => {
+    let fetchCalls = 0;
+    const provider = createAlibabaEmoProvider(model({
+      modelSettings: { ratio: "3:4" }
+    }), {
+      fetcher: async () => {
+        fetchCalls += 1;
+        return fetchCalls === 1
+          ? detectionPassedResponse({
+            face_bbox: [200, 200, 400, 500],
+            ext_bbox: [100, 100, 612, 783]
+          })
+          : response({
+            output: { task_id: "task-01", task_status: "PENDING" },
+            request_id: "trace-submit"
+          });
+      },
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.submit(validSubmitInput())).resolves.toMatchObject({
+      upstreamTaskId: "task-01"
+    });
+    expect(fetchCalls).toBe(2);
+  });
+
+  it.each([
+    [
+      "out-of-bounds ext bbox",
+      {},
+      { ext_bbox: [71, 9, 1025, 778] }
+    ],
+    [
+      "face bbox outside ext bbox",
+      {},
+      { face_bbox: [50, 286, 610, 593] }
+    ],
+    [
+      "ratio mismatch",
+      { ratio: "3:4" },
+      { ext_bbox: [71, 9, 840, 778] }
+    ]
+  ] as const)("rejects %s after detection without synthesizing", async (
+    _description,
+    modelSettings,
+    detectionOutput
+  ) => {
+    const calls: string[] = [];
+    const provider = createAlibabaEmoProvider(model({ modelSettings }), {
+      fetcher: async (input) => {
+        calls.push(String(input));
+        return detectionPassedResponse(detectionOutput);
+      },
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.submit(validSubmitInput())).rejects.toMatchObject({
+      name: "MediaProviderError",
+      code: "ALIBABA_EMO_DETECTION_GEOMETRY_INVALID",
+      traceId: "trace-detect"
+    });
+    expect(calls).toEqual([
+      "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/face-detect"
+    ]);
+  });
+
   it.each([
     [
       "audio URL",
@@ -187,6 +289,16 @@ describe("Alibaba EMO configuration", () => {
       "portrait format",
       { portraitMetadata: portraitMetadata({ contentType: "image/gif" }) },
       "ALIBABA_EMO_PORTRAIT_FORMAT_UNSUPPORTED"
+    ],
+    [
+      "non-string audio content type",
+      { audioMetadata: { contentType: null, byteLength: 100 } },
+      "ALIBABA_EMO_AUDIO_METADATA_INVALID"
+    ],
+    [
+      "non-string portrait content type",
+      { portraitMetadata: portraitMetadata({ contentType: {} }) },
+      "ALIBABA_EMO_PORTRAIT_METADATA_INVALID"
     ],
     [
       "audio size",
@@ -316,6 +428,105 @@ describe("Alibaba EMO configuration", () => {
     expect(JSON.stringify(caught)).not.toContain(signedAudioUrl);
   });
 
+  it("passes an independent timeout signal to every HTTP call and clears every timer", async () => {
+    const signals: AbortSignal[] = [];
+    const scheduledDelays: number[] = [];
+    const timerHandles: object[] = [];
+    const canceledHandles: unknown[] = [];
+    const provider = createAlibabaEmoProvider(model(), {
+      fetcher: async (input, init) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        signals.push(init?.signal as AbortSignal);
+        if (String(input).endsWith("/face-detect")) return detectionPassedResponse();
+        if (String(input).includes("/tasks/")) {
+          return response({
+            request_id: "trace-query",
+            output: { task_status: "RUNNING" }
+          });
+        }
+        return response({
+          request_id: "trace-submit",
+          output: { task_id: "task-01", task_status: "PENDING" }
+        });
+      },
+      scheduleTimeout: (_callback, delayMs) => {
+        scheduledDelays.push(delayMs);
+        const handle = {};
+        timerHandles.push(handle);
+        return handle;
+      },
+      cancelTimeout: (handle) => canceledHandles.push(handle),
+      readConfigSecret: () => configSecret
+    });
+
+    await provider.submit(validSubmitInput());
+    await provider.query("task-01");
+
+    expect(scheduledDelays).toEqual([120000, 120000, 120000]);
+    expect(canceledHandles).toEqual(timerHandles);
+    expect(signals).toHaveLength(3);
+    expect(new Set(signals).size).toBe(3);
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+  });
+
+  it("maps an aborted submit request to a retryable timeout and clears its timer", async () => {
+    const canceledHandles: unknown[] = [];
+    let observedSignal: AbortSignal | null = null;
+    const timerHandle = {};
+    const provider = createAlibabaEmoProvider(model(), {
+      fetcher: async (_input, init) => {
+        observedSignal = init?.signal as AbortSignal;
+        throw new DOMException(`aborted ${apiKey} ${signedPortraitUrl}`, "AbortError");
+      },
+      scheduleTimeout: (callback) => {
+        callback();
+        return timerHandle;
+      },
+      cancelTimeout: (handle) => canceledHandles.push(handle),
+      readConfigSecret: () => configSecret
+    });
+
+    const caught = await provider.submit(validSubmitInput()).catch((error: unknown) => error);
+
+    expect(observedSignal?.aborted).toBe(true);
+    expect(canceledHandles).toEqual([timerHandle]);
+    expect(caught).toMatchObject({
+      name: "MediaProviderError",
+      code: "ALIBABA_EMO_TIMEOUT",
+      retryable: true,
+      traceId: null
+    });
+    expect(String(caught)).not.toContain(apiKey);
+    expect(JSON.stringify(caught)).not.toContain(signedPortraitUrl);
+  });
+
+  it("maps an aborted query request to the shared timeout result", async () => {
+    let observedSignal: AbortSignal | null = null;
+    let canceled = 0;
+    const provider = createAlibabaEmoProvider(model(), {
+      fetcher: async (_input, init) => {
+        observedSignal = init?.signal as AbortSignal;
+        throw new DOMException("aborted sensitive query", "AbortError");
+      },
+      scheduleTimeout: (callback) => {
+        callback();
+        return {};
+      },
+      cancelTimeout: () => { canceled += 1; },
+      readConfigSecret: () => configSecret
+    });
+
+    await expect(provider.query("task-01")).resolves.toEqual({
+      status: "FAILED",
+      videoUrl: null,
+      safeErrorCode: "ALIBABA_EMO_TIMEOUT",
+      traceId: null,
+      completedAt: null
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    expect(canceled).toBe(1);
+  });
+
   it("queries through the official endpoint and returns the shared result", async () => {
     const calls: Array<{ input: string; init?: RequestInit }> = [];
     const provider = createAlibabaEmoProvider(model(), {
@@ -340,7 +551,8 @@ describe("Alibaba EMO configuration", () => {
       input: "https://dashscope.aliyuncs.com/api/v1/tasks/task-01",
       init: {
         method: "GET",
-        headers: { Authorization: `Bearer ${apiKey}` }
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: expect.any(AbortSignal)
       }
     }]);
   });
@@ -398,8 +610,8 @@ function portraitMetadata(overrides: Record<string, unknown> = {}) {
   return {
     contentType: "image/png",
     byteLength: 2048,
-    width: 512,
-    height: 512,
+    width: 1024,
+    height: 1024,
     ...overrides
   };
 }
@@ -411,12 +623,13 @@ function response(body: unknown, status = 200) {
   });
 }
 
-function detectionPassedResponse() {
+function detectionPassedResponse(overrides: Record<string, unknown> = {}) {
   return response({
     output: {
       check_pass: true,
       face_bbox: [302, 286, 610, 593],
-      ext_bbox: [71, 9, 840, 778]
+      ext_bbox: [71, 9, 840, 778],
+      ...overrides
     },
     request_id: "trace-detect"
   });
@@ -429,6 +642,7 @@ function model(overrides: {
   modelSettings?: Record<string, unknown>;
   genericApiKey?: string | null;
   structuredCredentials?: Record<string, string> | null;
+  timeoutMs?: number;
 } = {}): ResolvedMediaModel {
   const genericApiKey = overrides.genericApiKey === undefined
     ? apiKey
@@ -456,7 +670,7 @@ function model(overrides: {
     },
     temperature: 0,
     maxTokens: 0,
-    timeoutMs: 120000,
+    timeoutMs: overrides.timeoutMs ?? 120000,
     credentialEnvelopes: {
       apiKey: genericApiKey ? encryptSecret(genericApiKey, configSecret) : null,
       structured: structuredCredentials

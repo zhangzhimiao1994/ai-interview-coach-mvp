@@ -64,7 +64,11 @@ describe("Alibaba EMO protocol", () => {
     { face_bbox: [302, 286, 610], ext_bbox: [71, 9, 840, 778] },
     { face_bbox: [302, 286, 200, 593], ext_bbox: [71, 9, 840, 778] },
     { face_bbox: [302, 286, 610, 593], ext_bbox: [-1, 9, 840, 778] },
-    { face_bbox: [302, 286, 610, 593], ext_bbox: [71, 9, "840", 778] }
+    { face_bbox: [302, 286, 610, 593], ext_bbox: [71, 9, "840", 778] },
+    {
+      face_bbox: [302, 286, Number.MAX_SAFE_INTEGER + 1, 593],
+      ext_bbox: [71, 9, Number.MAX_SAFE_INTEGER + 2, 778]
+    }
   ])("rejects malformed detection bounding boxes safely", async (output) => {
     await expect(parseEmoDetectionResponse(response({
       output: { check_pass: true, ...output },
@@ -105,6 +109,18 @@ describe("Alibaba EMO protocol", () => {
       extBbox: null,
       traceId: "trace-malformed-detect",
       safeErrorCode: "ALIBABA_EMO_RESPONSE_INVALID"
+    });
+  });
+
+  it("prioritizes detection HTTP auth status over malformed JSON", async () => {
+    await expect(parseEmoDetectionResponse(nonJsonResponse(
+      401,
+      "trace-non-json-detect"
+    ))).resolves.toEqual({
+      faceBbox: null,
+      extBbox: null,
+      traceId: "trace-non-json-detect",
+      safeErrorCode: "ALIBABA_EMO_AUTH_FAILED"
     });
   });
 
@@ -205,6 +221,17 @@ describe("Alibaba EMO protocol", () => {
       safeErrorCode: "ALIBABA_EMO_RESPONSE_INVALID"
     });
     expect(JSON.stringify(parsed)).not.toContain("signed-url-secret");
+  });
+
+  it("prioritizes submit HTTP rate-limit status over malformed JSON", async () => {
+    await expect(parseEmoSubmitResponse(nonJsonResponse(
+      429,
+      "trace-non-json-submit"
+    ))).resolves.toEqual({
+      upstreamTaskId: null,
+      traceId: "trace-non-json-submit",
+      safeErrorCode: "ALIBABA_EMO_RATE_LIMITED"
+    });
   });
 
   it.each([
@@ -322,6 +349,19 @@ describe("Alibaba EMO protocol", () => {
     });
     expect(JSON.stringify(parsed)).not.toContain("private-url");
   });
+
+  it("prioritizes query HTTP 5xx status over malformed JSON", async () => {
+    await expect(parseEmoQueryResponse(nonJsonResponse(
+      503,
+      "trace-non-json-query"
+    ))).resolves.toEqual({
+      status: "FAILED",
+      videoUrl: null,
+      safeErrorCode: "ALIBABA_EMO_UPSTREAM_FAILED",
+      traceId: "trace-non-json-query",
+      completedAt: null
+    });
+  });
 });
 
 function response(body: unknown, status = 200) {
@@ -339,5 +379,12 @@ function queryResponse(taskStatus: string) {
       task_status: taskStatus,
       end_time: "2026-07-29 20:30:45.123"
     }
+  });
+}
+
+function nonJsonResponse(status: number, traceId: string) {
+  return new Response("not-json sensitive upstream body", {
+    status,
+    headers: { "x-request-id": traceId }
   });
 }
