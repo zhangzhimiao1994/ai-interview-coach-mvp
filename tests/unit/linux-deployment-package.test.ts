@@ -166,11 +166,13 @@ describe("linux deployment package", () => {
     expect(docs).toContain("/api/ai-services/diagnostics");
     expect(docs).toContain("真实连通测试不会自动执行");
     expect(docs).toContain("百炼 Workspace/API Key 与灵眸 RAM AccessKey 是两套独立凭据");
-    expect(docs).toContain("configId");
-    expect(docs).toContain("instanceId");
+    expect(docs).toContain("灵眸播报");
+    expect(docs).toContain("模板 ID");
+    expect(docs).toContain("模板变量映射");
     expect(docs).toContain("NOT_CONFIGURED");
-    expect(docs).toContain("本地数字人和 CosyVoice");
-    expect(docs).toContain("会创建并立即关闭一次真实会话，可能计费");
+    expect(docs).toContain("本地头像");
+    expect(docs).toContain("Qwen TTS");
+    expect(docs).toContain("它可能创建真实任务并计费");
     expect(docs).toContain("npm ci");
     expect(docs).toContain("npm run db:migrate:deploy");
     expect(docs).toContain("docker compose down --remove-orphans");
@@ -179,6 +181,7 @@ describe("linux deployment package", () => {
     expect(docs).toContain("recruitment API credentials and browser session state");
     expect(docs).toContain("招聘来源");
     expect(docs).toContain("浏览器授权记录");
+    expect(docs).not.toMatch(/configId|instanceId|license/i);
   });
 
   it("keeps Lingmou RAM credentials out of environment files", () => {
@@ -208,5 +211,89 @@ describe("linux deployment package", () => {
     expect(mediaDocs).toContain("浏览器识别降级");
     expect(mediaDocs).toContain("阿里真实语音优先");
     expect(mediaDocs).toContain("浏览器语音降级");
+  });
+
+  it("documents the complete Alibaba dual-video debugging contract", () => {
+    const docs = readWorkspaceFile("docs/alibaba-video-digital-human-debugging.md");
+
+    for (const required of [
+      "私有 Bucket",
+      "最小权限 RAM",
+      "灵眸播报模板",
+      "变量映射",
+      "EMO",
+      "肖像",
+      "音频",
+      "AUTO_RACE",
+      "LINGMOU_ONLY",
+      "EMO_ONLY",
+      "可能产生费用",
+      "3 秒",
+      "6 秒",
+      "8 秒",
+      "24 小时",
+      "签名 URL",
+      "重新上传",
+      "portraitWidth",
+      "portraitHeight",
+      "docker compose down --remove-orphans",
+      "docker desktop stop"
+    ]) {
+      expect(docs).toContain(required);
+    }
+  });
+
+  it("documents exact Windows and lockfile-equivalent Linux deployment flows", () => {
+    const docs = readWorkspaceFile("docs/linux-deployment.md");
+    const windowsCommands = [
+      "npm.cmd ci",
+      "npx.cmd prisma migrate deploy",
+      "npm.cmd run build",
+      "npm.cmd run dev"
+    ];
+    let previous = -1;
+    for (const command of windowsCommands) {
+      const position = docs.indexOf(command);
+      expect(position).toBeGreaterThan(previous);
+      previous = position;
+    }
+
+    expect(docs).toContain("package-lock.json");
+    expect(docs).toContain("npm ci");
+    expect(docs).toContain("npx prisma migrate deploy");
+    expect(docs).toContain("首次运行");
+    expect(docs).toContain("超级管理员");
+    expect(docs).toContain("真实服务核对表");
+    expect(docs).toContain("不要把凭据写入本文档");
+  });
+
+  it("uses a free configuration-only Docker health check and current lockfile build", () => {
+    const dockerfile = readWorkspaceFile("Dockerfile");
+    const compose = readWorkspaceFile("docker-compose.yml");
+
+    expect(dockerfile).toContain("COPY package.json package-lock.json ./");
+    expect(dockerfile).toContain("npm ci");
+    expect(dockerfile).toContain("scripts/docker-entrypoint.sh");
+    expect(compose).toContain("/api/health");
+    expect(compose).toContain("免费的配置级就绪检查");
+    expect(compose).not.toContain("digital-human-video-diagnostics");
+    expect(compose).not.toContain("LINGMOU_ONLY");
+    expect(compose).not.toContain("EMO_ONLY");
+  });
+
+  it("hands off only the current Alibaba video runtime requirements", () => {
+    const handoff = readWorkspaceFile("docs/new-project-handoff-2026-07-16.md");
+    const interfaces = readWorkspaceFile("docs/digital-human-and-behavior-interfaces.md");
+    const combined = `${handoff}\n${interfaces}`;
+
+    expect(combined).toContain("阿里灵眸播报优先");
+    expect(combined).toContain("EMO 并发");
+    expect(combined).toContain("谁先成功用谁");
+    expect(combined).toContain("3 秒启动 EMO");
+    expect(combined).toContain("6 秒等待阈值");
+    expect(combined).toContain("8 秒本地 Qwen TTS 降级");
+    expect(combined).toContain("两位面试官");
+    expect(combined).not.toMatch(/DUIX|duix-guiji|酷虎云/i);
+    expect(combined).not.toMatch(/license|configId|instanceId/i);
   });
 });

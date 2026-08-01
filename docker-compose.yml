@@ -17,6 +17,7 @@ services:
     volumes:
       - app-data:/app/data
     healthcheck:
+      # 免费的配置级就绪检查：只检查应用/数据库，不触发灵眸或 EMO 付费调用。
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s

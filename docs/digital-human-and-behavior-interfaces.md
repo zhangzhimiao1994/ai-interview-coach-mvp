@@ -1,229 +1,43 @@
-# 数字人、语音和行为分析接口说明
+# 数字人、语音与行为接口
 
-当前版本已经接入可配置的阿里实时语音识别、CosyVoice PCM 合成和灵眸 2D 云渲染，同时保留明确降级：
+## 当前媒体链路
 
-- 候选人语音识别：阿里实时识别优先；配置或连接失败时显示“浏览器识别降级”。
-- 数字人语音：阿里真实语音优先；配置、请求或播放失败时显示“浏览器语音降级”。
-- 数字人画面：灵眸配置完整时使用真实 RTC 画面；未配置或连接失败时使用本地数字人。
-- 行为分析：仍使用本地可观察信号摘要，视觉抽帧服务尚未接入。
+- 语音识别：阿里实时识别优先，失败时明确显示浏览器识别降级；浏览器只连接本站 `/ws/asr`。
+- 面试官语音：阿里真实语音优先，当前首选 Qwen Audio TTS；`cosyvoice-v3-flash` 可作为兼容备选，失败时显示浏览器语音降级。
+- 异步视频：阿里灵眸播报优先，动态追问与 EMO 并发，谁先成功用谁；没有成功视频时继续本地头像与 Qwen 情绪 TTS。
+- 行为分析：仅陈述可观察信号与训练建议，不做心理诊断、人格判断或测谎。
 
-## 1. 阿里语音配置和运行时选择
+## 语音配置
 
-在后台 `AI 配置中心` 新增或编辑阿里服务商时填写：
+百炼公开设置为 `region`、`workspaceId`；`apiKey`、`asrApiKey`、`ttsApiKey` 只能在管理员 UI 加密保存。ASR 推荐 `qwen3-asr-flash-realtime`。模型只有设为当前使用（isSelected）后才参与运行，推荐参考不参与运行时路由。
 
-- `region`：阿里工作区所属地域，例如 `cn-beijing`。
-- `workspaceId`：Model Studio 工作区 ID，ASR/TTS 的工作区域名由它和地域共同生成。
-- `apiKey`：通用 API Key，可作为语音能力的后备凭据。
-- `asrApiKey`：可选的 ASR 专用 API Key；存在时优先于通用 Key。
-- `ttsApiKey`：可选的 TTS 专用 API Key；存在时优先于通用 Key。
+`POST /api/speech-recognition/sessions` 校验训练会话并签发一次性短期票据；同进程 WebSocket 网关消费票据。TTS 和本地降级响应均使用 `no-store`，切题、重播和卸载会取消旧播放。
 
-密钥只在服务端解密和使用，不会返回给浏览器。浏览器的实时音频只发到本站同源 `/ws/asr`，由服务端连接阿里上游。
+## 双视频编排
 
-参考模型是可编辑建议：
+预设题优先预生成灵眸视频；灵眸明确失败时才为预设题启用 EMO 备用。动态追问同时建立灵眸和 EMO 尝试，人物可以相同，也可以配置为两位面试官；胜出人物负责本轮提问，迟到结果不能抢占正在播放的视频。
 
-- ASR：`qwen3-asr-flash-realtime`
-- TTS：`cosyvoice-v3-flash`，默认音色 `longanhuan`
+候选人体验口径为：3 秒启动 EMO 等待状态（动态任务已与灵眸并发提交）、6 秒等待阈值、8 秒本地 Qwen TTS 降级。协议调度在第 3 秒和第 6 秒查询灵眸，在第 8 秒最终查询 EMO 并原子决定胜者或降级。
 
-“推荐参考（`isDefault`）”不参与运行时路由。保存模型后，还必须在相应能力中点击“设为当前使用”，使其成为当前使用（isSelected）模型。每项能力只能有一个当前使用模型；新会话和新 TTS 请求始终读取当时选中的模型。
+调试模式：
 
-配置诊断默认只检查本地必填项，不会自动产生付费调用。管理员可在后台主动检查；灵眸的 `liveCheck: true` 会创建、校验并立即关闭一次可能计费的真实会话，配置不完整时不会调用。
+- `AUTO_RACE`：预设题灵眸优先，动态追问双服务竞速；
+- `LINGMOU_ONLY`：只提交灵眸；
+- `EMO_ONLY`：只提交 EMO。
 
-## 2. 实时语音识别
+普通配置诊断只检查数据库配置，不产生费用。真实短任务诊断可能产生费用，必须由管理员在 UI 明确二次确认；自动化测试或注入结果不能作为真实服务可达证明。
 
-1. 浏览器向 `POST /api/speech-recognition/sessions` 提交当前 `sessionId`。
-2. 服务端验证会话仍为 `IN_PROGRESS`，解析当前 `SPEECH_TO_TEXT` 模型并签发 60 秒、一次性的同源票据。
-3. 浏览器连接返回的 `/ws/asr?ticket=...`，用 AudioWorklet 将麦克风降采样为 16 kHz、单声道 PCM16。
-4. 同进程 WebSocket 网关消费票据，只把允许的音频事件转发给阿里，并只把 ready、partial、final、error 事件返回浏览器。
+## 私有媒体与清理
 
-浏览器不会接收阿里 API Key、工作区凭据或上游 WebSocket 地址。票据过期、配置缺失、连接失败或浏览器不支持 AudioWorklet 时，页面会明确进入“浏览器识别降级”；如果浏览器也不支持语音识别，候选人仍可手动输入。
+肖像、音频和视频保存在私有 OSS，数据库只保存不透明对象键。调用上游或候选人播放时生成短期签名 URL，普通 API、日志和审计不得保存完整签名 URL。
 
-## 3. 数字人语音接口
+新版肖像资产新增不可变 `portraitWidth` / `portraitHeight` 元数据。迁移前保存的旧画像没有该元数据，不能继续用于新视频任务，必须重新上传或重新保存。临时 TTS、视频输出与诊断对象最长保留 24 小时；运行时清理器删除过期对象，Bucket 生命周期规则提供第二层兜底。
 
-`POST /api/digital-human/sessions/:sessionId/speech`
+## API 边界
 
-用途：把当前面试题转换成 48 kHz、单声道、PCM16 little-endian 的 CosyVoice 流。数字人会话和题目必须属于仍在进行的训练会话，接口受 Basic Auth、会话校验和每会话限流保护。旧 `/api/digital-human/speech` 付费路径已禁用。
+- `POST /api/digital-human/renders`：创建/复用预设任务或动态竞速；
+- `GET /api/digital-human/renders/:id`：只返回候选人所属任务的安全状态与短期播放地址；
+- `POST /api/ai-services/digital-human-video-diagnostics`：管理员配置诊断或显式付费诊断；
+- `POST /api/behavior-analysis`：接收可观察信号，输出 `observations`、`risks` 与 `coachingTips`。
 
-请求示例：
-
-```json
-{
-  "questionId": "FORMAL_INTERVIEW-0",
-  "text": "请先用一分钟介绍你自己，并说明为什么关注这个岗位。",
-  "speed": 0.95
-}
-```
-
-成功响应为分块二进制 PCM，并声明：
-
-```text
-Content-Type: audio/pcm
-Cache-Control: no-store
-X-Audio-Format: pcm_s16le
-X-Audio-Sample-Rate: 48000
-X-Audio-Channels: 1
-```
-
-供应商请求失败并成功记录失败日志后，接口返回显式降级：
-
-```json
-{
-  "mode": "BROWSER_TTS_FALLBACK",
-  "reasonCode": "TTS_UNAVAILABLE"
-}
-```
-
-云模式把完整 PCM16 样本按序送入灵眸 WebSDK；本地模式聚合为 WAV 播放。快速重播、切题和卸载都会取消旧请求并停止旧音频；CosyVoice 与 `speechSynthesis` 不会同时播放。
-
-## 4. 数字人渲染接口
-
-`POST /api/digital-human/render`
-
-用途：根据面试官文本、头像和表情状态生成数字人画面。当前返回前端渲染 fallback；未来接入 HeyGen、D-ID、腾讯智影、MiniMax 视频、Live2D 或自研 WebRTC 流。
-
-请求示例：
-
-```json
-{
-  "text": "你刚才提到了增长指标，请补充具体数字。",
-  "avatarId": "interviewer-default",
-  "expression": "probing",
-  "stage": "PRESSURE_FOLLOW_UP"
-}
-```
-
-当前返回：
-
-```json
-{
-  "mode": "CLIENT_RENDER_FALLBACK",
-  "providerCapability": "DIGITAL_HUMAN_VIDEO",
-  "render": {
-    "avatarId": "interviewer-default",
-    "expression": "probing",
-    "stage": "PRESSURE_FOLLOW_UP",
-    "text": "你刚才提到了增长指标，请补充具体数字。",
-    "videoUrl": null,
-    "streamUrl": null,
-    "instructions": "当前版本由前端状态化头像、嘴型动画和浏览器 TTS 组合渲染；接入真实数字人后在此返回 videoUrl 或 streamUrl。"
-  }
-}
-```
-
-真实服务商接入方式：
-
-1. 后台进入 `AI 配置中心`。
-2. 新增数字人服务商。
-3. 新增模型，能力类型选择 `数字人视频`。
-4. 修改 `app/api/digital-human/render/route.ts`，调用服务商生成视频或实时流。
-5. 返回 `videoUrl` 或 `streamUrl`，前端数字人组件优先播放真实视频流。
-
-## 5. 行为分析接口
-
-`POST /api/behavior-analysis`
-
-用途：把面试过程中的可观察行为信号整理成摘要。当前只做本地规则总结；未来可以接入视觉模型、音频模型或专门的行为分析服务。
-
-请求示例：
-
-```json
-{
-  "sessionId": "session-1",
-  "questionId": "FORMAL_INTERVIEW-1",
-  "signals": {
-    "answerDurationSeconds": 95,
-    "transcriptLength": 80,
-    "averageVolume": 42,
-    "peakVolume": 78,
-    "longPauseCount": 2,
-    "cameraEnabled": true,
-    "microphoneEnabled": true,
-    "speechRecognitionUsed": true
-  }
-}
-```
-
-当前返回：
-
-```json
-{
-  "mode": "LOCAL_SIGNAL_SUMMARY",
-  "providerCapability": "VISION_BEHAVIOR_ANALYSIS",
-  "sessionId": "session-1",
-  "questionId": "FORMAL_INTERVIEW-1",
-  "summary": {
-    "observations": [
-      "回答中记录到 2 次长停顿。",
-      "本题回答时长约 95 秒。",
-      "平均音量约 42%，峰值约 78%。"
-    ],
-    "risks": [
-      "长停顿可能影响表达稳定性判断"
-    ],
-    "coachingTips": [
-      "练习先给结论，再用 2-3 个证据展开，减少临场组织压力。"
-    ]
-  }
-}
-```
-
-真实服务商接入方式：
-
-1. 后台进入 `AI 配置中心`。
-2. 新增视觉或多模态服务商。
-3. 新增模型，能力类型选择 `神态/行为分析`。
-4. 修改 `app/api/behavior-analysis/route.ts`，把浏览器采集信号、视频帧摘要或音频特征发送给模型。
-5. 返回结构仍保持 `observations`、`risks`、`coachingTips`，报告层不用重写。
-
-## 6. 面试流程如何使用
-
-练习室里每次提交回答时，前端会把下面内容一起发送到：
-
-`POST /api/sessions/:sessionId/answer`
-
-核心字段：
-
-```json
-{
-  "questionId": "FORMAL_INTERVIEW-0",
-  "stage": "FORMAL_INTERVIEW",
-  "question": "请结合过往经历说明你如何胜任目标岗位。",
-  "answer": "我的回答是……",
-  "behaviorSignals": {
-    "answerDurationSeconds": 88,
-    "transcriptLength": 120,
-    "averageVolume": 38,
-    "peakVolume": 74,
-    "longPauseCount": 1,
-    "cameraEnabled": true,
-    "microphoneEnabled": true,
-    "speechRecognitionUsed": true
-  }
-}
-```
-
-后端会把 `behaviorSignals` 存到 `SessionTurn.behaviorSignalsJson`。完成面试时，`POST /api/sessions/:sessionId/complete` 会把每题回答和行为信号一起交给报告模型。
-
-报告中只允许写可观察行为影响，例如：
-
-```text
-第 2 题回答中记录到 2 次长停顿，可能影响面试官对表达稳定性的判断。
-```
-
-禁止写心理或人格诊断，例如：
-
-```text
-候选人性格不自信。
-```
-
-## 7. 当前可用能力
-
-- 电脑和手机浏览器都可以打开练习页。
-- 通过 HTTPS 或 localhost 时，浏览器可以请求摄像头和麦克风权限。
-- 配置并选中阿里 ASR 模型后，候选人可以使用同源 WebSocket 实时转写。
-- 配置并选中阿里 TTS 模型后，数字人面试官可以播放真实供应商音频。
-- ASR/TTS 失败会显示浏览器识别降级或浏览器语音降级，不会冒充阿里成功。
-- 候选人回答时会采集音量、长停顿、回答时长、摄像头/麦克风状态。
-- 报告可以展示行为信号证据。
-
-仍未接入的能力：阿里 Avatar/RTC 数字人视频、摄像头抽帧视觉行为分析，以及视觉证据写入报告。这些接口继续返回明确 fallback，不能描述为真实服务已经可用。
-
+所有运行时失败必须给出明确降级或安全错误码，不能静默伪造成阿里成功。

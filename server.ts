@@ -9,6 +9,7 @@ import {
   stopAllActiveDigitalHumanSessions
 } from "@/lib/media/digitalHumanSessions";
 import { drainProviderSessionCloseRecoveries } from "@/lib/media/providerSessionCloseRecoveries";
+import { startDigitalHumanMediaCleanup } from "@/lib/media/storage/mediaCleanup";
 import {
   createServerShutdown,
   registerServerShutdownSignals
@@ -38,6 +39,7 @@ async function main() {
     console.warn("DIGITAL_HUMAN_RECOVERY_QUEUE_DRAIN_FAILED");
   });
   const stopReaper = startDigitalHumanSessionReaper();
+  const stopMediaCleanup = startDigitalHumanMediaCleanup();
 
   const requestHandler = app.getRequestHandler();
   const nextUpgradeHandler = app.getUpgradeHandler();
@@ -73,7 +75,10 @@ async function main() {
   });
 
   const shutdown = createServerShutdown({
-    stopReaper,
+    stopReaper: () => {
+      stopReaper();
+      stopMediaCleanup();
+    },
     closeWebSockets: () => {
       webSocketServer.clients.forEach((client) =>
         client.close(1001, "Server shutting down")

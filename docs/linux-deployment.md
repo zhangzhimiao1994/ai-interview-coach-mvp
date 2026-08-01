@@ -1,369 +1,106 @@
-# Linux 服务器部署说明
+# Windows 本地调试与 Linux 部署
 
-这个项目支持三种 Linux 部署方式：
+Windows、Linux 和 Docker 必须使用同一提交中的 `package-lock.json` 与 Prisma migrations。`.env 不在部署包内`，也不得提交数据库、日志、媒体或任何凭据。
 
-1. Docker Compose，优先推荐。
-2. 部署包方式，适合你把本机生成的 `.tar.gz` 上传到服务器。
-3. 原生 Node.js 方式，适合服务器已经装好 Node.js 和进程管理器。
+当前数字人视频以灵眸播报和 EMO 有界竞速；8 秒无成功视频时立即使用本地头像与 Qwen TTS 继续面试。
 
-默认监听端口是 `3000`。Docker 容器内数据库路径是 `/app/data/prod.db`，原生 Linux 路径是 `data/prod.db`。
+## Windows 本地调试
 
-## 部署包方式
+从空依赖目录开始，严格按顺序执行：
 
-我生成的部署包会放在本机 `outputs/` 目录，例如：
-
-```text
-outputs/ai-interview-coach-linux-YYYYMMDD-HHMMSS.tar.gz
+```powershell
+npm.cmd ci
+npx.cmd prisma migrate deploy
+npm.cmd run build
+npm.cmd run dev
 ```
 
-注意：`.env 不在部署包内`，本地数据库、`.git`、`node_modules`、`.next`、测试报告也不会打进去，避免把密钥和临时文件带到服务器。
+打开 `http://127.0.0.1:3000`。首次运行且数据库没有管理员时，访问 `/login` 会进入 `/setup`，由操作者初始化第一个超级管理员；不要通过种子脚本制造默认密码。
 
-上传到服务器后执行：
+复制 `.env.example` 为 `.env` 后，至少填写 `AI_CONFIG_SECRET`、`RECRUITMENT_SESSION_SECRET` 和部署需要的应急 `ADMIN_PASSWORD`。`AI_CONFIG_SECRET` 用于加密后台保存的 AI/媒体凭据并签名后台会话；用密码生成器或 `openssl rand -base64 48` 生成。云端 API Key、灵眸 RAM AccessKey、OSS RAM AccessKey 只能在加密管理员 UI 输入，不能写进 `.env`。
 
-```bash
-mkdir -p /opt/ai-interview-coach-mvp
-tar -xzf ai-interview-coach-linux-YYYYMMDD-HHMMSS.tar.gz -C /opt/ai-interview-coach-mvp
-cd /opt/ai-interview-coach-mvp
-cp .env.example .env
-```
+## Linux 原生部署
 
-必须修改 `.env`：
-
-```env
-DATABASE_URL="file:./data/prod.db"
-PORT=3000
-APP_ORIGIN="https://interview.example.com"
-RUN_DB_SEED=false
-AI_PROVIDER=database
-AI_CONFIG_SECRET="replace-with-a-long-random-secret"
-RECRUITMENT_SESSION_SECRET="replace-with-a-long-random-secret"
-ADMIN_USERNAME="admin"
-ADMIN_PASSWORD="replace-with-a-strong-password"
-```
-
-`AI_CONFIG_SECRET` 不能使用 `change-this-before-production`。它用于加密后台保存的服务商 API Key。
-`RECRUITMENT_SESSION_SECRET` 不能使用占位值，生产环境至少 32 个字符。它独立于 `AI_CONFIG_SECRET`，用于加密 recruitment API credentials and browser session state。
-`APP_ORIGIN` 必须填写浏览器实际访问的唯一公开源（协议、域名和可选端口），例如 `https://interview.example.com`。不要填写路径、查询参数、账号密码或容器内部的 `http://0.0.0.0:3000`；反向代理内部使用 HTTP 时仍应填写外部 HTTPS 源。
-
-然后执行：
-
-```bash
-chmod +x scripts/linux/*.sh
-scripts/linux/setup.sh
-scripts/linux/start.sh
-```
-
-访问：
-
-```text
-http://服务器IP:3000
-```
-
-如果要换端口，例如 `8080`，修改 `.env`：
-
-```env
-PORT=8080
-```
-
-然后重启服务。
-
-## Docker Compose 部署
-
-服务器需要安装 Docker 和 Docker Compose。
-
-准备环境变量：
-
-```bash
-cp .env.example .env
-```
-
-Docker 推荐 `.env`：
-
-```env
-DATABASE_URL="file:/app/data/prod.db"
-PORT=3000
-APP_ORIGIN="https://interview.example.com"
-RUN_DB_SEED=false
-AI_PROVIDER=database
-AI_CONFIG_SECRET="replace-with-a-long-random-secret"
-RECRUITMENT_SESSION_SECRET="replace-with-a-long-random-secret"
-ADMIN_USERNAME="admin"
-ADMIN_PASSWORD="replace-with-a-strong-password"
-```
-
-启动：
-
-```bash
-docker compose up -d --build
-```
-
-查看日志：
-
-```bash
-docker compose logs -f interview-coach
-```
-
-停止：
-
-```bash
-docker compose down
-```
-
-Docker 改端口：
-
-```env
-PORT=8080
-```
-
-然后执行：
-
-```bash
-docker compose up -d
-```
-
-此时访问：
-
-```text
-http://服务器IP:8080
-```
-
-## 原生 Node.js 部署
-
-服务器要求：
-
-- Linux
-- Node.js 22 LTS
-- npm
-- Git 或部署包
-
-首次安装：
-
-```bash
-chmod +x scripts/linux/*.sh
-scripts/linux/setup.sh
-```
-
-直接启动：
-
-```bash
-scripts/linux/start.sh
-```
-
-PM2 启动：
-
-```bash
-npm install -g pm2
-pm2 start ecosystem.config.cjs
-pm2 save
-```
-
-systemd 启动：
-
-```bash
-sudo cp scripts/linux/ai-interview-coach.service /etc/systemd/system/ai-interview-coach.service
-sudo systemctl daemon-reload
-sudo systemctl enable ai-interview-coach
-sudo systemctl start ai-interview-coach
-```
-
-查看状态：
-
-```bash
-sudo systemctl status ai-interview-coach
-journalctl -u ai-interview-coach -f
-```
-
-## Nginx 反向代理
-
-示例：
-
-```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-    }
-}
-```
-
-应用的自定义 Node 入口在同一个端口处理 Next.js HTTP 请求和 `/ws/asr` WebSocket upgrade，不需要开放额外的中继端口。上面的 `Upgrade` 和 `Connection` 头必须保留，否则同源 WebSocket 会在 Nginx 处失败并触发浏览器识别降级。
-
-公开给候选人使用前必须配置 HTTPS。否则浏览器可能限制摄像头、麦克风、AudioWorklet 和安全的 `wss://` 连接。生产页面、API 与 `/ws/asr` 必须使用同一域名；不要把阿里上游 WebSocket 地址或 API Key 暴露给浏览器。
-
-### 生产环境配置百炼语音与灵眸数字人
-
-百炼 Workspace/API Key 与灵眸 RAM AccessKey 是两套独立凭据，不能混用，也不写入 `.env`。管理员通过 `AI 配置中心` 保存数据库配置，永久凭据会使用 `AI_CONFIG_SECRET` 在后台加密：
-
-- 百炼 `TONGYI` 服务商公开设置：`region`、`workspaceId`；
-- 百炼加密凭据：通用 `apiKey`，以及可选的 `asrApiKey`、`ttsApiKey`；
-- ASR 参考模型：`qwen3-asr-flash-realtime`；
-- TTS 当前模型：`cosyvoice-v3-flash`，默认音色 `longanhuan`；
-- 灵眸 `LINGMOU` 服务商加密凭据：最小权限 RAM `accessKeyId` 和 `accessKeySecret`。
-
-灵眸必须先在阿里云控制台创建项目并购买 2D 对话实例，再把项目的 `configId` 和实例的 `instanceId` 填入实时数字人模型。未开通或字段不完整时，诊断的预期状态是 `NOT_CONFIGURED`；面试不会被阻断，本地数字人和 CosyVoice 仍可工作。不要把 RAM AccessKey、RTC Token 或短期入会参数写入环境变量、日志或浏览器配置。
-
-推荐参考可以编辑，但不会自动参与调用。必须分别把一个 ASR 模型和一个 TTS 模型设为“当前使用（isSelected）”。更新配置后，新建 ASR 会话和新的语音合成请求会读取最新选择，正在进行的 WebSocket 不会中途切换模型。
-
-候选人端显示“阿里实时识别优先 / 浏览器识别降级”，数字面试官显示“阿里真实语音优先 / 浏览器语音降级”。降级是显式运行状态，不会记录成阿里成功。
-
-### 招聘来源与浏览器授权记录
-
-招聘来源在后台 `/admin/recruitment` 配置。公共 ATS 和招聘聚合 API 使用最小权限 API Key；需要登录的网站使用“浏览器授权记录”保存授权后的浏览器 storage state。系统只保存加密后的 recruitment API credentials and browser session state，不保存招聘网站账号密码，也不会把 Cookie 明文返回给前端。
-
-`RECRUITMENT_SESSION_SECRET` 必须在生产环境配置，且至少 32 个字符。该密钥专门用于招聘来源凭据和浏览器授权记录，不能与 `AI_CONFIG_SECRET` 混用；更换后旧的招聘 API 凭据和浏览器授权记录将无法解密，需要重新授权或重新保存。
-
-安全约束：
-
-- 不要提交 `.env`、招聘 API 响应原文、浏览器 storage-state JSON、Cookie、账号密码或候选人隐私数据。
-- Selenium/Playwright 登录态只作为用户授权后的采集入口；采集前要确认目标网站条款、频率限制和账号安全要求。
-- 手动导入仍是保底来源，适合从招聘网站、邮件、PDF 或候选人提供材料中录入岗位要求。
-- 真实连通性只能由真实 API 或授权会话验证；不要用 mock 结果声明招聘来源可达。
-- 如果为了调试启动 Docker，结束后执行 `docker compose down --remove-orphans`，再执行 `docker desktop stop`。
-
-## 更新服务
-
-Docker 镜像和源码版本必须来自同一个工作区、同一个分支。更新 Docker 服务时执行：
+要求 Node.js 22 LTS、npm 和项目完整源码。部署包方式必须包含 `package.json`、`package-lock.json`、`prisma/migrations/`、`scripts/`、`app/`、`components/` 与 `lib/`，但排除 `.env`、`node_modules`、`.next`、`data`、测试报告和临时媒体。
 
 ```bash
 git switch feature/alibaba-multimodal-integration
 git pull
+cp .env.example .env
+# 在服务器本机填写服务端密钥；不要把凭据写入本文档或 shell 历史
+npm ci
+npx prisma generate
+npx prisma migrate deploy
+npm run build
+npm run start
+```
+
+也可使用已提供脚本：
+
+```bash
+chmod +x scripts/linux/*.sh
+scripts/linux/setup.sh
+scripts/linux/start.sh
+```
+
+`setup.sh` 同样执行 `npm ci` 和 `npm run db:migrate:deploy`，不会使用 `prisma db push`。首次运行仍通过浏览器 `/setup` 初始化超级管理员。生产 `APP_ORIGIN` 必须是唯一公开的 HTTP/HTTPS origin，不能带路径、查询、凭据或片段。
+
+## Docker Compose
+
+Docker 镜像从当前源码和当前 lockfile 构建，入口先校验环境、执行 `prisma migrate deploy`，再启动自定义 Next.js/WS 服务：
+
+```bash
+cp .env.example .env
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail=100 interview-coach
 ```
 
-`docker compose up -d --build` 会使用当前工作区重新构建诊断 API 和后台静态资源。SQLite 继续挂载在命名卷 `app-data` 中。不要执行 `docker compose down -v`，否则会删除数据库卷。
+Compose 健康检查仅访问公开 `/api/health`，这是免费的配置级应用与数据库就绪检查，不会创建灵眸/EMO 任务，也不会调用任何付费诊断。不要把付费诊断加进 `HEALTHCHECK`、启动脚本或监控探针。
 
-原生 Linux 使用 PM2 时执行：
-
-```bash
-git switch feature/alibaba-multimodal-integration
-git pull
-npm ci
-npm run db:generate
-npm run db:migrate:deploy
-npm run build
-pm2 restart ai-interview-coach
-```
-
-原生 Linux 使用 systemd 时执行相同的依赖、迁移和构建命令，然后重启服务：
-
-```bash
-git switch feature/alibaba-multimodal-integration
-git pull
-npm ci
-npm run db:generate
-npm run db:migrate:deploy
-npm run build
-sudo systemctl restart ai-interview-coach
-```
-
-生产数据库结构只使用 Prisma migration，不使用 `prisma db push`：
-
-```bash
-npm run db:migrate:deploy
-```
-
-### 更新后验证配置诊断
-
-`/api/health` 仍然是无需认证的容器和数据库就绪检查。`/api/ai-services/diagnostics` 包含服务商与模型配置状态，受管理员 Basic Auth 保护，不能替代公开健康检查。
-
-先把 `.env` 中的管理员账号加载到当前 shell，再读取无付费调用的配置摘要：
-
-```bash
-set -a
-. ./.env
-set +a
-curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
-  "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
-```
-
-GET 摘要和后台首屏只检查本地配置。真实连通测试不会自动执行，只有管理员主动点击后台按钮或明确发送 POST 请求时才会调用厂商服务。灵眸按钮旁会明确提示“会创建并立即关闭一次真实会话，可能计费”；配置不完整时按钮禁用，且绝不能尝试创建会话。
-
-文本能力的显式检查示例：
-
-```bash
-curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
-  -H "Content-Type: application/json" \
-  -d '{"capability":"INTERVIEW_DIALOGUE","liveCheck":true}' \
-  "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
-```
-
-灵眸真实检查仅在管理员确认可能计费后执行；它会创建、校验并立即关闭一次真实会话：
-
-```bash
-curl -u "$ADMIN_USERNAME:$ADMIN_PASSWORD" \
-  -H "Content-Type: application/json" \
-  -d '{"capability":"DIGITAL_HUMAN_REALTIME","liveCheck":true}' \
-  "http://127.0.0.1:${PORT:-3000}/api/ai-services/diagnostics"
-```
-
-阿里 ASR/CosyVoice 适配器已经落地，诊断会校验工作区、地域、专用或通用 API Key、当前模型和协议兼容性，但不会自动录音或合成付费音频。灵眸只有上述显式检查成功后才显示 `LIVE_AVAILABLE`；本地配置完整但未执行真实检查时只显示 `CONFIG_VALID`。
-
-### 源码与 Docker 同步验收
-
-源码更新后先完成依赖、Prisma Client、迁移和生产构建，再从同一个工作树构建镜像：
-
-```bash
-git switch feature/alibaba-multimodal-integration
-git pull
-npm ci
-npm run db:generate
-npm run db:migrate:deploy
-npm run build
-docker compose config
-docker compose build interview-coach
-docker compose up -d interview-coach
-docker compose ps
-curl -f http://127.0.0.1:3000/api/health
-```
-
-此验收只调用健康接口和诊断 GET，不调用灵眸 `liveCheck: true` POST 或语音合成接口。测试结束必须释放容器并停止本机 Docker Desktop：
+任何 Docker 测试结束后必须彻底关闭：
 
 ```bash
 docker compose down --remove-orphans
-docker ps -a --filter "name=interview-coach"
 docker desktop stop
 ```
 
-## 备份 SQLite 数据
+不要使用 `docker compose down -v`，命名卷 `app-data:/app/data` 保存 SQLite 数据。
 
-Docker：
+## Nginx 与 HTTPS
 
-```bash
-docker compose exec interview-coach sh -c 'mkdir -p /app/data/backups && cp /app/data/prod.db /app/data/backups/prod-$(date +%Y%m%d-%H%M%S).db'
+同一端口同时承载 Next.js HTTP 和 `/ws/asr` 同源 WebSocket：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 3600s;
+}
 ```
 
-原生 Linux：
+公网必须使用 HTTPS；页面、API 和 WebSocket 必须同源。浏览器只能拿到本站短期票据，不能拿到上游地址、永久 API Key 或 OSS 签名能力。
 
-```bash
-mkdir -p data/backups
-cp data/prod.db data/backups/prod-$(date +%Y%m%d-%H%M%S).db
-```
+## 真实服务核对表（不含凭据）
 
-## 回滚
+不要把凭据写入本文档；在管理员 UI 中逐项确认：
 
-查看版本：
+- 私有 OSS：地域、Endpoint、私有 Bucket、随机对象前缀、独立最小权限 RAM 已保存；
+- 百炼：`region`、`workspaceId`、当前 ASR/TTS 模型与音色已选择；
+- 灵眸播报：当前播报模型、模板 ID 和模板变量映射已保存；
+- EMO：当前模型、合规肖像、画幅配置和可访问的临时音频已保存；
+- 面试官：一套共享人物或两位面试官配置均有不可变肖像尺寸元数据；
+- 运行时：`AUTO_RACE` / `LINGMOU_ONLY` / `EMO_ONLY` 选择符合本次测试；
+- 安全：候选人响应、日志和审计中无密钥、签名 URL、完整上游响应或候选人隐私。
 
-```bash
-git log --oneline
-```
+`GET /api/ai-services/diagnostics` 可做管理员鉴权后的免费配置检查，例如 `curl -u` 使用本机临时输入的管理员凭据。真实连通测试不会自动执行。数字人视频付费诊断必须在 UI 中明确二次确认；它可能创建真实任务并计费。未配置时预期显示 `NOT_CONFIGURED`，不能用 mock/fake 宣称可达。
 
-回到某个版本：
+百炼 Workspace/API Key 与灵眸 RAM AccessKey 是两套独立凭据；OSS 建议再使用独立的最小权限 RAM。招聘来源及浏览器授权记录由 `RECRUITMENT_SESSION_SECRET` 加密 recruitment API credentials and browser session state。
 
-```bash
-git checkout <commit-id>
-```
+## 临时媒体
 
-然后重新构建或重启。数据库结构如果已经升级，回滚代码前先恢复数据库备份。
+私有 OSS 对象只按需生成短期签名 URL。TTS 临时音频最长 1 小时，缓存视频和诊断产生的临时音频/视频最长 24 小时；服务启动后按固定周期删除到期对象并把数据库资产标记为已清理。Bucket 仍应设置不超过 24 小时的生命周期规则作为故障兜底。人物肖像是持久配置资产，不属于临时对象。

@@ -83,4 +83,25 @@ describe("request security guards", () => {
     expect(combined).not.toContain("secret-cookie");
   });
 
+  it("keeps bootstrap examples free of cloud credentials and populated secrets", () => {
+    const example = readFileSync(join(process.cwd(), ".env.example"), "utf8");
+    const assignments = new Map(
+      example
+        .split(/\r?\n/)
+        .filter((line) => /^[A-Z][A-Z0-9_]*=/.test(line))
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator), line.slice(separator + 1).replace(/^['\"]|['\"]$/g, "")];
+        })
+    );
+
+    expect(assignments.get("AI_CONFIG_SECRET")).toBe("");
+    expect(assignments.get("RECRUITMENT_SESSION_SECRET")).toBe("");
+    expect(assignments.get("ADMIN_PASSWORD")).toBe("");
+    expect(example).toContain("加密管理员 UI");
+    expect(example).toContain("openssl rand -base64 48");
+    expect(example).not.toMatch(/(?:ACCESS_KEY|ACCESSKEY|API_KEY|APIKEY|SECRET_KEY|STS_TOKEN)\s*=/i);
+    expect(example).not.toMatch(/(?:LINGMOU|DASHSCOPE|TONGYI|ALIBABA|ALIYUN|OSS)_[A-Z0-9_]*=/);
+  });
+
 });

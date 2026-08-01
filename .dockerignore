@@ -14,4 +14,8 @@ coverage
 work
 outputs
 .codex
+.worktrees
+.agents
+.env.*
+!.env.example
 *.log
