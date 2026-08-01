@@ -357,6 +357,9 @@ model DigitalHumanMediaAsset {
   portraitHeight    Int?
   expiresAt         DateTime?
   cleanupStatus     String                       @default("ACTIVE")
+  cleanupClaimToken String?
+  cleanupClaimedAt  DateTime?
+  cleanupClaimExpiresAt DateTime?
   cleanedAt         DateTime?
   createdAt         DateTime                     @default(now())
   updatedAt         DateTime                     @updatedAt
@@ -368,6 +371,7 @@ model DigitalHumanMediaAsset {
 
   @@index([storageConfigId])
   @@index([cleanupStatus, expiresAt])
+  @@index([cleanupStatus, cleanupClaimExpiresAt])
 }
 
 model InterviewerAvatarProfile {

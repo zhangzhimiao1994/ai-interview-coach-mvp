@@ -19,8 +19,12 @@ export function validateProductionEnvironment(env) {
       "APP_ORIGIN must be an absolute http/https origin without credentials, path, query, or fragment"
     );
   }
-  if (isMissingOrPlaceholder(env.ADMIN_PASSWORD)) {
-    errors.push("ADMIN_PASSWORD must be set to a non-placeholder value");
+  const adminUsername = env.ADMIN_USERNAME?.trim() || "";
+  const adminPassword = env.ADMIN_PASSWORD?.trim() || "";
+  if (Boolean(adminUsername) !== Boolean(adminPassword)) {
+    errors.push("ADMIN_USERNAME and ADMIN_PASSWORD must either both be set or both be omitted");
+  } else if (adminPassword && (adminPassword === placeholder || adminPassword.length < 12)) {
+    errors.push("ADMIN_PASSWORD must be a non-placeholder value of at least 12 characters");
   }
   if (isMissingOrPlaceholder(env.AI_CONFIG_SECRET)) {
     errors.push("AI_CONFIG_SECRET must be set to a non-placeholder value");

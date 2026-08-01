@@ -6,7 +6,7 @@ import { createOssPrivateMediaStorage } from "@/lib/media/storage/ossStorage";
 import type { MediaStorageConfigRecord, PrivateMediaStorage } from "@/lib/media/storage/types";
 
 const maxVideoBytes = 100 * 1024 * 1024;
-const outputLifetimeMs = 24 * 60 * 60 * 1000;
+const outputLifetimeMs = 23 * 60 * 60 * 1000;
 
 export async function cacheProviderVideoOutput(input: {
   attemptId: string;

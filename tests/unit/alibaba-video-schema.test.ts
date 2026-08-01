@@ -66,4 +66,21 @@ describe("Alibaba dual video persistence schema", () => {
       expect(migration).toContain(`\"${field}\"`);
     }
   });
+
+  it("migrates durable expiring cleanup claims", () => {
+    const schema = readFileSync(schemaPath, "utf8");
+    const cleanupMigrationPath = join(
+      root,
+      "prisma/migrations/20260801210000_harden_media_cleanup/migration.sql"
+    );
+    const migration = existsSync(cleanupMigrationPath)
+      ? readFileSync(cleanupMigrationPath, "utf8")
+      : "";
+
+    for (const field of ["cleanupClaimToken", "cleanupClaimedAt", "cleanupClaimExpiresAt"]) {
+      expect(schema).toContain(field);
+      expect(migration).toContain(`\"${field}\"`);
+    }
+    expect(migration).toContain("DigitalHumanMediaAsset_cleanupStatus_cleanupClaimExpiresAt_idx");
+  });
 });

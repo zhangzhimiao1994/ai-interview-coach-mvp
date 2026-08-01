@@ -97,6 +97,7 @@ describe("request security guards", () => {
 
     expect(assignments.get("AI_CONFIG_SECRET")).toBe("");
     expect(assignments.get("RECRUITMENT_SESSION_SECRET")).toBe("");
+    expect(assignments.get("ADMIN_USERNAME")).toBe("");
     expect(assignments.get("ADMIN_PASSWORD")).toBe("");
     expect(example).toContain("加密管理员 UI");
     expect(example).toContain("openssl rand -base64 48");

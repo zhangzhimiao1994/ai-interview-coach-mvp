@@ -90,18 +90,17 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  const username = process.env.ADMIN_USERNAME?.trim() || "admin";
+  const username = process.env.ADMIN_USERNAME?.trim();
   const password = process.env.ADMIN_PASSWORD?.trim();
+  const basicPairInvalid = Boolean(username) !== Boolean(password) || Boolean(password && (isPlaceholderSecret(password) || password.length < 12));
 
-  if (process.env.NODE_ENV === "production" && isPlaceholderSecret(password)) {
-    return unavailable("ADMIN_PASSWORD must be set to a non-placeholder value before exposing the service.");
+  if (process.env.NODE_ENV === "production" && basicPairInvalid) {
+    return unavailable("ADMIN_USERNAME and ADMIN_PASSWORD must be omitted together or configured as a strong emergency pair.");
   }
 
-  if (!password) {
-    return NextResponse.next();
-  }
-
-  const auth = authenticateBasicRequest(request.headers.get("authorization"), { username, password });
+  const auth = username && password
+    ? authenticateBasicRequest(request.headers.get("authorization"), { username, password })
+    : { ok: false as const };
 
   if (auth.ok) {
     return NextResponse.next();

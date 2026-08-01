@@ -75,9 +75,9 @@ async function main() {
   });
 
   const shutdown = createServerShutdown({
-    stopReaper: () => {
+    stopReaper: async () => {
       stopReaper();
-      stopMediaCleanup();
+      await stopMediaCleanup();
     },
     closeWebSockets: () => {
       webSocketServer.clients.forEach((client) =>

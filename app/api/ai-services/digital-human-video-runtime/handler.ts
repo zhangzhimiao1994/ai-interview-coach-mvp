@@ -153,7 +153,29 @@ async function persistStorage(storage: z.infer<typeof storageSchema>, database: 
   if (!storage.credentials && (!existing || !completeStorageEnvelope(existing))) throw new RuntimeConfigValidationError("OSS_CREDENTIALS_REQUIRED");
   const encrypted = storage.credentials ? encryptOssCredentials(storage.credentials, configSecret) : null;
   const data = { displayName: storage.displayName, providerKind: "ALI_OSS", endpoint: storage.endpoint, bucket: storage.bucket, region: storage.region, enabled: true, ...(encrypted ? { credentialsCiphertext: encrypted.ciphertext, credentialsIv: encrypted.iv, credentialsTag: encrypted.tag, credentialsPreviewJson: encrypted.previewJson } : {}) };
-  if (existing) await database.mediaStorageConfig.update({ where: { id: existing.id }, data }); else await database.mediaStorageConfig.create({ data });
+  const identityChanged = Boolean(existing && (
+    existing.endpoint !== storage.endpoint ||
+    existing.bucket !== storage.bucket ||
+    existing.region !== storage.region ||
+    storage.credentials
+  ));
+  if (existing && identityChanged) {
+    await database.mediaStorageConfig.updateMany({ where: { providerKind: "ALI_OSS", enabled: true }, data: { enabled: false } });
+    const archivedName = `${existing.displayName} [archived:${existing.id}]`;
+    await database.mediaStorageConfig.update({ where: { id: existing.id }, data: { displayName: archivedName, enabled: false } });
+    await database.mediaStorageConfig.create({ data: {
+      ...data,
+      credentialsCiphertext: encrypted?.ciphertext ?? existing.credentialsCiphertext,
+      credentialsIv: encrypted?.iv ?? existing.credentialsIv,
+      credentialsTag: encrypted?.tag ?? existing.credentialsTag,
+      credentialsPreviewJson: encrypted?.previewJson ?? existing.credentialsPreviewJson
+    } });
+  } else if (existing) {
+    await database.mediaStorageConfig.update({ where: { id: existing.id }, data });
+  } else {
+    await database.mediaStorageConfig.updateMany({ where: { providerKind: "ALI_OSS", enabled: true }, data: { enabled: false } });
+    await database.mediaStorageConfig.create({ data });
+  }
 }
 
 function completeStorageEnvelope(storage: { credentialsCiphertext: string | null; credentialsIv: string | null; credentialsTag: string | null }) {

@@ -30,7 +30,7 @@ describe("linux deployment package", () => {
     expect(readWorkspaceFile("scripts/docker-entrypoint.sh")).toContain("validate-production-env");
   });
 
-  it("rejects placeholder secrets and accepts complete production configuration", () => {
+  it("keeps emergency Basic Auth optional but validates a configured pair", () => {
     const script = join(root, "scripts/validate-production-env.mjs");
     const baseEnvironment: NodeJS.ProcessEnv = {
       ...process.env,
@@ -40,19 +40,30 @@ describe("linux deployment package", () => {
       AI_CONFIG_SECRET: "real-ai-config-secret",
       RECRUITMENT_SESSION_SECRET: "real-recruitment-session-secret-123456"
     };
-    const invalid = spawnSync(process.execPath, [script], {
-      env: { ...baseEnvironment, ADMIN_PASSWORD: "change-this-before-production" },
+    const withoutBasicAuth = spawnSync(process.execPath, [script], {
+      env: { ...baseEnvironment, ADMIN_USERNAME: undefined, ADMIN_PASSWORD: undefined },
       encoding: "utf8"
     });
-    const valid = spawnSync(process.execPath, [script], {
-      env: { ...baseEnvironment, ADMIN_PASSWORD: "real-admin-password" },
+    const usernameOnly = spawnSync(process.execPath, [script], {
+      env: { ...baseEnvironment, ADMIN_USERNAME: "break-glass", ADMIN_PASSWORD: undefined },
+      encoding: "utf8"
+    });
+    const weakPair = spawnSync(process.execPath, [script], {
+      env: { ...baseEnvironment, ADMIN_USERNAME: "break-glass", ADMIN_PASSWORD: "short" },
+      encoding: "utf8"
+    });
+    const validPair = spawnSync(process.execPath, [script], {
+      env: { ...baseEnvironment, ADMIN_USERNAME: "break-glass", ADMIN_PASSWORD: "strong-emergency-password" },
       encoding: "utf8"
     });
 
-    expect(invalid.status).toBe(1);
-    expect(invalid.stderr).toContain("ADMIN_PASSWORD");
-    expect(valid.status).toBe(0);
-    expect(valid.stdout).toContain("validation passed");
+    expect(withoutBasicAuth.status).toBe(0);
+    expect(usernameOnly.status).toBe(1);
+    expect(usernameOnly.stderr).toContain("ADMIN_USERNAME and ADMIN_PASSWORD");
+    expect(weakPair.status).toBe(1);
+    expect(weakPair.stderr).toContain("at least 12 characters");
+    expect(validPair.status).toBe(0);
+    expect(validPair.stdout).toContain("validation passed");
   });
 
   it("requires recruitment credential encryption in production", () => {
@@ -120,6 +131,7 @@ describe("linux deployment package", () => {
       ...process.env,
       NODE_ENV: "production",
       DATABASE_URL: "file:./data/prod.db",
+      ADMIN_USERNAME: "break-glass",
       ADMIN_PASSWORD: "real-admin-password",
       AI_CONFIG_SECRET: "real-ai-config-secret",
       RECRUITMENT_SESSION_SECRET: "real-recruitment-session-secret-123456"
@@ -241,6 +253,16 @@ describe("linux deployment package", () => {
     ]) {
       expect(docs).toContain(required);
     }
+    expect(docs).toContain("HTTPS");
+    expect(docs).toContain("15 MiB");
+    expect(docs).toContain("60 秒");
+    expect(docs).toContain("400–7000");
+    expect(docs).toContain("JPEG/PNG");
+    expect(docs).toContain("5 MiB");
+    expect(docs).toContain("PutObject");
+    expect(docs).toContain("GetObject");
+    expect(docs).toContain("DeleteObject");
+    expect(docs).toContain("控制台可能更严格");
   });
 
   it("documents exact Windows and lockfile-equivalent Linux deployment flows", () => {
@@ -289,8 +311,9 @@ describe("linux deployment package", () => {
     expect(combined).toContain("阿里灵眸播报优先");
     expect(combined).toContain("EMO 并发");
     expect(combined).toContain("谁先成功用谁");
-    expect(combined).toContain("3 秒启动 EMO");
-    expect(combined).toContain("6 秒等待阈值");
+    expect(combined).toContain("两路立即各提交一次");
+    expect(combined).toContain("3 秒和 6 秒轮询灵眸");
+    expect(combined).toContain("8 秒轮询 EMO");
     expect(combined).toContain("8 秒本地 Qwen TTS 降级");
     expect(combined).toContain("两位面试官");
     expect(combined).not.toMatch(/DUIX|duix-guiji|酷虎云/i);

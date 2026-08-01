@@ -811,7 +811,7 @@ describe("persistent video render orchestration", () => {
             byteLength: 3,
             purpose: "VIDEO_OUTPUT",
             cleanupStatus: "ACTIVE",
-            expiresAt: new Date("2026-08-02T00:00:03.000Z")
+            expiresAt: new Date("2026-08-01T23:00:03.000Z")
           });
 
         await cacheProviderVideoOutput({

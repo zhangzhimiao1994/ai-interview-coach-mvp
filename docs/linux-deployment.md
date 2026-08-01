@@ -17,7 +17,7 @@ npm.cmd run dev
 
 打开 `http://127.0.0.1:3000`。首次运行且数据库没有管理员时，访问 `/login` 会进入 `/setup`，由操作者初始化第一个超级管理员；不要通过种子脚本制造默认密码。
 
-复制 `.env.example` 为 `.env` 后，至少填写 `AI_CONFIG_SECRET`、`RECRUITMENT_SESSION_SECRET` 和部署需要的应急 `ADMIN_PASSWORD`。`AI_CONFIG_SECRET` 用于加密后台保存的 AI/媒体凭据并签名后台会话；用密码生成器或 `openssl rand -base64 48` 生成。云端 API Key、灵眸 RAM AccessKey、OSS RAM AccessKey 只能在加密管理员 UI 输入，不能写进 `.env`。
+复制 `.env.example` 为 `.env` 后，至少填写 `AI_CONFIG_SECRET` 和 `RECRUITMENT_SESSION_SECRET`。`AI_CONFIG_SECRET` 用于加密后台保存的 AI/媒体凭据并签名后台会话；用密码生成器或 `openssl rand -base64 48` 生成。`ADMIN_USERNAME` / `ADMIN_PASSWORD` 是可选的应急 Basic Auth：留空时使用 `/setup` 初始化的数据库超级管理员；若启用必须成对设置，密码至少 12 字符。云端 API Key、灵眸 RAM AccessKey、OSS RAM AccessKey 只能在加密管理员 UI 输入，不能写进 `.env`。
 
 ## Linux 原生部署
 
@@ -103,4 +103,4 @@ location / {
 
 ## 临时媒体
 
-私有 OSS 对象只按需生成短期签名 URL。TTS 临时音频最长 1 小时，缓存视频和诊断产生的临时音频/视频最长 24 小时；服务启动后按固定周期删除到期对象并把数据库资产标记为已清理。Bucket 仍应设置不超过 24 小时的生命周期规则作为故障兜底。人物肖像是持久配置资产，不属于临时对象。
+私有 OSS 对象只按需生成短期签名 URL。TTS 临时音频设为 1 小时到期，缓存视频设为 23 小时到期。服务启动后用持久 lease 周期性尝试删除；失败会重试，但网络或凭据长期失效时不能宣称物理删除已完成。Bucket 必须设置不超过 24 小时的生命周期规则作为独立兜底。人物肖像是持久配置资产，不属于临时对象。

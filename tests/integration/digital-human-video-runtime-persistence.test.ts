@@ -100,8 +100,12 @@ describe("transactional video runtime persistence", () => {
     const envelope = { ciphertext: storage.credentialsCiphertext, iv: storage.credentialsIv, tag: storage.credentialsTag };
     await saveDigitalHumanVideoStorage({ id: storage.id, displayName: "Renamed OSS", endpoint: storage.endpoint, bucket: storage.bucket, region: null, enabled: true }, client, secret);
     const retained = await client.mediaStorageConfig.findUniqueOrThrow({ where: { id: storage.id } });
+    const replacement = await client.mediaStorageConfig.findFirstOrThrow({ where: { providerKind: "ALI_OSS", enabled: true } });
     expect({ ciphertext: retained.credentialsCiphertext, iv: retained.credentialsIv, tag: retained.credentialsTag }).toEqual(envelope);
-    expect(retained.region).toBeNull();
+    expect(retained).toMatchObject({ region: storage.region, enabled: false });
+    expect(replacement.id).not.toBe(storage.id);
+    expect(replacement.region).toBeNull();
+    expect({ ciphertext: replacement.credentialsCiphertext, iv: replacement.credentialsIv, tag: replacement.credentialsTag }).toEqual(envelope);
 
     const valid = runtime("ling-model", "emo-model", "profile-1");
     await saveDigitalHumanVideoRuntime({ runtime: valid, storage: null }, client);
@@ -109,6 +113,20 @@ describe("transactional video runtime persistence", () => {
     await expect(saveDigitalHumanVideoRuntime({ runtime: { ...valid, lingmouModelId: "missing" }, storage: null }, client)).rejects.toThrow("MODEL_PROVIDER_MISMATCH");
     expect((await client.aiRuntimeSetting.findUniqueOrThrow({ where: { key: "digital-human-video-runtime" } })).valueJson).toBe(before.valueJson);
     expect((await client.mediaStorageConfig.findUniqueOrThrow({ where: { id: storage.id } })).credentialsCiphertext).toBe(envelope.ciphertext);
+  });
+
+  it("versions immutable storage identity instead of mutating assets onto new credentials", async () => {
+    const old = await client.mediaStorageConfig.findUniqueOrThrow({ where: { id: "seed-storage" } });
+    await client.digitalHumanMediaAsset.create({ data: { id: "old-audio", storageConfigId: old.id, objectKey: "media/audio/shared.wav", mimeType: "audio/wav", byteLength: 10, purpose: "TTS_AUDIO", expiresAt: new Date("2026-08-01T00:00:00.000Z") } });
+
+    await saveDigitalHumanVideoStorage({ id: old.id, displayName: old.displayName, endpoint: old.endpoint, bucket: "new-bucket", region: old.region, enabled: true, credentials: { accessKeyId: "LTAI-new", accessKeySecret: "new-secret" } }, client, secret);
+
+    const retained = await client.mediaStorageConfig.findUniqueOrThrow({ where: { id: old.id } });
+    const active = await client.mediaStorageConfig.findFirstOrThrow({ where: { enabled: true, providerKind: "ALI_OSS" }, orderBy: { createdAt: "desc" } });
+    expect(active.id).not.toBe(old.id);
+    expect(active.bucket).toBe("new-bucket");
+    expect(retained).toMatchObject({ bucket: old.bucket, endpoint: old.endpoint, region: old.region, enabled: false });
+    expect((await client.digitalHumanMediaAsset.findUniqueOrThrow({ where: { id: "old-audio" } })).storageConfigId).toBe(old.id);
   });
 
   it("rejects runtime activation when no enabled ALI_OSS exists", async () => {
