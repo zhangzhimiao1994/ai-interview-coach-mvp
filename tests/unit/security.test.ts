@@ -32,6 +32,8 @@ describe("request security guards", () => {
     expect(isCandidateApiPath("/api/admin/users", "session-1")).toBe(false);
     expect(isCandidateApiPath("/api/ai-services/providers", "session-1")).toBe(false);
     expect(isCandidateApiPath("/api/digital-human/sessions/private", "session-1")).toBe(false);
+    expect(isCandidateApiPath("/api/digital-human/fallback-speech", "session-1")).toBe(true);
+    expect(isCandidateApiPath("/api/speech-recognition/sessions", "session-1")).toBe(true);
   });
 
   it("authenticates matching Basic Auth credentials", () => {

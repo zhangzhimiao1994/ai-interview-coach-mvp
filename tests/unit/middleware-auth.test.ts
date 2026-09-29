@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { middleware } from "@/middleware";
+import { candidateSessionCookieName, createCandidateSessionCookie } from "@/lib/security/candidateSession";
 
 function configureProductionAuth(username = "", password = "") {
   vi.stubEnv("NODE_ENV", "production");
@@ -45,5 +46,36 @@ describe("middleware admin authentication fallback", () => {
     const response = await middleware(new NextRequest("https://coach.example/admin"));
 
     expect(response.status).toBe(503);
+  });
+
+  describe("candidate interview room requests", () => {
+    const secret = "candidate-room-test-secret-0123456789abcdef";
+
+    async function candidateCookie() {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("AI_CONFIG_SECRET", secret);
+      vi.stubEnv("ADMIN_USERNAME", "");
+      vi.stubEnv("ADMIN_PASSWORD", "");
+      const value = await createCandidateSessionCookie({ trainingSessionId: "session-1", candidateId: "candidate-1" }, secret);
+      return `${candidateSessionCookieName}=${value}`;
+    }
+
+    it("lets the room request fallback speech and speech recognition tickets", async () => {
+      const cookie = await candidateCookie();
+
+      for (const path of ["/api/digital-human/fallback-speech", "/api/speech-recognition/sessions"]) {
+        const response = await middleware(new NextRequest(`https://coach.example${path}`, { method: "POST", headers: { cookie } }));
+        expect(response.headers.get("x-middleware-next")).toBe("1");
+      }
+    });
+
+    it("never sends a Basic challenge that would open a browser login dialog over the room", async () => {
+      const cookie = await candidateCookie();
+
+      const response = await middleware(new NextRequest("https://coach.example/api/admin/users", { headers: { cookie } }));
+
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toBeNull();
+    });
   });
 });

@@ -17,12 +17,12 @@ import {
 } from "@/lib/security/candidateSession";
 import { readCandidateSessionSecret } from "@/lib/security/candidateSecret";
 
-function unauthorized() {
+function unauthorized(challenge = true) {
   return new NextResponse("Authentication required", {
     status: 401,
-    headers: {
-      "WWW-Authenticate": 'Basic realm="AI Interview Coach"'
-    }
+    // A Basic challenge makes the browser open a native login dialog that freezes the candidate
+    // interview room, so candidate-cookie requests get a plain 401 instead.
+    headers: challenge ? { "WWW-Authenticate": 'Basic realm="AI Interview Coach"' } : undefined
   });
 }
 
@@ -107,7 +107,7 @@ export async function middleware(request: NextRequest) {
   }
 
   if (pathname.startsWith("/api/")) {
-    return unauthorized();
+    return unauthorized(!request.cookies.has(candidateSessionCookieName));
   }
 
   const loginUrl = request.nextUrl.clone();
