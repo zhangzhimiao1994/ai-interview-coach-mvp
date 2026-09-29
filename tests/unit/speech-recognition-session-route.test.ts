@@ -158,4 +158,23 @@ describe("speech recognition session API", () => {
     });
     expect(JSON.stringify(payload)).not.toContain("asr-api-key-sentinel");
   });
+
+  it("refuses a candidate cookie bound to a different training session", async () => {
+    const deps = dependencies({
+      authenticate: vi.fn().mockResolvedValue({ type: "candidate", trainingSessionId: "session-2", candidateId: "candidate-1" })
+    });
+    const handler = createSpeechRecognitionSessionHandler(deps);
+
+    const response = await handler(
+      new Request("https://coach.example/api/speech-recognition/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "session-1" })
+      })
+    );
+
+    expect(response.status).toBe(403);
+    expect(deps.findSession).not.toHaveBeenCalled();
+    expect(deps.issueTicket).not.toHaveBeenCalled();
+  });
 });

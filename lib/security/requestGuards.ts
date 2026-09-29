@@ -40,6 +40,10 @@ export function isCandidateApiPath(pathname: string, trainingSessionId: string) 
   if (pathname === "/api/digital-human/renders" || pathname.startsWith("/api/digital-human/renders/")) {
     return true;
   }
+  // These handlers bind the request body to the candidate cookie's training session themselves.
+  if (pathname === "/api/digital-human/fallback-speech" || pathname === "/api/speech-recognition/sessions") {
+    return true;
+  }
   return pathname === `/api/sessions/${trainingSessionId}/answer` ||
     pathname === `/api/sessions/${trainingSessionId}/complete`;
 }

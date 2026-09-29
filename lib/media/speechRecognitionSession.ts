@@ -12,6 +12,7 @@ import { resolveAlibabaAsrCredentials } from "@/lib/media/providers/alibabaCrede
 import type { RealtimeTicketPayload } from "@/lib/realtime/tickets";
 import { realtimeTicketStore } from "@/lib/realtime/tickets";
 import { consumeRateLimit as consumeRequestRateLimit } from "@/lib/security/requestGuards";
+import { authenticateRenderActor } from "@/lib/security/renderRouteAuth";
 
 const ticketTtlMs = 60_000;
 const requestSchema = z
@@ -21,6 +22,7 @@ const requestSchema = z
   .strict();
 
 type SpeechRecognitionSessionDependencies = {
+  authenticate: (request: Request) => Promise<{ type: string; trainingSessionId?: string } | null>;
   findSession: (
     sessionId: string
   ) => Promise<{ id: string; status: string } | null>;
@@ -39,6 +41,7 @@ type SpeechRecognitionSessionDependencies = {
 
 function defaultDependencies(): SpeechRecognitionSessionDependencies {
   return {
+    authenticate: authenticateRenderActor,
     findSession: (sessionId) =>
       prisma.trainingSession.findUnique({
         where: { id: sessionId },
@@ -61,6 +64,11 @@ export function createSpeechRecognitionSessionHandler(
   return async function handleSpeechRecognitionSession(request: Request) {
     try {
       const input = requestSchema.parse(await request.json());
+      // Admins reach this route through the middleware; a candidate may only open ASR for its own session.
+      const actor = await deps.authenticate(request).catch(() => null);
+      if (actor?.type === "candidate" && actor.trainingSessionId !== input.sessionId) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
       const rateLimit = deps.consumeRateLimit(
         `POST:/api/speech-recognition/sessions:${input.sessionId}`,
         10,
